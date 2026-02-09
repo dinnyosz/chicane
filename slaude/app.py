@@ -1,6 +1,5 @@
 """Slaude application — Slack bot powered by Claude Code."""
 
-import asyncio
 import logging
 import os
 import ssl
@@ -49,21 +48,6 @@ async def start(config: Config | None = None) -> None:
 
     app = create_app(config)
 
-    sessions = app._slaude_sessions  # type: ignore[attr-defined]
-    cleanup_task = asyncio.create_task(_periodic_cleanup(sessions))
-
     handler = AsyncSocketModeHandler(app, config.slack_app_token)
     logger.info("Starting Slaude...")
-    try:
-        await handler.start_async()
-    finally:
-        cleanup_task.cancel()
-
-
-async def _periodic_cleanup(sessions: SessionStore, interval_minutes: int = 15) -> None:
-    """Run session cleanup periodically."""
-    while True:
-        await asyncio.sleep(interval_minutes * 60)
-        removed = sessions.cleanup(max_age_hours=1)
-        if removed:
-            logger.info(f"Periodic cleanup removed {removed} stale sessions")
+    await handler.start_async()
