@@ -146,26 +146,35 @@ async def _process_message(
                     full_text += chunk
 
                     # Update the Slack message periodically (not on every chunk)
+                    # Only show preview of first chunk in the initial message
                     if len(full_text) - last_update_len > 100:
-                        display = _truncate(full_text)
+                        preview = full_text[:SLACK_MAX_LENGTH]
                         await client.chat_update(
                             channel=channel,
                             ts=message_ts,
-                            text=display,
+                            text=preview,
                         )
                         last_update_len = len(full_text)
 
             elif event_data.type == "result":
                 full_text = event_data.text or full_text
 
-        # Final update with complete response
+        # Final: send complete response as chunked messages
         if full_text:
-            display = _truncate(full_text)
+            chunks = _split_message(full_text)
+            # Update the first message with the first chunk
             await client.chat_update(
                 channel=channel,
                 ts=message_ts,
-                text=display,
+                text=chunks[0],
             )
+            # Send remaining chunks as new messages in the thread
+            for chunk in chunks[1:]:
+                await client.chat_postMessage(
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    text=chunk,
+                )
         else:
             await client.chat_update(
                 channel=channel,
@@ -227,8 +236,29 @@ async def _resolve_channel_cwd(
     return resolved
 
 
-def _truncate(text: str) -> str:
-    """Truncate text to fit Slack's message limit."""
+def _split_message(text: str) -> list[str]:
+    """Split text into chunks that fit Slack's message limit.
+
+    Tries to split on newlines to avoid breaking mid-line.
+    """
     if len(text) <= SLACK_MAX_LENGTH:
-        return text
-    return text[:SLACK_MAX_LENGTH] + "\n\n... _(truncated)_"
+        return [text]
+
+    chunks = []
+    remaining = text
+
+    while remaining:
+        if len(remaining) <= SLACK_MAX_LENGTH:
+            chunks.append(remaining)
+            break
+
+        # Find a good split point: last newline before the limit
+        split_at = remaining.rfind("\n", 0, SLACK_MAX_LENGTH)
+        if split_at < SLACK_MAX_LENGTH // 2:
+            # No good newline found — split at limit
+            split_at = SLACK_MAX_LENGTH
+
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:].lstrip("\n")
+
+    return chunks
