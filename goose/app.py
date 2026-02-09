@@ -51,3 +51,10 @@ async def start(config: Config | None = None) -> None:
     handler = AsyncSocketModeHandler(app, config.slack_app_token)
     logger.info("Starting Goose...")
     await handler.start_async()
+
+
+def main() -> None:
+    """Sync entrypoint for the console script."""
+    import asyncio
+
+    asyncio.run(start())
