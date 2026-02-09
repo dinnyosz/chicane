@@ -1,8 +1,8 @@
-"""Tests for slaude.claude."""
+"""Tests for goose.claude."""
 
 import pytest
 
-from slaude.claude import ClaudeEvent, ClaudeSession
+from goose.claude import ClaudeEvent, ClaudeSession
 
 
 class TestClaudeEvent:

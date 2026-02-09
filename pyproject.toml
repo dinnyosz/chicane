@@ -1,5 +1,5 @@
 [project]
-name = "slaude"
+name = "goose"
 version = "0.1.0"
 description = "Slack + Claude Code bridge — send coding tasks from Slack, get results back"
 requires-python = ">=3.11"
@@ -17,7 +17,7 @@ dev = [
 ]
 
 [project.scripts]
-slaude = "slaude.app:main"
+goose = "goose.app:main"
 
 [build-system]
 requires = ["hatchling"]

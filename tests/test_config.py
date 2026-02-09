@@ -1,11 +1,11 @@
-"""Tests for slaude.config."""
+"""Tests for goose.config."""
 
 import os
 from pathlib import Path
 
 import pytest
 
-from slaude.config import Config
+from goose.config import Config
 
 
 class TestConfig:

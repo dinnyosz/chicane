@@ -1,4 +1,4 @@
-"""Slaude application — Slack bot powered by Claude Code."""
+"""Goose application — Slack bot powered by Claude Code."""
 
 import logging
 import os
@@ -30,8 +30,8 @@ def create_app(config: Config | None = None) -> AsyncApp:
     register_handlers(app, config, sessions)
 
     # Store references on the app for access elsewhere
-    app._slaude_config = config  # type: ignore[attr-defined]
-    app._slaude_sessions = sessions  # type: ignore[attr-defined]
+    app._goose_config = config  # type: ignore[attr-defined]
+    app._goose_sessions = sessions  # type: ignore[attr-defined]
 
     return app
 
@@ -49,5 +49,5 @@ async def start(config: Config | None = None) -> None:
     app = create_app(config)
 
     handler = AsyncSocketModeHandler(app, config.slack_app_token)
-    logger.info("Starting Slaude...")
+    logger.info("Starting Goose...")
     await handler.start_async()

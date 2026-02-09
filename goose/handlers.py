@@ -73,16 +73,16 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
             return
 
         # Channel thread follow-ups: respond if it's a reply in a thread
-        # that Slaude already has a session for, OR if the bot previously
+        # that Goose already has a session for, OR if the bot previously
         # posted in the thread (survives bot restarts)
         thread_ts = event.get("thread_ts")
         if thread_ts:
-            is_slaude_thread = sessions.has(thread_ts)
-            if not is_slaude_thread:
-                is_slaude_thread = await _bot_in_thread(
+            is_goose_thread = sessions.has(thread_ts)
+            if not is_goose_thread:
+                is_goose_thread = await _bot_in_thread(
                     thread_ts, event["channel"], client
                 )
-            if is_slaude_thread:
+            if is_goose_thread:
                 if _should_ignore(event, config):
                     return
                 await _process_message(event, text, client, config, sessions)

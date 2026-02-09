@@ -1,12 +1,12 @@
-"""Tests for slaude.sessions."""
+"""Tests for goose.sessions."""
 
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from slaude.config import Config
-from slaude.sessions import SessionStore
+from goose.config import Config
+from goose.sessions import SessionStore
 
 
 @pytest.fixture
@@ -81,4 +81,4 @@ class TestSessionStore:
         )
         store = SessionStore()
         session = store.get_or_create("thread-1", config)
-        assert str(session.cwd).startswith("/tmp/slaude-") or "slaude-" in str(session.cwd)
+        assert str(session.cwd).startswith("/tmp/goose-") or "goose-" in str(session.cwd)

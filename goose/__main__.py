@@ -1,4 +1,4 @@
-"""Entry point: python -m slaude"""
+"""Entry point: python -m goose"""
 
 import asyncio
 

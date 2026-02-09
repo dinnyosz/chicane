@@ -49,7 +49,7 @@ class SessionStore:
             work_dir = cwd
         else:
             # Fallback: random temp directory so Claude doesn't run in the project dir
-            work_dir = Path(tempfile.mkdtemp(prefix="slaude-"))
+            work_dir = Path(tempfile.mkdtemp(prefix="goose-"))
 
         session = ClaudeSession(
             cwd=work_dir,

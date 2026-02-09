@@ -1,12 +1,12 @@
-"""Tests for slaude.handlers."""
+"""Tests for goose.handlers."""
 
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from slaude.config import Config
-from slaude.handlers import _bot_in_thread, _should_ignore, _split_message, SLACK_MAX_LENGTH
+from goose.config import Config
+from goose.handlers import _bot_in_thread, _should_ignore, _split_message, SLACK_MAX_LENGTH
 
 
 @pytest.fixture

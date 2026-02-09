@@ -1,6 +1,6 @@
 {
   "display_information": {
-    "name": "Slaude",
+    "name": "Goose",
     "description": "Claude Code assistant in Slack",
     "background_color": "#D97706"
   },
@@ -11,7 +11,7 @@
       "messages_tab_read_only_enabled": false
     },
     "bot_user": {
-      "display_name": "Slaude",
+      "display_name": "Goose",
       "always_online": true
     }
   },
