@@ -6,7 +6,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from goose.config import Config
-from goose.handlers import _bot_in_thread, _should_ignore, _split_message, SLACK_MAX_LENGTH
+from goose.handlers import (
+    _bot_in_thread,
+    _fetch_thread_history,
+    _should_ignore,
+    _split_message,
+    SLACK_MAX_LENGTH,
+)
 
 
 @pytest.fixture
@@ -116,3 +122,124 @@ class TestSplitMessage:
         chunks = _split_message(text)
         assert len(chunks) > 1
         assert "".join(chunks) == text
+
+
+class TestFetchThreadHistory:
+    @pytest.mark.asyncio
+    async def test_formats_conversation_transcript(self):
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+        client.conversations_replies.return_value = {
+            "messages": [
+                {"user": "UHUMAN1", "ts": "1000.0", "text": "<@UBOT123> hello there"},
+                {"user": "UBOT123", "ts": "1001.0", "text": "Hi! How can I help?"},
+                {"user": "UHUMAN1", "ts": "1002.0", "text": "follow-up question"},
+            ]
+        }
+
+        result = await _fetch_thread_history("C_CHAN", "1000.0", "1002.0", client)
+
+        assert result is not None
+        assert "[User] hello there" in result
+        assert "[Goose] Hi! How can I help?" in result
+        # Current message should be excluded
+        assert "follow-up question" not in result
+
+    @pytest.mark.asyncio
+    async def test_excludes_current_message(self):
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+        client.conversations_replies.return_value = {
+            "messages": [
+                {"user": "UHUMAN1", "ts": "1000.0", "text": "first"},
+                {"user": "UBOT123", "ts": "1001.0", "text": "response"},
+                {"user": "UHUMAN1", "ts": "1002.0", "text": "this is the new prompt"},
+            ]
+        }
+
+        result = await _fetch_thread_history("C_CHAN", "1000.0", "1002.0", client)
+
+        assert "this is the new prompt" not in result
+        assert "[User] first" in result
+        assert "[Goose] response" in result
+
+    @pytest.mark.asyncio
+    async def test_strips_bot_mentions_from_user_messages(self):
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+        client.conversations_replies.return_value = {
+            "messages": [
+                {"user": "UHUMAN1", "ts": "1000.0", "text": "<@UBOT123> do something"},
+                {"user": "UHUMAN1", "ts": "1001.0", "text": "current msg"},
+            ]
+        }
+
+        result = await _fetch_thread_history("C_CHAN", "1000.0", "1001.0", client)
+
+        assert result is not None
+        assert "<@UBOT123>" not in result
+        assert "[User] do something" in result
+
+    @pytest.mark.asyncio
+    async def test_returns_none_for_empty_thread(self):
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+        client.conversations_replies.return_value = {
+            "messages": [
+                {"user": "UHUMAN1", "ts": "1000.0", "text": "only message"},
+            ]
+        }
+
+        # The only message is the current one — nothing to rebuild
+        result = await _fetch_thread_history("C_CHAN", "1000.0", "1000.0", client)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_api_error(self):
+        client = AsyncMock()
+        client.auth_test.side_effect = Exception("API error")
+
+        result = await _fetch_thread_history("C_CHAN", "1000.0", "1002.0", client)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_skips_empty_messages(self):
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+        client.conversations_replies.return_value = {
+            "messages": [
+                {"user": "UHUMAN1", "ts": "1000.0", "text": "hello"},
+                {"user": "UHUMAN1", "ts": "1001.0", "text": ""},
+                {"user": "UBOT123", "ts": "1002.0", "text": "response"},
+                {"user": "UHUMAN1", "ts": "1003.0", "text": "current"},
+            ]
+        }
+
+        result = await _fetch_thread_history("C_CHAN", "1000.0", "1003.0", client)
+
+        lines = result.split("\n")
+        assert len(lines) == 2
+        assert "[User] hello" in lines[0]
+        assert "[Goose] response" in lines[1]
+
+    @pytest.mark.asyncio
+    async def test_user_message_only_mention_skipped(self):
+        """A user message that's only a bot mention with no content should be skipped."""
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+        client.conversations_replies.return_value = {
+            "messages": [
+                {"user": "UHUMAN1", "ts": "1000.0", "text": "<@UBOT123>"},
+                {"user": "UBOT123", "ts": "1001.0", "text": "response"},
+                {"user": "UHUMAN1", "ts": "1002.0", "text": "current"},
+            ]
+        }
+
+        result = await _fetch_thread_history("C_CHAN", "1000.0", "1002.0", client)
+
+        assert result is not None
+        lines = result.split("\n")
+        assert len(lines) == 1
+        assert "[Goose] response" in lines[0]

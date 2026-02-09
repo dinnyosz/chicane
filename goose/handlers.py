@@ -79,9 +79,11 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
         if thread_ts:
             is_goose_thread = sessions.has(thread_ts)
             if not is_goose_thread:
+                logger.info(f"No session for thread {thread_ts}, checking Slack history")
                 is_goose_thread = await _bot_in_thread(
                     thread_ts, event["channel"], client
                 )
+                logger.info(f"Bot in thread {thread_ts}: {is_goose_thread}")
             if is_goose_thread:
                 if _should_ignore(event, config):
                     return
@@ -133,12 +135,26 @@ async def _process_message(
     # Resolve working directory from channel name
     cwd = await _resolve_channel_cwd(channel, client, config)
 
+    # Detect reconnect: session doesn't exist yet AND this is a thread reply
+    is_reconnect = not sessions.has(thread_ts) and thread_ts != event["ts"]
+
     # Get or create a Claude session for this thread
     session = sessions.get_or_create(
         thread_ts=thread_ts,
         config=config,
         cwd=cwd,
     )
+
+    # On reconnect, rebuild context from Slack thread history
+    if is_reconnect:
+        history = await _fetch_thread_history(channel, thread_ts, event["ts"], client)
+        if history:
+            prompt = (
+                "Here is the conversation history from this Slack thread:\n\n"
+                f"{history}\n\n"
+                "---\n"
+                f"Now respond to the latest message:\n{prompt}"
+            )
 
     # Post initial "thinking" message
     result = await client.chat_postMessage(
@@ -225,6 +241,57 @@ async def _process_message(
             pass
 
 
+async def _fetch_thread_history(
+    channel: str,
+    thread_ts: str,
+    current_ts: str,
+    client: AsyncWebClient,
+) -> str | None:
+    """Fetch thread history from Slack and format as a conversation transcript.
+
+    Used on reconnect to rebuild context for a new Claude session.
+    Excludes the current message (which will be sent as the actual prompt).
+    """
+    try:
+        auth = await client.auth_test()
+        bot_id = auth["user_id"]
+
+        replies = await client.conversations_replies(
+            channel=channel, ts=thread_ts, limit=100
+        )
+        messages = replies.get("messages", [])
+
+        lines = []
+        for msg in messages:
+            # Skip the current message — it becomes the prompt
+            if msg.get("ts") == current_ts:
+                continue
+
+            text = msg.get("text", "").strip()
+            if not text:
+                continue
+
+            if msg.get("user") == bot_id:
+                lines.append(f"[Goose] {text}")
+            else:
+                # Strip bot mentions from user messages
+                clean = re.sub(r"<@[A-Z0-9]+>\s*", "", text).strip()
+                if clean:
+                    lines.append(f"[User] {clean}")
+
+        if not lines:
+            return None
+
+        logger.info(
+            f"Rebuilt {len(lines)} messages of thread history for {thread_ts}"
+        )
+        return "\n".join(lines)
+
+    except Exception:
+        logger.exception(f"Failed to fetch thread history for {thread_ts}")
+        return None
+
+
 async def _bot_in_thread(
     thread_ts: str,
     channel: str,
@@ -241,7 +308,7 @@ async def _bot_in_thread(
             if msg.get("user") == bot_id:
                 return True
     except Exception:
-        logger.debug(f"Could not check thread history for {thread_ts}")
+        logger.warning(f"Could not check thread history for {thread_ts}", exc_info=True)
     return False
 
 
