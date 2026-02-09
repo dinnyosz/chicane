@@ -24,8 +24,8 @@ def store():
 
 
 class TestSessionStore:
-    def test_create_new_session(self, store, config):
-        session = store.get_or_create("thread-1", config)
+    def test_create_new_session_with_cwd(self, store, config):
+        session = store.get_or_create("thread-1", config, cwd=Path("/tmp/projects"))
         assert session is not None
         assert session.cwd == Path("/tmp/projects")
 
@@ -74,11 +74,11 @@ class TestSessionStore:
         removed = store.cleanup(max_age_hours=24)
         assert removed == 0
 
-    def test_falls_back_to_cwd_when_no_base_dir(self):
+    def test_falls_back_to_temp_dir_when_no_cwd(self):
         config = Config(
             slack_bot_token="xoxb-test",
             slack_app_token="xapp-test",
         )
         store = SessionStore()
         session = store.get_or_create("thread-1", config)
-        assert session.cwd == Path.cwd()
+        assert str(session.cwd).startswith("/tmp/slaude-") or "slaude-" in str(session.cwd)

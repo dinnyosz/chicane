@@ -1,6 +1,7 @@
 """Session management — maps Slack threads to Claude sessions."""
 
 import logging
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -44,7 +45,11 @@ class SessionStore:
             logger.debug(f"Reusing session for thread {thread_ts}")
             return info.session
 
-        work_dir = cwd or config.base_directory or Path.cwd()
+        if cwd:
+            work_dir = cwd
+        else:
+            # Fallback: random temp directory so Claude doesn't run in the project dir
+            work_dir = Path(tempfile.mkdtemp(prefix="slaude-"))
 
         session = ClaudeSession(
             cwd=work_dir,
