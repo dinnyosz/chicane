@@ -2,6 +2,7 @@
 
 import logging
 import re
+from pathlib import Path
 
 from slack_bolt.async_app import AsyncApp
 from slack_sdk.web.async_client import AsyncWebClient
@@ -23,6 +24,7 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
     """Register all Slack event handlers on the app."""
     bot_user_id: str | None = None
     processed_ts: set[str] = set()
+    channel_names: dict[str, str] = {}  # channel_id -> channel_name cache
 
     def _mark_processed(ts: str) -> bool:
         """Mark a message as processed. Returns False if already seen."""
@@ -114,10 +116,14 @@ async def _process_message(
     except Exception:
         pass  # Reaction may already exist or we lack permission
 
+    # Resolve working directory from channel name
+    cwd = await _resolve_channel_cwd(channel, client, config)
+
     # Get or create a Claude session for this thread
     session = sessions.get_or_create(
         thread_ts=thread_ts,
         config=config,
+        cwd=cwd,
     )
 
     # Post initial "thinking" message
@@ -194,6 +200,31 @@ async def _process_message(
             )
         except Exception:
             pass
+
+
+async def _resolve_channel_cwd(
+    channel_id: str,
+    client: AsyncWebClient,
+    config: Config,
+) -> Path | None:
+    """Resolve working directory based on channel name.
+
+    Looks up the channel name, checks if it's whitelisted in CHANNEL_DIRS,
+    and returns the mapped directory path. Returns None to use default.
+    """
+    if not config.channel_dirs:
+        return None
+
+    try:
+        info = await client.conversations_info(channel=channel_id)
+        channel_name = info["channel"]["name"]
+    except Exception:
+        return None
+
+    resolved = config.resolve_channel_dir(channel_name)
+    if resolved:
+        logger.info(f"Channel #{channel_name} → cwd {resolved}")
+    return resolved
 
 
 def _truncate(text: str) -> str:

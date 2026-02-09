@@ -1,6 +1,7 @@
 """Tests for slaude.config."""
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -67,3 +68,56 @@ class TestConfig:
 
         config = Config.from_env()
         assert config.allowed_users == []
+
+
+class TestChannelDirs:
+    def test_simple_channel_dirs(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("CHANNEL_DIRS", "magaldi,slack-bot")
+
+        config = Config.from_env()
+        assert config.channel_dirs == {"magaldi": "magaldi", "slack-bot": "slack-bot"}
+
+    def test_custom_mapping(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("CHANNEL_DIRS", "magaldi,web=frontend")
+
+        config = Config.from_env()
+        assert config.channel_dirs == {"magaldi": "magaldi", "web": "frontend"}
+
+    def test_resolve_relative(self):
+        config = Config(
+            slack_bot_token="t",
+            slack_app_token="t",
+            base_directory=Path("/home/user/code"),
+            channel_dirs={"magaldi": "magaldi"},
+        )
+        assert config.resolve_channel_dir("magaldi") == Path("/home/user/code/magaldi")
+
+    def test_resolve_absolute(self):
+        config = Config(
+            slack_bot_token="t",
+            slack_app_token="t",
+            base_directory=Path("/home/user/code"),
+            channel_dirs={"infra": "/opt/infrastructure"},
+        )
+        assert config.resolve_channel_dir("infra") == Path("/opt/infrastructure")
+
+    def test_resolve_not_whitelisted(self):
+        config = Config(
+            slack_bot_token="t",
+            slack_app_token="t",
+            base_directory=Path("/home/user/code"),
+            channel_dirs={"magaldi": "magaldi"},
+        )
+        assert config.resolve_channel_dir("random") is None
+
+    def test_empty_channel_dirs(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.delenv("CHANNEL_DIRS", raising=False)
+
+        config = Config.from_env()
+        assert config.channel_dirs == {}
