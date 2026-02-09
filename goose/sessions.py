@@ -20,6 +20,8 @@ tool calls, file reads, or terminal output. If they ask to see file contents, \
 you MUST include the content in your response text.
 - Format responses for Slack: use *bold*, _italic_, `code`, and ```code blocks```. \
 Slack does NOT support markdown headers (#), tables, or HTML.
+- Use blank lines between paragraphs and between logical sections of your response. \
+Dense walls of text are hard to read in Slack. Break up your thoughts.
 - Keep responses concise. Slack messages have a ~4000 char limit per message. \
 For very long content, summarize and offer to show specific sections.
 - Never ask the user to "approve" or "confirm" something in a terminal — they \
