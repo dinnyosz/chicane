@@ -24,7 +24,6 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
     """Register all Slack event handlers on the app."""
     bot_user_id: str | None = None
     processed_ts: set[str] = set()
-    channel_names: dict[str, str] = {}  # channel_id -> channel_name cache
 
     def _mark_processed(ts: str) -> bool:
         """Mark a message as processed. Returns False if already seen."""
@@ -38,7 +37,7 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
 
     @app.event("app_mention")
     async def handle_mention(event: dict, client: AsyncWebClient) -> None:
-        """Handle @mentions of the bot in channels (from real users)."""
+        """Handle @mentions of the bot in channels."""
         if not _mark_processed(event["ts"]):
             return
         if _should_ignore(event, config):
@@ -52,7 +51,7 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
 
     @app.event("message")
     async def handle_message(event: dict, client: AsyncWebClient) -> None:
-        """Handle DMs and channel messages that mention the bot."""
+        """Handle DMs and thread follow-ups."""
         nonlocal bot_user_id
 
         # Skip message subtypes (edits, deletes, etc.)
@@ -73,8 +72,16 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
             await _process_message(event, text, client, config, sessions)
             return
 
-        # Channel messages: only process if bot is mentioned
-        # (This catches bot-sent mentions that don't trigger app_mention)
+        # Channel thread follow-ups: respond if it's a reply in a thread
+        # that Slaude already has a session for (no @mention needed)
+        thread_ts = event.get("thread_ts")
+        if thread_ts and sessions.has(thread_ts):
+            if _should_ignore(event, config):
+                return
+            await _process_message(event, text, client, config, sessions)
+            return
+
+        # Channel messages with @mention from bots (app_mention doesn't fire for bots)
         if not bot_user_id:
             auth = await client.auth_test()
             bot_user_id = auth["user_id"]

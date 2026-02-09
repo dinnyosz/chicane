@@ -66,6 +66,10 @@ class SessionStore:
         logger.info(f"New session for thread {thread_ts} (cwd={work_dir})")
         return session
 
+    def has(self, thread_ts: str) -> bool:
+        """Check if a session exists for this thread."""
+        return thread_ts in self._sessions
+
     def set_cwd(self, thread_ts: str, cwd: Path) -> bool:
         """Update the working directory for a thread's session."""
         if thread_ts in self._sessions:
