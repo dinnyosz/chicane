@@ -60,10 +60,10 @@ async def start(config: Config | None = None) -> None:
         cleanup_task.cancel()
 
 
-async def _periodic_cleanup(sessions: SessionStore, interval_hours: int = 1) -> None:
-    """Run session cleanup every interval_hours."""
+async def _periodic_cleanup(sessions: SessionStore, interval_minutes: int = 15) -> None:
+    """Run session cleanup periodically."""
     while True:
-        await asyncio.sleep(interval_hours * 3600)
-        removed = sessions.cleanup(max_age_hours=24)
+        await asyncio.sleep(interval_minutes * 60)
+        removed = sessions.cleanup(max_age_hours=1)
         if removed:
             logger.info(f"Periodic cleanup removed {removed} stale sessions")
