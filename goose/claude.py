@@ -56,11 +56,13 @@ class ClaudeSession:
         session_id: str | None = None,
         model: str | None = None,
         permission_mode: str = "default",
+        system_prompt: str | None = None,
     ):
         self.cwd = cwd or Path.cwd()
         self.session_id = session_id
         self.model = model
         self.permission_mode = permission_mode
+        self.system_prompt = system_prompt
 
     def _build_command(self, prompt: str) -> list[str]:
         cmd = [
@@ -78,6 +80,9 @@ class ClaudeSession:
 
         if self.permission_mode != "default":
             cmd.extend(["--permission-mode", self.permission_mode])
+
+        if self.system_prompt:
+            cmd.extend(["--append-system-prompt", self.system_prompt])
 
         cmd.append(prompt)
         return cmd

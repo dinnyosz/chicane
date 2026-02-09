@@ -82,3 +82,8 @@ class TestSessionStore:
         store = SessionStore()
         session = store.get_or_create("thread-1", config)
         assert str(session.cwd).startswith("/tmp/goose-") or "goose-" in str(session.cwd)
+
+    def test_sessions_include_slack_system_prompt(self, store, config):
+        session = store.get_or_create("thread-1", config)
+        assert session.system_prompt is not None
+        assert "Slack" in session.system_prompt

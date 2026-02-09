@@ -124,3 +124,15 @@ class TestClaudeSession:
         session = ClaudeSession(permission_mode="default")
         cmd = session._build_command("hello")
         assert "--permission-mode" not in cmd
+
+    def test_build_command_with_system_prompt(self):
+        session = ClaudeSession(system_prompt="You are a Slack bot.")
+        cmd = session._build_command("hello")
+        assert "--append-system-prompt" in cmd
+        idx = cmd.index("--append-system-prompt")
+        assert cmd[idx + 1] == "You are a Slack bot."
+
+    def test_build_command_no_system_prompt_by_default(self):
+        session = ClaudeSession()
+        cmd = session._build_command("hello")
+        assert "--append-system-prompt" not in cmd
