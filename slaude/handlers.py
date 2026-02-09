@@ -73,13 +73,20 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
             return
 
         # Channel thread follow-ups: respond if it's a reply in a thread
-        # that Slaude already has a session for (no @mention needed)
+        # that Slaude already has a session for, OR if the bot previously
+        # posted in the thread (survives bot restarts)
         thread_ts = event.get("thread_ts")
-        if thread_ts and sessions.has(thread_ts):
-            if _should_ignore(event, config):
+        if thread_ts:
+            is_slaude_thread = sessions.has(thread_ts)
+            if not is_slaude_thread:
+                is_slaude_thread = await _bot_in_thread(
+                    thread_ts, event["channel"], client
+                )
+            if is_slaude_thread:
+                if _should_ignore(event, config):
+                    return
+                await _process_message(event, text, client, config, sessions)
                 return
-            await _process_message(event, text, client, config, sessions)
-            return
 
         # Channel messages with @mention from bots (app_mention doesn't fire for bots)
         if not bot_user_id:
@@ -216,6 +223,26 @@ async def _process_message(
             )
         except Exception:
             pass
+
+
+async def _bot_in_thread(
+    thread_ts: str,
+    channel: str,
+    client: AsyncWebClient,
+) -> bool:
+    """Check if the bot has previously posted in this thread."""
+    try:
+        auth = await client.auth_test()
+        bot_id = auth["user_id"]
+        replies = await client.conversations_replies(
+            channel=channel, ts=thread_ts, limit=50
+        )
+        for msg in replies.get("messages", []):
+            if msg.get("user") == bot_id:
+                return True
+    except Exception:
+        logger.debug(f"Could not check thread history for {thread_ts}")
+    return False
 
 
 async def _resolve_channel_cwd(
