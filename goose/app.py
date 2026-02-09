@@ -1,7 +1,9 @@
 """Goose application — Slack bot powered by Claude Code."""
 
+import asyncio
 import logging
 import os
+import signal
 import ssl
 
 import certifi
@@ -50,7 +52,19 @@ async def start(config: Config | None = None) -> None:
 
     handler = AsyncSocketModeHandler(app, config.slack_app_token)
     logger.info("Starting Goose...")
-    await handler.start_async()
+
+    loop = asyncio.get_event_loop()
+    stop = asyncio.Event()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, stop.set)
+
+    await handler.connect_async()
+    logger.info("Goose is running. Press Ctrl+C to stop.")
+    await stop.wait()
+
+    logger.info("Shutting down...")
+    await handler.close_async()
 
 
 def main() -> None:
