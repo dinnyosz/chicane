@@ -1,7 +1,7 @@
 """Tests for goose.handlers."""
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -11,8 +11,10 @@ from goose.handlers import (
     _fetch_thread_history,
     _should_ignore,
     _split_message,
+    register_handlers,
     SLACK_MAX_LENGTH,
 )
+from goose.sessions import SessionStore
 
 
 @pytest.fixture
@@ -243,3 +245,114 @@ class TestFetchThreadHistory:
         lines = result.split("\n")
         assert len(lines) == 1
         assert "[Goose] response" in lines[0]
+
+
+class TestThreadMentionRouting:
+    """Test that @mentioning the bot in a thread it hasn't seen before works.
+
+    Slack fires both 'message' and 'app_mention' events for @mentions.
+    The message handler must NOT consume the event when it can't handle it,
+    so the app_mention handler can pick it up.
+    """
+
+    @pytest.fixture
+    def app(self):
+        """Create a mock AsyncApp that captures registered handlers."""
+        mock_app = MagicMock()
+        self._handlers: dict[str, AsyncMock] = {}
+
+        def capture_event(event_type):
+            def decorator(fn):
+                self._handlers[event_type] = fn
+                return fn
+            return decorator
+
+        mock_app.event = capture_event
+        return mock_app
+
+    @pytest.fixture
+    def sessions(self):
+        return SessionStore()
+
+    @pytest.mark.asyncio
+    async def test_mention_in_unknown_thread_is_processed(self, app, config, sessions):
+        """When a user @mentions the bot in a thread it has no session for,
+        the app_mention handler should still process the message."""
+        register_handlers(app, config, sessions)
+
+        mention_handler = self._handlers["app_mention"]
+        message_handler = self._handlers["message"]
+
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+        # Bot has NOT posted in this thread before
+        client.conversations_replies.return_value = {
+            "messages": [
+                {"user": "UHUMAN1", "ts": "1000.0", "text": "some unrelated message"},
+            ]
+        }
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {
+            "channel": {"name": "general"}
+        }
+
+        event = {
+            "ts": "1001.0",
+            "thread_ts": "1000.0",
+            "channel": "C_CHAN",
+            "channel_type": "channel",
+            "user": "UHUMAN1",
+            "text": "<@UBOT123> help me",
+        }
+
+        # Simulate Slack firing both events for the same message.
+        # message handler fires first — it should NOT block the mention handler.
+        await message_handler(event=event, client=client)
+
+        # Now the app_mention handler fires
+        with patch("goose.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            await mention_handler(event=event, client=client)
+            # The mention handler should have called _process_message
+            mock_process.assert_called_once()
+            # The prompt should have the mention stripped
+            assert mock_process.call_args[0][1] == "help me"
+
+    @pytest.mark.asyncio
+    async def test_thread_followup_in_known_session_prevents_double_processing(
+        self, app, config, sessions
+    ):
+        """When bot already has a session for a thread, the message handler
+        processes the event AND blocks app_mention from double-processing."""
+        register_handlers(app, config, sessions)
+
+        mention_handler = self._handlers["app_mention"]
+        message_handler = self._handlers["message"]
+
+        # Pre-create a session for this thread
+        sessions.get_or_create("1000.0", config)
+
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {
+            "channel": {"name": "general"}
+        }
+
+        event = {
+            "ts": "1001.0",
+            "thread_ts": "1000.0",
+            "channel": "C_CHAN",
+            "channel_type": "channel",
+            "user": "UHUMAN1",
+            "text": "<@UBOT123> follow up",
+        }
+
+        with patch("goose.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            # message handler handles it (session exists)
+            await message_handler(event=event, client=client)
+            assert mock_process.call_count == 1
+
+            # app_mention fires too, but should be deduped
+            await mention_handler(event=event, client=client)
+            # Should still be 1 — not double-processed
+            assert mock_process.call_count == 1

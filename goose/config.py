@@ -21,6 +21,7 @@ class Config:
     debug: bool = False
     claude_model: str | None = None
     claude_permission_mode: str = "default"
+    claude_allowed_tools: list[str] = field(default_factory=list)
 
     def resolve_channel_dir(self, channel_name: str) -> Path | None:
         """Resolve working directory for a channel.
@@ -55,6 +56,8 @@ class Config:
         allowed = os.environ.get("ALLOWED_USERS", "")
         model = os.environ.get("CLAUDE_MODEL")
         perm_mode = os.environ.get("CLAUDE_PERMISSION_MODE", "default")
+        allowed_tools_raw = os.environ.get("CLAUDE_ALLOWED_TOOLS", "")
+        allowed_tools = [t.strip() for t in allowed_tools_raw.split(",") if t.strip()]
 
         # Parse CHANNEL_DIRS: "magaldi,slack-bot,frontend" or "magaldi=magaldi,web=frontend"
         channel_dirs: dict[str, str] = {}
@@ -79,4 +82,5 @@ class Config:
             debug=os.environ.get("DEBUG", "").lower() in ("1", "true", "yes"),
             claude_model=model,
             claude_permission_mode=perm_mode,
+            claude_allowed_tools=allowed_tools,
         )

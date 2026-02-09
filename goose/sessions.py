@@ -75,6 +75,7 @@ class SessionStore:
             model=config.claude_model,
             permission_mode=config.claude_permission_mode,
             system_prompt=SLACK_SYSTEM_PROMPT,
+            allowed_tools=config.claude_allowed_tools,
         )
 
         self._sessions[thread_ts] = SessionInfo(

@@ -57,12 +57,14 @@ class ClaudeSession:
         model: str | None = None,
         permission_mode: str = "default",
         system_prompt: str | None = None,
+        allowed_tools: list[str] | None = None,
     ):
         self.cwd = cwd or Path.cwd()
         self.session_id = session_id
         self.model = model
         self.permission_mode = permission_mode
         self.system_prompt = system_prompt
+        self.allowed_tools = allowed_tools or []
 
     def _build_command(self, prompt: str) -> list[str]:
         cmd = [
@@ -85,6 +87,9 @@ class ClaudeSession:
         # already have it, so resending wastes tokens.
         if self.system_prompt and not self.session_id:
             cmd.extend(["--append-system-prompt", self.system_prompt])
+
+        if self.allowed_tools:
+            cmd.extend(["--allowedTools", *self.allowed_tools])
 
         cmd.append(prompt)
         return cmd

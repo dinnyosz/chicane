@@ -87,3 +87,16 @@ class TestSessionStore:
         session = store.get_or_create("thread-1", config)
         assert session.system_prompt is not None
         assert "Slack" in session.system_prompt
+
+    def test_sessions_pass_allowed_tools(self, store):
+        config_with_tools = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            claude_allowed_tools=["WebFetch", "WebSearch"],
+        )
+        session = store.get_or_create("thread-1", config_with_tools)
+        assert session.allowed_tools == ["WebFetch", "WebSearch"]
+
+    def test_sessions_empty_allowed_tools_by_default(self, store, config):
+        session = store.get_or_create("thread-1", config)
+        assert session.allowed_tools == []

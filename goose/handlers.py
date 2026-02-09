@@ -23,22 +23,23 @@ SLACK_MAX_LENGTH = 3900
 def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> None:
     """Register all Slack event handlers on the app."""
     bot_user_id: str | None = None
-    processed_ts: set[str] = set()
+    mention_processed_ts: set[str] = set()
+    message_processed_ts: set[str] = set()
 
-    def _mark_processed(ts: str) -> bool:
+    def _mark_processed(ts: str, source: set[str]) -> bool:
         """Mark a message as processed. Returns False if already seen."""
-        if ts in processed_ts:
+        if ts in source:
             return False
-        processed_ts.add(ts)
+        source.add(ts)
         # Keep the set bounded
-        if len(processed_ts) > 500:
-            processed_ts.clear()
+        if len(source) > 500:
+            source.clear()
         return True
 
     @app.event("app_mention")
     async def handle_mention(event: dict, client: AsyncWebClient) -> None:
         """Handle @mentions of the bot in channels."""
-        if not _mark_processed(event["ts"]):
+        if not _mark_processed(event["ts"], mention_processed_ts):
             return
         if _should_ignore(event, config):
             return
@@ -57,7 +58,7 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
         # Skip message subtypes (edits, deletes, etc.)
         if event.get("subtype"):
             return
-        if not _mark_processed(event["ts"]):
+        if not _mark_processed(event["ts"], message_processed_ts):
             return
 
         channel_type = event.get("channel_type", "")
@@ -87,8 +88,15 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
             if is_goose_thread:
                 if _should_ignore(event, config):
                     return
+                # Mark in mention set too to prevent app_mention from
+                # double-processing when bot is already in the thread
+                _mark_processed(event["ts"], mention_processed_ts)
                 await _process_message(event, text, client, config, sessions)
                 return
+            # Not a Goose thread — don't handle here. If the user @mentioned
+            # the bot, the app_mention handler will pick it up and start
+            # a new session for this thread.
+            return
 
         # Channel messages with @mention from bots (app_mention doesn't fire for bots)
         if not bot_user_id:
