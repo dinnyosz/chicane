@@ -1,6 +1,13 @@
 """Slaude application — Slack bot powered by Claude Code."""
 
 import logging
+import os
+import ssl
+
+import certifi
+
+# Fix macOS Python SSL cert issue
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_bolt.async_app import AsyncApp

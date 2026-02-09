@@ -21,14 +21,27 @@ SLACK_MAX_LENGTH = 3900
 
 def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> None:
     """Register all Slack event handlers on the app."""
+    bot_user_id: str | None = None
+    processed_ts: set[str] = set()
+
+    def _mark_processed(ts: str) -> bool:
+        """Mark a message as processed. Returns False if already seen."""
+        if ts in processed_ts:
+            return False
+        processed_ts.add(ts)
+        # Keep the set bounded
+        if len(processed_ts) > 500:
+            processed_ts.clear()
+        return True
 
     @app.event("app_mention")
     async def handle_mention(event: dict, client: AsyncWebClient) -> None:
-        """Handle @mentions of the bot in channels."""
+        """Handle @mentions of the bot in channels (from real users)."""
+        if not _mark_processed(event["ts"]):
+            return
         if _should_ignore(event, config):
             return
 
-        # Strip the bot mention from the text
         text = re.sub(r"<@[A-Z0-9]+>\s*", "", event.get("text", "")).strip()
         if not text:
             return
@@ -36,19 +49,40 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
         await _process_message(event, text, client, config, sessions)
 
     @app.event("message")
-    async def handle_dm(event: dict, client: AsyncWebClient) -> None:
-        """Handle direct messages to the bot."""
-        # Only process DMs (channel type 'im'), skip subtypes (edits, deletes, bot msgs)
-        if event.get("channel_type") != "im" or event.get("subtype"):
+    async def handle_message(event: dict, client: AsyncWebClient) -> None:
+        """Handle DMs and channel messages that mention the bot."""
+        nonlocal bot_user_id
+
+        # Skip message subtypes (edits, deletes, etc.)
+        if event.get("subtype"):
             return
-        if _should_ignore(event, config):
+        if not _mark_processed(event["ts"]):
             return
 
+        channel_type = event.get("channel_type", "")
         text = event.get("text", "").strip()
         if not text:
             return
 
-        await _process_message(event, text, client, config, sessions)
+        # DMs: process everything
+        if channel_type == "im":
+            if _should_ignore(event, config):
+                return
+            await _process_message(event, text, client, config, sessions)
+            return
+
+        # Channel messages: only process if bot is mentioned
+        # (This catches bot-sent mentions that don't trigger app_mention)
+        if not bot_user_id:
+            auth = await client.auth_test()
+            bot_user_id = auth["user_id"]
+
+        if f"<@{bot_user_id}>" in text:
+            if _should_ignore(event, config):
+                return
+            clean_text = re.sub(r"<@[A-Z0-9]+>\s*", "", text).strip()
+            if clean_text:
+                await _process_message(event, clean_text, client, config, sessions)
 
 
 def _should_ignore(event: dict, config: Config) -> bool:
