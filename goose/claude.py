@@ -81,7 +81,9 @@ class ClaudeSession:
         if self.permission_mode != "default":
             cmd.extend(["--permission-mode", self.permission_mode])
 
-        if self.system_prompt:
+        # Only send system prompt on the first invocation — resumed sessions
+        # already have it, so resending wastes tokens.
+        if self.system_prompt and not self.session_id:
             cmd.extend(["--append-system-prompt", self.system_prompt])
 
         cmd.append(prompt)

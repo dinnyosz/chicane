@@ -136,3 +136,10 @@ class TestClaudeSession:
         session = ClaudeSession()
         cmd = session._build_command("hello")
         assert "--append-system-prompt" not in cmd
+
+    def test_system_prompt_skipped_on_resume(self):
+        """System prompt should only be sent on the first call, not on resumes."""
+        session = ClaudeSession(system_prompt="You are a Slack bot.")
+        session.session_id = "existing-session-123"
+        cmd = session._build_command("follow up")
+        assert "--append-system-prompt" not in cmd
