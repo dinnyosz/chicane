@@ -205,9 +205,11 @@ async def _process_message(
     # Stream Claude's response
     full_text = ""
     last_update_len = 0
+    event_count = 0
 
     try:
         async for event_data in session.stream(prompt):
+            event_count += 1
             if event_data.type == "assistant":
                 chunk = event_data.text
                 if chunk:
@@ -226,6 +228,8 @@ async def _process_message(
 
             elif event_data.type == "result":
                 full_text = event_data.text or full_text
+            else:
+                logger.debug(f"Event type={event_data.type} subtype={event_data.subtype}")
 
         # Final: send complete response as chunked messages
         if full_text:
@@ -244,10 +248,15 @@ async def _process_message(
                     text=chunk,
                 )
         else:
+            logger.warning(
+                f"Empty response from Claude: {event_count} events received, "
+                f"session_id={session.session_id}, "
+                f"handoff={handoff_session_id}, reconnect={is_reconnect}"
+            )
             msg = (
                 ":warning: Claude returned an empty response. "
                 "This usually means the session is still active in a terminal. "
-                "Please close that Claude Code session first (type /exit or quit), "
+                "Please close that Claude Code session first (type `/exit` or quit), "
                 "then try again."
             )
             await client.chat_update(

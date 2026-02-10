@@ -108,6 +108,7 @@ class ClaudeSession:
             cwd=str(self.cwd),
         )
 
+        event_count = 0
         try:
             async for line in process.stdout:
                 line = line.decode().strip()
@@ -121,6 +122,7 @@ class ClaudeSession:
                     continue
 
                 event = ClaudeEvent(type=data.get("type", "unknown"), raw=data)
+                event_count += 1
 
                 # Capture session_id from init event
                 if event.type == "system" and event.subtype == "init":
@@ -135,12 +137,18 @@ class ClaudeSession:
         finally:
             await process.wait()
 
+            stderr = ""
+            if process.stderr:
+                stderr = (await process.stderr.read()).decode()
+
             if process.returncode and process.returncode != 0:
-                stderr = ""
-                if process.stderr:
-                    stderr = (await process.stderr.read()).decode()
                 logger.error(
                     f"Claude exited with code {process.returncode}: {stderr}"
+                )
+            elif event_count == 0:
+                logger.warning(
+                    f"Claude produced no events. exit={process.returncode} "
+                    f"stderr={stderr[:500] if stderr else '(empty)'}"
                 )
 
     async def run(self, prompt: str) -> str:
