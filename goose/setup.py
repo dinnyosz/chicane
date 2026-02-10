@@ -397,17 +397,25 @@ def setup_command(args) -> None:
     try:
         _run_wizard(args)
     except KeyboardInterrupt:
-        console.print("\n  [yellow]Aborted.[/yellow]")
+        console.print("\n  [yellow]Aborted.[/yellow] Completed steps were saved.")
         sys.exit(130)
 
 
 def _run_wizard(args) -> None:
-    """Run the interactive wizard steps."""
+    """Run the interactive wizard steps.
+
+    Config is saved progressively after each step so that a Ctrl+C
+    mid-flow preserves everything completed so far.
+    """
     from .config import env_file
 
     env_path = env_file()
     env_path.parent.mkdir(parents=True, exist_ok=True)
     existing = _load_existing_env(env_path)
+    env_values: dict[str, str] = dict(existing)
+
+    def _save() -> None:
+        _write_env(env_path, env_values)
 
     console.print()
     console.print(Panel("[bold]Goose — Setup Wizard[/bold]"))
@@ -418,39 +426,47 @@ def _run_wizard(args) -> None:
     _step_create_app(has_tokens)
 
     # Step 2: Bot Token
-    bot_token = _step_bot_token(existing.get("SLACK_BOT_TOKEN", ""))
+    env_values["SLACK_BOT_TOKEN"] = _step_bot_token(existing.get("SLACK_BOT_TOKEN", ""))
+    _save()
 
     # Step 3: App Token
-    app_token = _step_app_token(existing.get("SLACK_APP_TOKEN", ""))
+    env_values["SLACK_APP_TOKEN"] = _step_app_token(existing.get("SLACK_APP_TOKEN", ""))
+    _save()
 
     # Step 4: Directory Settings
     base_dir, channel_dirs = _step_channel_dirs(existing)
+    if base_dir:
+        env_values["BASE_DIRECTORY"] = base_dir
+    else:
+        env_values.pop("BASE_DIRECTORY", None)
+    if channel_dirs:
+        env_values["CHANNEL_DIRS"] = channel_dirs
+    else:
+        env_values.pop("CHANNEL_DIRS", None)
+    _save()
 
     # Step 5: Allowed Users
     allowed_users = _step_allowed_users(existing)
+    if allowed_users:
+        env_values["ALLOWED_USERS"] = allowed_users
+    else:
+        env_values.pop("ALLOWED_USERS", None)
+    _save()
 
     # Step 6: Claude Settings
     claude_settings = _step_claude_settings(existing)
+    for key in ("CLAUDE_MODEL", "CLAUDE_PERMISSION_MODE", "CLAUDE_ALLOWED_TOOLS", "LOG_FILE", "DEBUG"):
+        if key in claude_settings:
+            env_values[key] = claude_settings[key]
+        else:
+            env_values.pop(key, None)
+    _save()
 
-    # Step 7: Write config
-    console.rule("Step 7 of 7: Writing config")
+    # Step 7: Done
+    console.rule("Step 7 of 7: Done")
     console.print()
-
-    env_values: dict[str, str] = {
-        "SLACK_BOT_TOKEN": bot_token,
-        "SLACK_APP_TOKEN": app_token,
-    }
-    if base_dir:
-        env_values["BASE_DIRECTORY"] = base_dir
-    if channel_dirs:
-        env_values["CHANNEL_DIRS"] = channel_dirs
-    if allowed_users:
-        env_values["ALLOWED_USERS"] = allowed_users
-    env_values.update(claude_settings)
-
-    _write_env(env_path, env_values)
     console.print(Panel(
-        f"[green]✓[/green] Wrote {env_path}\n"
+        f"[green]✓[/green] Config saved to {env_path}\n"
         "[green]✓[/green] Next: run [bold]goose run[/bold]\n"
         "[green]✓[/green] Tip: invite @Goose with /invite @Goose"
     ))
