@@ -8,6 +8,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
+from rich.table import Table
 
 console = Console()
 
@@ -78,9 +79,49 @@ def _prompt_token(label: str, prefix: str, default: str = "") -> str:
         console.print(f"  [red]Token must start with '{prefix}'. Please try again.[/red]\n")
 
 
+def _parse_channel_dirs(raw: str) -> dict[str, str]:
+    """Parse CHANNEL_DIRS string into {channel: path} dict."""
+    mappings: dict[str, str] = {}
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if "=" in entry:
+            name, path = entry.split("=", 1)
+            mappings[name.strip()] = path.strip()
+        else:
+            mappings[entry] = entry
+    return mappings
+
+
+def _serialize_channel_dirs(mappings: dict[str, str]) -> str:
+    """Serialize {channel: path} dict back to CHANNEL_DIRS string."""
+    parts: list[str] = []
+    for channel, path in mappings.items():
+        if channel == path:
+            parts.append(channel)
+        else:
+            parts.append(f"{channel}={path}")
+    return ",".join(parts)
+
+
+def _show_channel_table(mappings: dict[str, str]) -> None:
+    """Display current channel mappings as a Rich table."""
+    if not mappings:
+        console.print("  [dim]No channel mappings configured.[/dim]\n")
+        return
+    table = Table(show_header=True, padding=(0, 2))
+    table.add_column("Channel", style="bold")
+    table.add_column("Path")
+    for channel, path in mappings.items():
+        table.add_row(f"#{channel}", path)
+    console.print(table)
+    console.print()
+
+
 def _step_create_app(has_tokens: bool) -> None:
     """Step 1: Print manifest and wait for user to create the app."""
-    console.rule("Step 1 of 5: Create Slack App")
+    console.rule("Step 1 of 6: Create Slack App")
 
     if has_tokens:
         console.print("\n  Slack app already configured.")
@@ -112,7 +153,7 @@ def _step_create_app(has_tokens: bool) -> None:
 
 def _step_bot_token(default: str = "") -> str:
     """Step 2: Get Bot Token."""
-    console.rule("Step 2 of 5: Get Bot Token")
+    console.rule("Step 2 of 6: Get Bot Token")
 
     if default:
         console.print("\n  Bot token found in .env. Press Enter to keep it,")
@@ -130,7 +171,7 @@ def _step_bot_token(default: str = "") -> str:
 
 def _step_app_token(default: str = "") -> str:
     """Step 3: Get App Token."""
-    console.rule("Step 3 of 5: Get App Token")
+    console.rule("Step 3 of 6: Get App Token")
 
     if default:
         console.print("\n  App token found in .env. Press Enter to keep it,")
@@ -148,24 +189,73 @@ def _step_app_token(default: str = "") -> str:
     return token
 
 
+def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
+    """Step 4: Configure base directory and channel mappings interactively.
+
+    Returns (base_directory, channel_dirs_string).
+    """
+    console.rule("Step 4 of 6: Directory Settings")
+    console.print("\n  [yellow]Note:[/yellow] Goose will run Claude Code in these directories.")
+    console.print("  Only add directories you trust.\n")
+
+    # Base directory
+    console.rule("Base Directory", style="dim")
+    console.print("  Root path for relative channel mappings.")
+    console.print("  e.g. base=/home/user/code + channel 'frontend' = /home/user/code/frontend")
+    base_dir = _prompt_with_default(
+        "Base directory",
+        defaults.get("BASE_DIRECTORY", ""),
+    )
+
+    # Channel mappings
+    console.print()
+    console.rule("Channel Mappings", style="dim")
+    console.print("  Map Slack channels to working directories.")
+    console.print("  Each mapping allows Goose to run Claude Code in that directory.\n")
+
+    mappings = _parse_channel_dirs(defaults.get("CHANNEL_DIRS", ""))
+    _show_channel_table(mappings)
+
+    while True:
+        action = Prompt.ask(
+            "  [a]dd / [r]emove / [d]one",
+            choices=["a", "r", "d"],
+            default="d",
+            console=console,
+        )
+        if action == "d":
+            break
+        elif action == "a":
+            name = Prompt.ask("  Channel name", console=console).strip()
+            if not name:
+                continue
+            name = name.lstrip("#")
+            path = Prompt.ask("  Path", default=name, console=console).strip()
+            mappings[name] = path
+            console.print(f"  [green]✓[/green] Added #{name} → {path}\n")
+            _show_channel_table(mappings)
+        elif action == "r":
+            if not mappings:
+                console.print("  [dim]Nothing to remove.[/dim]\n")
+                continue
+            name = Prompt.ask("  Channel name to remove", console=console).strip().lstrip("#")
+            if name in mappings:
+                del mappings[name]
+                console.print(f"  [green]✓[/green] Removed #{name}\n")
+                _show_channel_table(mappings)
+            else:
+                console.print(f"  [red]Channel #{name} not found.[/red]\n")
+
+    channel_dirs_str = _serialize_channel_dirs(mappings)
+    return base_dir, channel_dirs_str
+
+
 def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
-    """Step 4: Prompt for optional settings. Returns non-empty values only."""
-    console.rule("Step 4 of 5: Optional Settings")
+    """Step 5: Prompt for optional settings. Returns non-empty values only."""
+    console.rule("Step 5 of 6: Optional Settings")
     console.print("\n  Press Enter to skip (or keep current value). Type '-' to clear a value.\n")
 
     values: dict[str, str] = {}
-
-    # BASE_DIRECTORY
-    console.print()
-    console.rule("Base Directory", style="dim")
-    console.print("  Base path for channel->directory mappings below.")
-    console.print("  e.g. base=/home/user/code + channel 'frontend' = /home/user/code/frontend")
-    val = _prompt_with_default(
-        "Base directory (e.g. /home/user/code)",
-        defaults.get("BASE_DIRECTORY", ""),
-    )
-    if val:
-        values["BASE_DIRECTORY"] = val
 
     # ALLOWED_USERS
     console.print()
@@ -178,20 +268,6 @@ def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
     )
     if val:
         values["ALLOWED_USERS"] = val
-
-    # CHANNEL_DIRS
-    console.print()
-    console.rule("Channel Directories", style="dim")
-    console.print("  Map Slack channels to working directories.")
-    console.print("  Just a name = same-named folder under base directory (e.g. frontend).")
-    console.print("  Custom relative: channel=path under base dir (e.g. web=frontend).")
-    console.print("  Absolute paths are used as-is (e.g. infra=/opt/infra).")
-    val = _prompt_with_default(
-        "Channel mappings, comma-separated",
-        defaults.get("CHANNEL_DIRS", ""),
-    )
-    if val:
-        values["CHANNEL_DIRS"] = val
 
     # CLAUDE_MODEL
     console.print()
@@ -260,17 +336,24 @@ def _run_wizard(args) -> None:
     # Step 3: App Token
     app_token = _step_app_token(existing.get("SLACK_APP_TOKEN", ""))
 
-    # Step 4: Optional Settings
+    # Step 4: Directory Settings
+    base_dir, channel_dirs = _step_channel_dirs(existing)
+
+    # Step 5: Other Settings
     optional = _step_optional_settings(existing)
 
-    # Step 5: Write config
-    console.rule("Step 5 of 5: Writing config")
+    # Step 6: Write config
+    console.rule("Step 6 of 6: Writing config")
     console.print()
 
     env_values: dict[str, str] = {
         "SLACK_BOT_TOKEN": bot_token,
         "SLACK_APP_TOKEN": app_token,
     }
+    if base_dir:
+        env_values["BASE_DIRECTORY"] = base_dir
+    if channel_dirs:
+        env_values["CHANNEL_DIRS"] = channel_dirs
     env_values.update(optional)
 
     _write_env(env_path, env_values)
