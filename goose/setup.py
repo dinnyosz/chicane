@@ -350,12 +350,13 @@ def _step_claude_settings(defaults: dict[str, str]) -> dict[str, str]:
 
     console.print("\n  [bold]Allowed Tools[/bold]")
     console.print("  Pre-approve specific tools so Claude doesn't prompt for them.")
+    console.print("  [yellow]Warning:[/yellow] This overrides your Claude settings.json permissions.")
+    console.print("  Leave empty to use your existing Claude config as-is.")
     console.print("  Comma-separated. Supports patterns:")
     console.print("  [dim]Bash(npm run *)[/dim]  — allow shell commands matching a pattern")
     console.print("  [dim]Edit(./src/**)[/dim]   — allow edits to files under a path")
     console.print("  [dim]Read[/dim]             — allow all file reads")
     console.print("  [dim]WebFetch[/dim]         — allow web fetching")
-    console.print("  Leave empty for no pre-approved tools.")
     val = _prompt_with_default(
         "Allowed tools",
         defaults.get("CLAUDE_ALLOWED_TOOLS", ""),
