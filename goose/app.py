@@ -269,8 +269,8 @@ def _run_detached() -> None:
     """Fork into background and run the bot as a daemon."""
     config = Config.from_env()
     if not config.log_file:
-        print("Error: --detach requires LOG_FILE to be set in .env", file=sys.stderr)
-        print("Run 'goose setup' to configure a log file path.", file=sys.stderr)
+        print("Error: --detach requires LOG_FILE to be configured.", file=sys.stderr)
+        print("Run 'goose setup' to set a log file path.", file=sys.stderr)
         sys.exit(1)
 
     pid = os.fork()

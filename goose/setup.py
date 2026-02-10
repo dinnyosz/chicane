@@ -142,7 +142,7 @@ def _step_create_app(has_tokens: bool) -> None:
     console.rule("Step 1 of 7: Create Slack App")
 
     if has_tokens:
-        console.print("\n  Tokens found in .env — Slack app likely already configured.")
+        console.print("\n  Tokens found in config — Slack app likely already configured.")
         skip = Confirm.ask("  Skip this step?", default=True, console=console)
         if skip:
             return
@@ -174,7 +174,7 @@ def _step_bot_token(default: str = "") -> str:
     console.rule("Step 2 of 7: Get Bot Token")
 
     if default:
-        console.print("\n  Bot token found in .env. Press Enter to keep it,")
+        console.print("\n  Bot token found in config. Press Enter to keep it,")
         console.print("  or paste a new one. To generate a new token:")
 
     console.print("""
@@ -192,7 +192,7 @@ def _step_app_token(default: str = "") -> str:
     console.rule("Step 3 of 7: Get App Token")
 
     if default:
-        console.print("\n  App token found in .env. Press Enter to keep it,")
+        console.print("\n  App token found in config. Press Enter to keep it,")
         console.print("  or paste a new one. To generate a new token:")
 
     console.print("""
@@ -379,7 +379,10 @@ def setup_command(args) -> None:
 
 def _run_wizard(args) -> None:
     """Run the interactive wizard steps."""
-    env_path = Path(".env")
+    from .config import env_file
+
+    env_path = env_file()
+    env_path.parent.mkdir(parents=True, exist_ok=True)
     existing = _load_existing_env(env_path)
 
     console.print()
@@ -423,7 +426,7 @@ def _run_wizard(args) -> None:
 
     _write_env(env_path, env_values)
     console.print(Panel(
-        "[green]✓[/green] Wrote .env\n"
+        f"[green]✓[/green] Wrote {env_path}\n"
         "[green]✓[/green] Next: run [bold]goose run[/bold]\n"
         "[green]✓[/green] Tip: invite @Goose with /invite @Goose"
     ))

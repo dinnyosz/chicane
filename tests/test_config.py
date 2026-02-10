@@ -1,11 +1,12 @@
 """Tests for goose.config."""
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
 
-from goose.config import Config
+from goose.config import Config, config_dir, env_file
 
 
 class TestConfig:
@@ -171,3 +172,19 @@ class TestChannelDirs:
 
         config = Config.from_env()
         assert config.channel_dirs == {}
+
+
+class TestConfigDir:
+    def test_override_via_env(self, monkeypatch):
+        monkeypatch.setenv("GOOSE_CONFIG_DIR", "/custom/path")
+        assert config_dir() == Path("/custom/path")
+
+    def test_default_uses_platformdirs(self, monkeypatch):
+        monkeypatch.delenv("GOOSE_CONFIG_DIR", raising=False)
+        result = config_dir()
+        assert result.name == "goose"
+        assert result.is_absolute()
+
+    def test_env_file_inside_config_dir(self, monkeypatch):
+        monkeypatch.setenv("GOOSE_CONFIG_DIR", "/custom/path")
+        assert env_file() == Path("/custom/path/.env")

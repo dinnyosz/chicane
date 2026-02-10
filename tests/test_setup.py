@@ -451,7 +451,7 @@ class TestSetupCommand:
         return argparse.Namespace()
 
     def test_fresh_setup_writes_env(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("GOOSE_CONFIG_DIR", str(tmp_path))
         # Prompt.ask: base dir, done (channels), done (users), model, permission, log_file
         prompt_values = ["", "d", "d", "", "", ""]
         # Confirm.ask: debug=False
@@ -471,14 +471,14 @@ class TestSetupCommand:
              patch("goose.setup._copy_to_clipboard", return_value=False):
             setup_command(self._make_args())
 
-        env_file = tmp_path / ".env"
-        assert env_file.exists()
-        content = env_file.read_text()
+        env = tmp_path / ".env"
+        assert env.exists()
+        content = env.read_text()
         assert "SLACK_BOT_TOKEN=xoxb-bot123" in content
         assert "SLACK_APP_TOKEN=xapp-app456" in content
 
     def test_existing_env_tokens_as_defaults(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("GOOSE_CONFIG_DIR", str(tmp_path))
         (tmp_path / ".env").write_text(
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nBASE_DIRECTORY=/old\n"
         )
@@ -506,7 +506,7 @@ class TestSetupCommand:
         assert "BASE_DIRECTORY=/old" in content
 
     def test_existing_env_values_overridden(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("GOOSE_CONFIG_DIR", str(tmp_path))
         (tmp_path / ".env").write_text(
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nCHANNEL_DIRS=old-proj\n"
         )
@@ -535,7 +535,7 @@ class TestSetupCommand:
         assert "extra" in content
 
     def test_token_validation_reprompts(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("GOOSE_CONFIG_DIR", str(tmp_path))
         # Prompt.ask: base dir, done (channels), done (users), model, permission, log_file
         prompt_values = ["", "d", "d", "", "", ""]
         # Confirm.ask: debug=False
@@ -562,7 +562,7 @@ class TestSetupCommand:
         assert "SLACK_APP_TOKEN=xapp-good" in content
 
     def test_ctrl_c_exits_cleanly(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("GOOSE_CONFIG_DIR", str(tmp_path))
         with patch("goose.setup.console.print") as mock_print, \
              patch("goose.setup.console.input", side_effect=KeyboardInterrupt), \
              patch("goose.setup.console.print_json"), \

@@ -5,8 +5,29 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
+from platformdirs import user_config_dir
 
-load_dotenv()
+
+def config_dir() -> Path:
+    """Return the Goose configuration directory.
+
+    Override with GOOSE_CONFIG_DIR env var. Platform defaults:
+    - macOS: ~/Library/Application Support/goose
+    - Linux: ~/.config/goose (or $XDG_CONFIG_HOME/goose)
+    - Windows: %APPDATA%/goose
+    """
+    override = os.environ.get("GOOSE_CONFIG_DIR")
+    if override:
+        return Path(override)
+    return Path(user_config_dir("goose", appauthor=False))
+
+
+def env_file() -> Path:
+    """Return the path to the .env configuration file."""
+    return config_dir() / ".env"
+
+
+load_dotenv(env_file())
 
 
 @dataclass(frozen=True)
@@ -66,7 +87,7 @@ class Config:
         if not bot_token or not app_token:
             raise ValueError(
                 "SLACK_BOT_TOKEN and SLACK_APP_TOKEN must be set. "
-                "See .env.example for details."
+                "Run 'goose setup' to configure."
             )
 
         base_dir = os.environ.get("BASE_DIRECTORY")
