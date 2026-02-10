@@ -338,6 +338,7 @@ async def _find_session_id_in_thread(
     """Scan thread messages for a handoff session_id.
 
     Returns the session_id if found in any message, otherwise None.
+    Checks both thread replies and the thread starter message explicitly.
     Used on reconnect to resume the original Claude session instead of
     rebuilding context from scratch.
     """
@@ -349,11 +350,35 @@ async def _find_session_id_in_thread(
             text = msg.get("text", "")
             m = _HANDOFF_RE.search(text)
             if m:
+                logger.info(f"Found session_id in thread reply: {m.group(1)}")
                 return m.group(1)
     except Exception:
         logger.warning(
             f"Could not scan thread {thread_ts} for session_id", exc_info=True
         )
+
+    # Fallback: fetch the thread starter message directly.
+    # conversations_replies should include it, but fetch it explicitly
+    # in case the thread is new or the API didn't return it above.
+    try:
+        resp = await client.conversations_history(
+            channel=channel, latest=thread_ts, inclusive=True, limit=1
+        )
+        for msg in resp.get("messages", []):
+            text = msg.get("text", "")
+            m = _HANDOFF_RE.search(text)
+            if m:
+                logger.info(
+                    f"Found session_id in thread starter message: {m.group(1)}"
+                )
+                return m.group(1)
+    except Exception:
+        logger.warning(
+            f"Could not fetch thread starter {thread_ts} for session_id",
+            exc_info=True,
+        )
+
+    logger.info(f"No session_id found in thread {thread_ts}")
     return None
 
 
