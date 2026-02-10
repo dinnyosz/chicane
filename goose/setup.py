@@ -105,6 +105,24 @@ def _serialize_channel_dirs(mappings: dict[str, str]) -> str:
     return ",".join(parts)
 
 
+def _parse_allowed_users(raw: str) -> list[str]:
+    """Parse ALLOWED_USERS string into a list of user IDs."""
+    return [u.strip() for u in raw.split(",") if u.strip()]
+
+
+def _show_allowed_users(users: list[str]) -> None:
+    """Display current allowed users."""
+    if not users:
+        console.print("  [dim]No user restrictions — all workspace users can use Goose.[/dim]\n")
+        return
+    table = Table(show_header=True, padding=(0, 2))
+    table.add_column("Member ID", style="bold")
+    for user_id in users:
+        table.add_row(user_id)
+    console.print(table)
+    console.print()
+
+
 def _show_channel_table(mappings: dict[str, str]) -> None:
     """Display current channel mappings as a Rich table."""
     if not mappings:
@@ -121,7 +139,7 @@ def _show_channel_table(mappings: dict[str, str]) -> None:
 
 def _step_create_app(has_tokens: bool) -> None:
     """Step 1: Print manifest and wait for user to create the app."""
-    console.rule("Step 1 of 6: Create Slack App")
+    console.rule("Step 1 of 7: Create Slack App")
 
     if has_tokens:
         console.print("\n  Tokens found in .env — Slack app likely already configured.")
@@ -153,7 +171,7 @@ def _step_create_app(has_tokens: bool) -> None:
 
 def _step_bot_token(default: str = "") -> str:
     """Step 2: Get Bot Token."""
-    console.rule("Step 2 of 6: Get Bot Token")
+    console.rule("Step 2 of 7: Get Bot Token")
 
     if default:
         console.print("\n  Bot token found in .env. Press Enter to keep it,")
@@ -171,7 +189,7 @@ def _step_bot_token(default: str = "") -> str:
 
 def _step_app_token(default: str = "") -> str:
     """Step 3: Get App Token."""
-    console.rule("Step 3 of 6: Get App Token")
+    console.rule("Step 3 of 7: Get App Token")
 
     if default:
         console.print("\n  App token found in .env. Press Enter to keep it,")
@@ -194,7 +212,7 @@ def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
 
     Returns (base_directory, channel_dirs_string).
     """
-    console.rule("Step 4 of 6: Directory Settings")
+    console.rule("Step 4 of 7: Directory Settings")
     console.print("\n  [yellow]Note:[/yellow] Goose will run Claude Code in these directories.")
     console.print("  Only add directories you trust.\n")
 
@@ -250,35 +268,71 @@ def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
     return base_dir, channel_dirs_str
 
 
-def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
-    """Step 5: Prompt for optional settings. Returns non-empty values only."""
-    console.rule("Step 5 of 6: Optional Settings")
-    console.print("\n  Press Enter to skip (or keep current value). Type '-' to clear a value.")
+def _step_allowed_users(defaults: dict[str, str]) -> str:
+    """Step 5: Configure allowed users interactively. Returns comma-separated IDs or empty."""
+    console.rule("Step 5 of 7: Allowed Users")
+    console.print("\n  Restrict who can use the bot by Slack member ID.")
+    console.print("  (Find yours: Slack profile -> ⋮ menu -> Copy member ID)\n")
+
+    allowed = _parse_allowed_users(defaults.get("ALLOWED_USERS", ""))
+    _show_allowed_users(allowed)
+
+    while True:
+        action = Prompt.ask(
+            "  \\[a]dd / \\[r]emove / \\[d]one",
+            choices=["a", "r", "d"],
+            default="d",
+            console=console,
+        )
+        if action == "d":
+            break
+        elif action == "a":
+            user_id = Prompt.ask("  Slack member ID", console=console).strip()
+            if not user_id:
+                continue
+            if user_id in allowed:
+                console.print(f"  [dim]{user_id} already in list.[/dim]\n")
+                continue
+            allowed.append(user_id)
+            console.print(f"  [green]✓[/green] Added {user_id}\n")
+            _show_allowed_users(allowed)
+        elif action == "r":
+            if not allowed:
+                console.print("  [dim]Nothing to remove.[/dim]\n")
+                continue
+            user_id = Prompt.ask("  Member ID to remove", console=console).strip()
+            if user_id in allowed:
+                allowed.remove(user_id)
+                console.print(f"  [green]✓[/green] Removed {user_id}\n")
+                _show_allowed_users(allowed)
+            else:
+                console.print(f"  [red]{user_id} not found.[/red]\n")
+
+    return ",".join(allowed)
+
+
+def _step_claude_settings(defaults: dict[str, str]) -> dict[str, str]:
+    """Step 6: Configure Claude model, permission mode, and debug. Returns non-empty values."""
+    console.rule("Step 6 of 7: Claude Settings")
+    console.print("\n  Press Enter to skip (or keep current value). Type '-' to clear.")
 
     values: dict[str, str] = {}
 
-    # ALLOWED_USERS
-    console.print("\n  [bold]Allowed Users[/bold]")
-    console.print("  Restrict who can use the bot by Slack member ID.")
-    console.print("  (Find yours: Slack profile -> ⋮ menu -> Copy member ID)")
+    console.print("\n  [bold]Model[/bold]")
+    console.print("  Override the Claude model used for tasks.")
+    console.print("  Options: sonnet, opus, haiku (or any Claude model ID).")
+    console.print("  Leave empty to use the Claude CLI default.")
     val = _prompt_with_default(
-        "User IDs, comma-separated (e.g. U01AB2CDE)",
-        defaults.get("ALLOWED_USERS", ""),
-    )
-    if val:
-        values["ALLOWED_USERS"] = val
-
-    # CLAUDE_MODEL
-    console.print("\n  [bold]Claude Model[/bold]")
-    val = _prompt_with_default(
-        "Model override (e.g. sonnet, opus)",
+        "Model",
         defaults.get("CLAUDE_MODEL", ""),
     )
     if val:
         values["CLAUDE_MODEL"] = val
 
-    # CLAUDE_PERMISSION_MODE
-    console.print("\n  [bold]Claude Permission Mode[/bold]")
+    console.print("\n  [bold]Permission Mode[/bold]")
+    console.print("  Controls what Claude Code can do without asking.")
+    console.print("  default — prompts for risky actions (file writes, shell commands).")
+    console.print("  bypassPermissions — auto-approve everything (use with caution).")
     val = _prompt_with_default(
         "Permission mode",
         defaults.get("CLAUDE_PERMISSION_MODE", "default"),
@@ -286,8 +340,8 @@ def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
     if val and val != "default":
         values["CLAUDE_PERMISSION_MODE"] = val
 
-    # DEBUG
     console.print("\n  [bold]Debug[/bold]")
+    console.print("  Verbose logging to console output (stdout).")
     current_debug = defaults.get("DEBUG", "").lower() in ("1", "true", "yes")
     debug = Confirm.ask("  Enable debug logging", default=current_debug, console=console)
     if debug:
@@ -335,11 +389,14 @@ def _run_wizard(args) -> None:
     # Step 4: Directory Settings
     base_dir, channel_dirs = _step_channel_dirs(existing)
 
-    # Step 5: Other Settings
-    optional = _step_optional_settings(existing)
+    # Step 5: Allowed Users
+    allowed_users = _step_allowed_users(existing)
 
-    # Step 6: Write config
-    console.rule("Step 6 of 6: Writing config")
+    # Step 6: Claude Settings
+    claude_settings = _step_claude_settings(existing)
+
+    # Step 7: Write config
+    console.rule("Step 7 of 7: Writing config")
     console.print()
 
     env_values: dict[str, str] = {
@@ -350,7 +407,9 @@ def _run_wizard(args) -> None:
         env_values["BASE_DIRECTORY"] = base_dir
     if channel_dirs:
         env_values["CHANNEL_DIRS"] = channel_dirs
-    env_values.update(optional)
+    if allowed_users:
+        env_values["ALLOWED_USERS"] = allowed_users
+    env_values.update(claude_settings)
 
     _write_env(env_path, env_values)
     console.print(Panel(
