@@ -81,6 +81,7 @@ class SessionStore:
             session_id=session_id,
             model=config.claude_model,
             permission_mode=config.claude_permission_mode,
+            allowed_tools=config.claude_allowed_tools,
             system_prompt=SLACK_SYSTEM_PROMPT,
         )
 

@@ -368,9 +368,10 @@ class TestStepAllowedUsers:
 
 
 class TestStepClaudeSettings:
+    # Prompt order: model, permission, allowed_tools, log_file
+
     def test_all_defaults(self):
-        # model (empty), permission (acceptEdits default kept), log_file (empty)
-        with patch("goose.setup.Prompt.ask", side_effect=["", "acceptEdits", ""]), \
+        with patch("goose.setup.Prompt.ask", side_effect=["", "acceptEdits", "", ""]), \
              patch("goose.setup.Confirm.ask", return_value=False), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
@@ -378,7 +379,7 @@ class TestStepClaudeSettings:
             assert result == {"CLAUDE_PERMISSION_MODE": "acceptEdits"}
 
     def test_model_set(self):
-        with patch("goose.setup.Prompt.ask", side_effect=["sonnet", "", ""]), \
+        with patch("goose.setup.Prompt.ask", side_effect=["sonnet", "", "", ""]), \
              patch("goose.setup.Confirm.ask", return_value=False), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
@@ -386,32 +387,40 @@ class TestStepClaudeSettings:
             assert result == {"CLAUDE_MODEL": "sonnet"}
 
     def test_permission_mode_set(self):
-        with patch("goose.setup.Prompt.ask", side_effect=["", "bypassPermissions", ""]), \
+        with patch("goose.setup.Prompt.ask", side_effect=["", "bypassPermissions", "", ""]), \
              patch("goose.setup.Confirm.ask", return_value=False), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
             result = _step_claude_settings({})
             assert result == {"CLAUDE_PERMISSION_MODE": "bypassPermissions"}
 
-    def test_log_file_set(self):
-        with patch("goose.setup.Prompt.ask", side_effect=["", "", "goose.log"]), \
+    def test_allowed_tools_set(self):
+        with patch("goose.setup.Prompt.ask", side_effect=["", "acceptEdits", "Bash(npm run *),Read", ""]), \
              patch("goose.setup.Confirm.ask", return_value=False), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
             result = _step_claude_settings({})
-            assert result == {"LOG_FILE": "goose.log"}
+            assert result["CLAUDE_ALLOWED_TOOLS"] == "Bash(npm run *),Read"
+
+    def test_log_file_set(self):
+        with patch("goose.setup.Prompt.ask", side_effect=["", "acceptEdits", "", "goose.log"]), \
+             patch("goose.setup.Confirm.ask", return_value=False), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
+            result = _step_claude_settings({})
+            assert result == {"CLAUDE_PERMISSION_MODE": "acceptEdits", "LOG_FILE": "goose.log"}
 
     def test_debug_enabled(self):
-        with patch("goose.setup.Prompt.ask", side_effect=["", "", ""]), \
+        with patch("goose.setup.Prompt.ask", side_effect=["", "acceptEdits", "", ""]), \
              patch("goose.setup.Confirm.ask", return_value=True), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
             result = _step_claude_settings({})
-            assert result == {"DEBUG": "true"}
+            assert result == {"CLAUDE_PERMISSION_MODE": "acceptEdits", "DEBUG": "true"}
 
     def test_invalid_permission_mode_reprompts(self):
-        # model, bad mode, good mode, log_file
-        with patch("goose.setup.Prompt.ask", side_effect=["", "bogus", "plan", ""]), \
+        # model, bad mode, good mode, allowed_tools, log_file
+        with patch("goose.setup.Prompt.ask", side_effect=["", "bogus", "plan", "", ""]), \
              patch("goose.setup.Confirm.ask", return_value=False), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
@@ -420,7 +429,7 @@ class TestStepClaudeSettings:
 
     def test_all_valid_permission_modes(self):
         for mode in ("default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"):
-            with patch("goose.setup.Prompt.ask", side_effect=["", mode, ""]), \
+            with patch("goose.setup.Prompt.ask", side_effect=["", mode, "", ""]), \
                  patch("goose.setup.Confirm.ask", return_value=False), \
                  patch("goose.setup.console.print"), \
                  patch("goose.setup.console.rule"):
@@ -431,16 +440,18 @@ class TestStepClaudeSettings:
         defaults = {
             "CLAUDE_MODEL": "opus",
             "CLAUDE_PERMISSION_MODE": "bypassPermissions",
+            "CLAUDE_ALLOWED_TOOLS": "Bash(npm run *),Read",
             "LOG_FILE": "goose.log",
             "DEBUG": "true",
         }
-        with patch("goose.setup.Prompt.ask", side_effect=["opus", "bypassPermissions", "goose.log"]), \
+        with patch("goose.setup.Prompt.ask", side_effect=["opus", "bypassPermissions", "Bash(npm run *),Read", "goose.log"]), \
              patch("goose.setup.Confirm.ask", return_value=True), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
             result = _step_claude_settings(defaults)
             assert result["CLAUDE_MODEL"] == "opus"
             assert result["CLAUDE_PERMISSION_MODE"] == "bypassPermissions"
+            assert result["CLAUDE_ALLOWED_TOOLS"] == "Bash(npm run *),Read"
             assert result["LOG_FILE"] == "goose.log"
             assert result["DEBUG"] == "true"
 
@@ -470,8 +481,8 @@ class TestSetupCommand:
 
     def test_fresh_setup_writes_env(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GOOSE_CONFIG_DIR", str(tmp_path))
-        # Prompt.ask: base dir, done (channels), done (users), model, permission, log_file
-        prompt_values = ["", "d", "d", "", "", ""]
+        # Prompt.ask: base dir, done (channels), done (users), model, permission, allowed_tools, log_file
+        prompt_values = ["", "d", "d", "", "", "", ""]
         # Confirm.ask: debug=False
         confirm_values = [False]
         # console.input: press Enter (step1), bot token, app token
@@ -500,8 +511,8 @@ class TestSetupCommand:
         (tmp_path / ".env").write_text(
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nBASE_DIRECTORY=/old\n"
         )
-        # Prompt.ask: base dir (keep), done (channels), done (users), model, permission, log_file
-        prompt_values = ["/old", "d", "d", "", "", ""]
+        # Prompt.ask: base dir (keep), done (channels), done (users), model, permission, allowed_tools, log_file
+        prompt_values = ["/old", "d", "d", "", "", "", ""]
         # Confirm.ask: skip step1=True, debug=False
         confirm_values = [True, False]
         # console.input: bot token (empty=keep), app token (empty=keep)
@@ -528,8 +539,8 @@ class TestSetupCommand:
         (tmp_path / ".env").write_text(
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nCHANNEL_DIRS=old-proj\n"
         )
-        # Prompt.ask: base dir, add channels, done (users), model, permission, log_file
-        prompt_values = ["", "a", "new-proj", "new-proj", "a", "extra", "extra", "d", "d", "", "", ""]
+        # Prompt.ask: base dir, add channels, done (users), model, permission, allowed_tools, log_file
+        prompt_values = ["", "a", "new-proj", "new-proj", "a", "extra", "extra", "d", "d", "", "", "", ""]
         # Confirm.ask: skip step1=True, debug=False
         confirm_values = [True, False]
         # console.input: bot token override, app token keep
@@ -554,8 +565,8 @@ class TestSetupCommand:
 
     def test_token_validation_reprompts(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GOOSE_CONFIG_DIR", str(tmp_path))
-        # Prompt.ask: base dir, done (channels), done (users), model, permission, log_file
-        prompt_values = ["", "d", "d", "", "", ""]
+        # Prompt.ask: base dir, done (channels), done (users), model, permission, allowed_tools, log_file
+        prompt_values = ["", "d", "d", "", "", "", ""]
         # Confirm.ask: debug=False
         confirm_values = [False]
         # console.input: press Enter (step1), bad bot, good bot, bad app, good app

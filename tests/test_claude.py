@@ -144,3 +144,16 @@ class TestClaudeSession:
         cmd = session._build_command("follow up")
         assert "--append-system-prompt" not in cmd
 
+    def test_build_command_with_allowed_tools(self):
+        session = ClaudeSession(allowed_tools=["Bash(npm run *)", "Read"])
+        cmd = session._build_command("do stuff")
+        assert "--allowedTools" in cmd
+        idx = cmd.index("--allowedTools")
+        assert cmd[idx + 1] == "Bash(npm run *)"
+        assert cmd[idx + 2] == "Read"
+
+    def test_build_command_no_allowed_tools(self):
+        session = ClaudeSession()
+        cmd = session._build_command("do stuff")
+        assert "--allowedTools" not in cmd
+

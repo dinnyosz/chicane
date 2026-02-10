@@ -43,6 +43,7 @@ class Config:
     log_file: Path | None = None
     claude_model: str | None = None
     claude_permission_mode: str = "acceptEdits"
+    claude_allowed_tools: list[str] = field(default_factory=list)
 
 
     def resolve_dir_channel(self, cwd: Path) -> str | None:
@@ -95,6 +96,7 @@ class Config:
         log_file = os.environ.get("LOG_FILE")
         model = os.environ.get("CLAUDE_MODEL")
         perm_mode = os.environ.get("CLAUDE_PERMISSION_MODE", "acceptEdits")
+        raw_tools = os.environ.get("CLAUDE_ALLOWED_TOOLS", "")
         # Parse CHANNEL_DIRS: "magaldi,slack-bot,frontend" or "magaldi=magaldi,web=frontend"
         channel_dirs: dict[str, str] = {}
         raw_dirs = os.environ.get("CHANNEL_DIRS", "")
@@ -119,4 +121,5 @@ class Config:
             log_file=Path(log_file) if log_file else None,
             claude_model=model,
             claude_permission_mode=perm_mode,
+            claude_allowed_tools=[t.strip() for t in raw_tools.split(",") if t.strip()],
         )

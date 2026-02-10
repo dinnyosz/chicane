@@ -57,12 +57,14 @@ class ClaudeSession:
         model: str | None = None,
         permission_mode: str = "default",
         system_prompt: str | None = None,
+        allowed_tools: list[str] | None = None,
     ):
         self.cwd = cwd or Path.cwd()
         self.session_id = session_id
         self.model = model
         self.permission_mode = permission_mode
         self.system_prompt = system_prompt
+        self.allowed_tools = allowed_tools or []
 
     def _build_command(self, prompt: str) -> list[str]:
         cmd = [
@@ -80,6 +82,10 @@ class ClaudeSession:
 
         if self.permission_mode != "default":
             cmd.extend(["--permission-mode", self.permission_mode])
+
+        if self.allowed_tools:
+            cmd.append("--allowedTools")
+            cmd.extend(self.allowed_tools)
 
         # Only send system prompt on the first invocation — resumed sessions
         # already have it, so resending wastes tokens.

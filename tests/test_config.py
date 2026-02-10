@@ -27,6 +27,7 @@ class TestConfig:
         assert config.allowed_users == []
         assert config.debug is False
         assert config.log_file is None
+        assert config.claude_allowed_tools == []
 
     def test_from_env_missing_tokens(self, monkeypatch):
         monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
@@ -44,6 +45,7 @@ class TestConfig:
         monkeypatch.setenv("CLAUDE_MODEL", "sonnet")
         monkeypatch.setenv("CLAUDE_PERMISSION_MODE", "bypassPermissions")
         monkeypatch.setenv("LOG_FILE", "/var/log/goose.log")
+        monkeypatch.setenv("CLAUDE_ALLOWED_TOOLS", "Bash(npm run *), Read, Edit(./src/**)")
 
         config = Config.from_env()
 
@@ -53,6 +55,7 @@ class TestConfig:
         assert config.claude_model == "sonnet"
         assert config.claude_permission_mode == "bypassPermissions"
         assert config.log_file == Path("/var/log/goose.log")
+        assert config.claude_allowed_tools == ["Bash(npm run *)", "Read", "Edit(./src/**)"]
 
     def test_debug_variants(self, monkeypatch):
         monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")

@@ -348,6 +348,21 @@ def _step_claude_settings(defaults: dict[str, str]) -> dict[str, str]:
     if val:
         values["CLAUDE_PERMISSION_MODE"] = val
 
+    console.print("\n  [bold]Allowed Tools[/bold]")
+    console.print("  Pre-approve specific tools so Claude doesn't prompt for them.")
+    console.print("  Comma-separated. Supports patterns:")
+    console.print("  [dim]Bash(npm run *)[/dim]  — allow shell commands matching a pattern")
+    console.print("  [dim]Edit(./src/**)[/dim]   — allow edits to files under a path")
+    console.print("  [dim]Read[/dim]             — allow all file reads")
+    console.print("  [dim]WebFetch[/dim]         — allow web fetching")
+    console.print("  Leave empty for no pre-approved tools.")
+    val = _prompt_with_default(
+        "Allowed tools",
+        defaults.get("CLAUDE_ALLOWED_TOOLS", ""),
+    )
+    if val:
+        values["CLAUDE_ALLOWED_TOOLS"] = val
+
     console.print("\n  [bold]Log File[/bold]")
     console.print("  Write logs to a file instead of console output.")
     console.print("  Useful with --detach mode. Leave empty to log to console only.")
