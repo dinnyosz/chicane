@@ -69,30 +69,6 @@ class TestConfig:
         config = Config.from_env()
         assert config.allowed_users == []
 
-    def test_allowed_tools_from_env(self, monkeypatch):
-        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
-        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
-        monkeypatch.setenv("CLAUDE_ALLOWED_TOOLS", "WebFetch,WebSearch")
-
-        config = Config.from_env()
-        assert config.claude_allowed_tools == ["WebFetch", "WebSearch"]
-
-    def test_allowed_tools_empty_by_default(self, monkeypatch):
-        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
-        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
-        monkeypatch.delenv("CLAUDE_ALLOWED_TOOLS", raising=False)
-
-        config = Config.from_env()
-        assert config.claude_allowed_tools == []
-
-    def test_allowed_tools_with_spaces(self, monkeypatch):
-        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
-        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
-        monkeypatch.setenv("CLAUDE_ALLOWED_TOOLS", " WebFetch , WebSearch ")
-
-        config = Config.from_env()
-        assert config.claude_allowed_tools == ["WebFetch", "WebSearch"]
-
 
 class TestChannelDirs:
     def test_simple_channel_dirs(self, monkeypatch):

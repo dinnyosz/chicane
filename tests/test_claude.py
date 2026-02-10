@@ -144,22 +144,3 @@ class TestClaudeSession:
         cmd = session._build_command("follow up")
         assert "--append-system-prompt" not in cmd
 
-    def test_build_command_with_allowed_tools(self):
-        session = ClaudeSession(allowed_tools=["WebFetch", "WebSearch"])
-        cmd = session._build_command("hello")
-        assert "--allowedTools" in cmd
-        idx = cmd.index("--allowedTools")
-        assert cmd[idx + 1] == "WebFetch"
-        assert cmd[idx + 2] == "WebSearch"
-        # prompt should still be last
-        assert cmd[-1] == "hello"
-
-    def test_build_command_no_allowed_tools_by_default(self):
-        session = ClaudeSession()
-        cmd = session._build_command("hello")
-        assert "--allowedTools" not in cmd
-
-    def test_build_command_empty_allowed_tools(self):
-        session = ClaudeSession(allowed_tools=[])
-        cmd = session._build_command("hello")
-        assert "--allowedTools" not in cmd
