@@ -61,7 +61,7 @@ def _prompt_token(label: str, prefix: str, default: str = "") -> str:
                 masked = default[:8] + "..." + default[-4:]
             else:
                 masked = default[:5] + "..."
-            value = input(f"  Paste your {label} [{masked}]: ").strip()
+            value = input(f"  Paste your {label} [{masked}] (Enter to keep): ").strip()
             if not value:
                 return default
         else:
