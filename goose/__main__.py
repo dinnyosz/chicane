@@ -1,8 +1,6 @@
 """Entry point: python -m goose"""
 
-import asyncio
-
-from .app import start
+from .app import main
 
 if __name__ == "__main__":
-    asyncio.run(start())
+    main()

@@ -1,10 +1,14 @@
 """Goose application — Slack bot powered by Claude Code."""
 
+import argparse
 import asyncio
 import logging
 import os
 import signal
+import shutil
 import ssl
+import sys
+from pathlib import Path
 
 import certifi
 
@@ -67,8 +71,133 @@ async def start(config: Config | None = None) -> None:
     await handler.close_async()
 
 
+# ---------------------------------------------------------------------------
+# CLI: goose handoff
+# ---------------------------------------------------------------------------
+
+
+async def _handoff(args: argparse.Namespace) -> None:
+    """Post a handoff message to Slack so the session can be resumed."""
+    from slack_sdk.web.async_client import AsyncWebClient
+
+    config = Config.from_env()
+
+    # Resolve channel name
+    channel_name: str | None = args.channel
+    if not channel_name:
+        cwd = Path(args.cwd).resolve() if args.cwd else Path.cwd()
+        channel_name = config.resolve_dir_channel(cwd)
+        if not channel_name:
+            print(
+                f"Error: could not resolve a Slack channel for {cwd}.\n"
+                "Use --channel to specify one explicitly, or configure CHANNEL_DIRS.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    # Look up channel ID via Slack API
+    client = AsyncWebClient(token=config.slack_bot_token)
+    channel_id: str | None = None
+    cursor: str | None = None
+    while True:
+        kwargs: dict = {"limit": 200}
+        if cursor:
+            kwargs["cursor"] = cursor
+        resp = await client.conversations_list(**kwargs)
+        for ch in resp.get("channels", []):
+            if ch["name"] == channel_name:
+                channel_id = ch["id"]
+                break
+        if channel_id:
+            break
+        cursor = resp.get("response_metadata", {}).get("next_cursor")
+        if not cursor:
+            break
+
+    if not channel_id:
+        print(f"Error: channel #{channel_name} not found.", file=sys.stderr)
+        sys.exit(1)
+
+    # Post the handoff message
+    text = f"{args.summary}\n\n_(session_id: {args.session_id})_"
+    await client.chat_postMessage(channel=channel_id, text=text)
+    print(f"Handoff posted to #{channel_name}")
+
+
+def handoff(args: argparse.Namespace) -> None:
+    """Sync wrapper for the handoff command."""
+    asyncio.run(_handoff(args))
+
+
+# ---------------------------------------------------------------------------
+# CLI: goose install-skill
+# ---------------------------------------------------------------------------
+
+
+def install_skill(args: argparse.Namespace) -> None:
+    """Install the goose-handoff skill for Claude Code."""
+    # Resolve path to the goose binary
+    goose_path = shutil.which("goose")
+    if not goose_path:
+        # Fallback: use the repo checkout
+        goose_path = str(Path(__file__).resolve().parent.parent / "goose")
+
+    # Read the bundled template
+    template_path = Path(__file__).resolve().parent / "skill.md"
+    if not template_path.exists():
+        print(f"Error: skill template not found at {template_path}", file=sys.stderr)
+        sys.exit(1)
+    template = template_path.read_text()
+
+    # Replace placeholder
+    content = template.replace("{{GOOSE_PATH}}", goose_path)
+
+    # Write to ~/.claude/skills/goose-handoff/SKILL.md
+    target_dir = Path.home() / ".claude" / "skills" / "goose-handoff"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / "SKILL.md"
+    target.write_text(content)
+
+    print(f"Installed goose-handoff skill to {target}")
+
+
+# ---------------------------------------------------------------------------
+# CLI entrypoint
+# ---------------------------------------------------------------------------
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="goose",
+        description="Goose — Slack bot powered by Claude Code",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    # goose run (default)
+    sub.add_parser("run", help="Start the Slack bot (default)")
+
+    # goose handoff
+    ho = sub.add_parser("handoff", help="Post a handoff message to Slack")
+    ho.add_argument("--session-id", required=True, help="Claude session ID to resume")
+    ho.add_argument("--summary", required=True, help="Summary text for the handoff message")
+    ho.add_argument("--channel", default=None, help="Slack channel name (auto-resolved from cwd if omitted)")
+    ho.add_argument("--cwd", default=None, help="Working directory to resolve channel from (defaults to $PWD)")
+
+    # goose install-skill
+    sub.add_parser("install-skill", help="Install the goose-handoff skill for Claude Code")
+
+    return parser
+
+
 def main() -> None:
     """Sync entrypoint for the console script."""
-    import asyncio
+    parser = _build_parser()
+    args = parser.parse_args()
 
-    asyncio.run(start())
+    if args.command == "handoff":
+        handoff(args)
+    elif args.command == "install-skill":
+        install_skill(args)
+    else:
+        # Default: run the bot (covers both 'run' and no subcommand)
+        asyncio.run(start())
