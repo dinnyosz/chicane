@@ -244,10 +244,16 @@ async def _process_message(
                     text=chunk,
                 )
         else:
+            msg = (
+                ":warning: Claude returned an empty response. "
+                "This usually means the session is still active in a terminal. "
+                "Please close that Claude Code session first (type /exit or quit), "
+                "then try again."
+            )
             await client.chat_update(
                 channel=channel,
                 ts=message_ts,
-                text=":warning: Claude returned an empty response.",
+                text=msg,
             )
 
         # Swap eyes for checkmark

@@ -34,6 +34,17 @@ resolve, you can pass `--channel <channel-name>` explicitly.
 - When the user replies to that thread in Slack, Goose resumes this exact
   Claude Code session — all prior context is preserved.
 
+## After the handoff
+
+Once the message is sent, tell the user:
+
+> "Handoff posted to Slack. **You need to close this session** so the bot can
+> resume it — the session can only be active in one place at a time. Want me
+> to quit now?"
+
+If the user confirms, exit the session. If they decline, remind them that
+Slack replies will fail until the session is closed.
+
 ## Important
 
 - Always include a meaningful summary so the user knows what was in progress.
