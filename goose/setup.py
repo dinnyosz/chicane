@@ -89,11 +89,12 @@ def _step_create_app(has_tokens: bool) -> None:
 
     if copied:
         print("\n    \u2713 Manifest copied to your clipboard.")
+        show = input("\n  Show manifest in console? (y/N): ").strip().lower()
+        if show in ("y", "yes"):
+            print("\n    ──────────────────────────────────")
+            print(manifest_json)
+            print("    ──────────────────────────────────")
     else:
-        print("\n    (Could not copy to clipboard automatically.)")
-
-    show = input("\n  Show manifest in console? (y/N): ").strip().lower()
-    if show in ("y", "yes"):
         print("\n    ──────────────────────────────────")
         print(manifest_json)
         print("    ──────────────────────────────────")
