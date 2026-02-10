@@ -62,12 +62,23 @@ async def start(config: Config | None = None) -> None:
 
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
+
+    def _handle_signal() -> None:
+        if stop.is_set():
+            print("\nForce quit.")
+            os._exit(0)
+        print("\nShutting down... (press Ctrl+C again to force quit)")
+        stop.set()
+
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop.set)
+        loop.add_signal_handler(sig, _handle_signal)
 
     await stop.wait()
-    logger.info("Shutting down...")
-    os._exit(0)
+    try:
+        await asyncio.wait_for(handler.close_async(), timeout=3.0)
+    except asyncio.TimeoutError:
+        logger.warning("Graceful shutdown timed out, exiting anyway.")
+    logger.info("Goodbye.")
 
 
 # ---------------------------------------------------------------------------
