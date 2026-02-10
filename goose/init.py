@@ -127,19 +127,37 @@ def _step_optional_settings() -> dict[str, str]:
 """)
     values: dict[str, str] = {}
 
-    prompts = [
-        ("BASE_DIRECTORY", "Base directory for Claude sessions"),
-        ("ALLOWED_USERS", "Allowed Slack user IDs (comma-separated)"),
-        ("CHANNEL_DIRS", "Channel->directory mapping (e.g. myproject,web=frontend)"),
-        ("CLAUDE_MODEL", "Claude model override (e.g. sonnet, opus)"),
-        ("CLAUDE_PERMISSION_MODE", "Claude permission mode"),
-    ]
+    # BASE_DIRECTORY
+    val = input("    Base directory for Claude sessions []: ").strip()
+    if val:
+        values["BASE_DIRECTORY"] = val
 
-    for key, label in prompts:
-        val = input(f"    {label} []: ").strip()
-        if val:
-            values[key] = val
+    # ALLOWED_USERS
+    print("    Restrict who can use the bot by Slack member ID.")
+    print("    (Find yours: Slack profile -> ⋮ menu -> Copy member ID)")
+    val = input("    Allowed user IDs, comma-separated (e.g. U01AB2CDE) []: ").strip()
+    if val:
+        values["ALLOWED_USERS"] = val
 
+    # CHANNEL_DIRS
+    print("    Map Slack channels to working directories.")
+    print("    Simple: channel name = directory name under base directory.")
+    print("    Custom: channel=path (e.g. web=frontend, infra=/opt/infra)")
+    val = input("    Channel mappings, comma-separated []: ").strip()
+    if val:
+        values["CHANNEL_DIRS"] = val
+
+    # CLAUDE_MODEL
+    val = input("    Claude model override (e.g. sonnet, opus) []: ").strip()
+    if val:
+        values["CLAUDE_MODEL"] = val
+
+    # CLAUDE_PERMISSION_MODE
+    val = input("    Claude permission mode [default]: ").strip()
+    if val:
+        values["CLAUDE_PERMISSION_MODE"] = val
+
+    # DEBUG
     debug = input("    Enable debug logging? (y/N): ").strip().lower()
     if debug in ("y", "yes"):
         values["DEBUG"] = "true"
