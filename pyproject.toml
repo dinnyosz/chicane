@@ -1,8 +1,18 @@
 [project]
-name = "goose"
+name = "goose-code"
 version = "0.1.0"
 description = "Slack + Claude Code bridge — send coding tasks from Slack, get results back"
+readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.11"
+authors = [
+    { name = "dinnyosz", email = "dinnyosz@gmail.com" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "slack-bolt[async]>=1.18.0",
     "python-dotenv>=1.0.0",
@@ -15,6 +25,10 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
 ]
+
+[project.urls]
+Homepage = "https://github.com/dinnyosz/goose-code"
+Repository = "https://github.com/dinnyosz/goose-code"
 
 [project.scripts]
 goose = "goose.app:main"
