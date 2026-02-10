@@ -199,8 +199,16 @@ def install_skill(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 
+class _GooseParser(argparse.ArgumentParser):
+    """ArgumentParser that shows our help instead of argparse's error message."""
+
+    def error(self, message: str) -> None:
+        _print_help()
+        sys.exit(2)
+
+
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _GooseParser(
         prog="goose",
         description="Goose — Slack bot powered by Claude Code",
     )
