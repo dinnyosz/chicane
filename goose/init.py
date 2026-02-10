@@ -81,12 +81,11 @@ def _step_create_app() -> None:
     3. Select your workspace
     4. Switch to the JSON tab and paste this manifest:
 
-       ──────────────────────────────────""")
-    for line in manifest_json.splitlines():
-        print(f"       {line}")
-    print("       ──────────────────────────────────")
+    ──────────────────────────────────""")
+    print(manifest_json)
+    print("    ──────────────────────────────────")
     if copied:
-        print("\n       (The manifest has been copied to your clipboard.)")
+        print("\n    (The manifest has been copied to your clipboard.)")
     print()
     input("  Press Enter when your app is created...")
 
@@ -158,6 +157,15 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
 
 def init_command(args) -> None:
     """Main init wizard entrypoint."""
+    try:
+        _run_wizard(args)
+    except KeyboardInterrupt:
+        print("\n  Aborted.")
+        sys.exit(130)
+
+
+def _run_wizard(args) -> None:
+    """Run the interactive wizard steps."""
     env_path = Path(".env")
 
     if env_path.exists() and not getattr(args, "force", False):

@@ -247,3 +247,14 @@ class TestInitCommand:
         captured = capsys.readouterr()
         assert "must start with 'xoxb-'" in captured.out
         assert "must start with 'xapp-'" in captured.out
+
+    def test_ctrl_c_exits_cleanly(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        with patch("builtins.input", side_effect=KeyboardInterrupt), \
+             patch("goose.init._copy_to_clipboard", return_value=False):
+            with pytest.raises(SystemExit) as exc_info:
+                init_command(self._make_args())
+            assert exc_info.value.code == 130
+
+        captured = capsys.readouterr()
+        assert "Aborted" in captured.out
