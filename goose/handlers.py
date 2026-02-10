@@ -19,6 +19,10 @@ STREAM_UPDATE_INTERVAL = 1.5
 # Max message length for Slack
 SLACK_MAX_LENGTH = 3900
 
+# Regex to detect a handoff session_id at the end of a prompt.
+# Matches both plain  (session_id: uuid)  and Slack-italicised  _(session_id: uuid)_
+_HANDOFF_RE = re.compile(r"_?\(session_id:\s*([a-f0-9\-]+)\)_?\s*$")
+
 
 def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> None:
     """Register all Slack event handlers on the app."""
@@ -132,6 +136,14 @@ async def _process_message(
     thread_ts = event.get("thread_ts", event["ts"])
     user = event.get("user", "unknown")
 
+    # Check for a handoff session_id embedded in the prompt
+    handoff_session_id: str | None = None
+    handoff_match = _HANDOFF_RE.search(prompt)
+    if handoff_match:
+        handoff_session_id = handoff_match.group(1)
+        prompt = prompt[: handoff_match.start()].rstrip()
+        logger.info(f"Handoff detected — resuming session {handoff_session_id}")
+
     logger.info(f"Processing message from {user} in {channel}: {prompt[:80]}")
 
     # Add eyes reaction to show we're working on it
@@ -144,13 +156,19 @@ async def _process_message(
     cwd = await _resolve_channel_cwd(channel, client, config)
 
     # Detect reconnect: session doesn't exist yet AND this is a thread reply
-    is_reconnect = not sessions.has(thread_ts) and thread_ts != event["ts"]
+    # Skip reconnect when this is a handoff — the resumed session already has context.
+    is_reconnect = (
+        not handoff_session_id
+        and not sessions.has(thread_ts)
+        and thread_ts != event["ts"]
+    )
 
     # Get or create a Claude session for this thread
     session = sessions.get_or_create(
         thread_ts=thread_ts,
         config=config,
         cwd=cwd,
+        session_id=handoff_session_id,
     )
 
     # On reconnect, rebuild context from Slack thread history
