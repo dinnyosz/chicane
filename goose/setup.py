@@ -80,22 +80,26 @@ def _step_create_app(has_tokens: bool) -> None:
 
     if has_tokens:
         print("\n    Slack app already configured. Press Enter to skip,")
-        print("    or follow the steps below to create a new one.")
-    else:
-        print()
+        print("    or follow the steps below to create a new one.\n")
 
-    print("""    1. Open https://api.slack.com/apps
-    2. Click "Create New App" -> "From a manifest"
-    3. Select your workspace
-    4. Switch to the JSON tab and paste this manifest:
+    print("    1. Open https://api.slack.com/apps")
+    print('    2. Click "Create New App" -> "From a manifest"')
+    print("    3. Select your workspace")
+    print("    4. Switch to the JSON tab and paste the manifest")
 
-    ──────────────────────────────────""")
-    print(manifest_json)
-    print("    ──────────────────────────────────")
     if copied:
-        print("\n    (The manifest has been copied to your clipboard.)")
+        print("\n    \u2713 Manifest copied to your clipboard.")
+    else:
+        print("\n    (Could not copy to clipboard automatically.)")
+
+    show = input("\n  Show manifest in console? (y/N): ").strip().lower()
+    if show in ("y", "yes"):
+        print("\n    ──────────────────────────────────")
+        print(manifest_json)
+        print("    ──────────────────────────────────")
+
     print()
-    input("  Press Enter to continue...")
+    input("  Press Enter when your app is created...")
 
 
 def _step_bot_token(default: str = "") -> str:

@@ -260,7 +260,8 @@ class TestSetupCommand:
     def test_fresh_setup_writes_env(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         inputs = [
-            "",              # Step 1: Enter
+            "n",             # Step 1: Show manifest? No
+            "",              # Step 1: Enter to continue
             "xoxb-bot123",   # Bot token
             "xapp-app456",   # App token
             "",              # BASE_DIRECTORY
@@ -287,8 +288,9 @@ class TestSetupCommand:
         )
         # All empty — keep all defaults
         inputs = [
-            "",  # Step 1: Enter
-            "",  # Bot token (keep xoxb-old)
+            "n",  # Step 1: Show manifest? No
+            "",   # Step 1: Enter to continue
+            "",   # Bot token (keep xoxb-old)
             "",  # App token (keep xapp-old)
             "",  # BASE_DIRECTORY (keep /old)
             "",  # ALLOWED_USERS
@@ -312,7 +314,8 @@ class TestSetupCommand:
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nCHANNEL_DIRS=old-proj\n"
         )
         inputs = [
-            "",                  # Step 1: Enter
+            "n",                 # Step 1: Show manifest? No
+            "",                  # Step 1: Enter to continue
             "xoxb-new",          # Override bot token
             "",                  # Keep app token
             "",                  # BASE_DIRECTORY
@@ -334,7 +337,8 @@ class TestSetupCommand:
     def test_token_validation_reprompts(self, tmp_path, monkeypatch, capsys):
         monkeypatch.chdir(tmp_path)
         inputs = [
-            "",                  # Step 1: Enter
+            "n",                 # Step 1: Show manifest? No
+            "",                  # Step 1: Enter to continue
             "bad-bot",           # Invalid
             "xoxb-good",         # Valid
             "not-app",           # Invalid
