@@ -99,7 +99,7 @@ class ClaudeSession:
         cmd = self._build_command(prompt)
 
         logger.info(f"Running: {' '.join(cmd[:6])}...")
-        logger.debug(f"Full command: {cmd}")
+        logger.info(f"Full command: {' '.join(cmd)}")
 
         process = await asyncio.create_subprocess_exec(
             *cmd,
