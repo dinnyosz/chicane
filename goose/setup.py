@@ -71,15 +71,20 @@ def _prompt_token(label: str, prefix: str, default: str = "") -> str:
         print(f"  Token must start with '{prefix}'. Please try again.\n")
 
 
-def _step_create_app() -> None:
+def _step_create_app(has_tokens: bool) -> None:
     """Step 1: Print manifest and wait for user to create the app."""
     manifest_json = json.dumps(_load_manifest(), indent=2)
     copied = _copy_to_clipboard(manifest_json)
 
-    print("""
-  Step 1 of 5: Create Slack App
+    print("\n  Step 1 of 5: Create Slack App")
 
-    1. Open https://api.slack.com/apps
+    if has_tokens:
+        print("\n    Slack app already configured. Press Enter to skip,")
+        print("    or follow the steps below to create a new one.")
+    else:
+        print()
+
+    print("""    1. Open https://api.slack.com/apps
     2. Click "Create New App" -> "From a manifest"
     3. Select your workspace
     4. Switch to the JSON tab and paste this manifest:
@@ -90,18 +95,23 @@ def _step_create_app() -> None:
     if copied:
         print("\n    (The manifest has been copied to your clipboard.)")
     print()
-    input("  Press Enter when your app is created (or to skip if already done)...")
+    input("  Press Enter to continue...")
 
 
 def _step_bot_token(default: str = "") -> str:
     """Step 2: Get Bot Token."""
-    print("""
-  Step 2 of 5: Get Bot Token
+    print("\n  Step 2 of 5: Get Bot Token")
 
+    if default:
+        print("\n    Bot token found in .env. Press Enter to keep it,")
+        print("    or paste a new one to replace it.")
+    else:
+        print("""
     1. In the sidebar, go to "OAuth & Permissions"
     2. Click "Install to Workspace" and approve
-    3. Copy the "Bot User OAuth Token" (starts with xoxb-)
-""")
+    3. Copy the "Bot User OAuth Token" (starts with xoxb-)""")
+
+    print()
     token = _prompt_token("Bot Token", "xoxb-", default)
     print("  \u2713 Saved")
     return token
@@ -109,15 +119,20 @@ def _step_bot_token(default: str = "") -> str:
 
 def _step_app_token(default: str = "") -> str:
     """Step 3: Get App Token."""
-    print("""
-  Step 3 of 5: Get App Token
+    print("\n  Step 3 of 5: Get App Token")
 
+    if default:
+        print("\n    App token found in .env. Press Enter to keep it,")
+        print("    or paste a new one to replace it.")
+    else:
+        print("""
     1. In the sidebar, go to "Basic Information"
     2. Scroll to "App-Level Tokens" -> "Generate Token and Scopes"
     3. Name it anything (e.g. "goose-socket")
     4. Add the "connections:write" scope
-    5. Click "Generate" and copy the token (starts with xapp-)
-""")
+    5. Click "Generate" and copy the token (starts with xapp-)""")
+
+    print()
     token = _prompt_token("App Token", "xapp-", default)
     print("  \u2713 Saved")
     return token
@@ -218,11 +233,10 @@ def _run_wizard(args) -> None:
     print("  Goose \u2014 Setup Wizard")
     print("  =====================")
 
-    if existing:
-        print(f"\n  Found existing .env \u2014 current values shown as defaults.")
+    has_tokens = bool(existing.get("SLACK_BOT_TOKEN") and existing.get("SLACK_APP_TOKEN"))
 
     # Step 1: Create Slack App
-    _step_create_app()
+    _step_create_app(has_tokens)
 
     # Step 2: Bot Token
     bot_token = _step_bot_token(existing.get("SLACK_BOT_TOKEN", ""))
