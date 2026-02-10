@@ -368,14 +368,14 @@ class TestStepAllowedUsers:
 
 
 class TestStepClaudeSettings:
-    def test_all_empty(self):
-        # model, permission, log_file
-        with patch("goose.setup.Prompt.ask", side_effect=["", "", ""]), \
+    def test_all_defaults(self):
+        # model (empty), permission (acceptEdits default kept), log_file (empty)
+        with patch("goose.setup.Prompt.ask", side_effect=["", "acceptEdits", ""]), \
              patch("goose.setup.Confirm.ask", return_value=False), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
             result = _step_claude_settings({})
-            assert result == {}
+            assert result == {"CLAUDE_PERMISSION_MODE": "acceptEdits"}
 
     def test_model_set(self):
         with patch("goose.setup.Prompt.ask", side_effect=["sonnet", "", ""]), \
@@ -408,6 +408,24 @@ class TestStepClaudeSettings:
              patch("goose.setup.console.rule"):
             result = _step_claude_settings({})
             assert result == {"DEBUG": "true"}
+
+    def test_invalid_permission_mode_reprompts(self):
+        # model, bad mode, good mode, log_file
+        with patch("goose.setup.Prompt.ask", side_effect=["", "bogus", "plan", ""]), \
+             patch("goose.setup.Confirm.ask", return_value=False), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
+            result = _step_claude_settings({})
+            assert result == {"CLAUDE_PERMISSION_MODE": "plan"}
+
+    def test_all_valid_permission_modes(self):
+        for mode in ("default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"):
+            with patch("goose.setup.Prompt.ask", side_effect=["", mode, ""]), \
+                 patch("goose.setup.Confirm.ask", return_value=False), \
+                 patch("goose.setup.console.print"), \
+                 patch("goose.setup.console.rule"):
+                result = _step_claude_settings({})
+                assert result["CLAUDE_PERMISSION_MODE"] == mode
 
     def test_defaults_kept(self):
         defaults = {

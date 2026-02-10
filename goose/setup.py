@@ -336,11 +336,16 @@ def _step_claude_settings(defaults: dict[str, str]) -> dict[str, str]:
     console.print("  [dim]plan[/dim]              — read-only analysis, no modifications")
     console.print("  [dim]dontAsk[/dim]           — auto-denies unless pre-approved via rules")
     console.print("  [dim]bypassPermissions[/dim] — skips all prompts (containers/VMs only)")
-    val = _prompt_with_default(
-        "Permission mode",
-        defaults.get("CLAUDE_PERMISSION_MODE", "default"),
-    )
-    if val and val != "default":
+    valid_modes = {"default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"}
+    while True:
+        val = _prompt_with_default(
+            "Permission mode",
+            defaults.get("CLAUDE_PERMISSION_MODE", "acceptEdits"),
+        )
+        if not val or val in valid_modes:
+            break
+        console.print(f"  [red]Invalid mode '{val}'. Choose from: {', '.join(sorted(valid_modes))}[/red]\n")
+    if val:
         values["CLAUDE_PERMISSION_MODE"] = val
 
     console.print("\n  [bold]Log File[/bold]")

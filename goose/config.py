@@ -42,7 +42,7 @@ class Config:
     debug: bool = False
     log_file: Path | None = None
     claude_model: str | None = None
-    claude_permission_mode: str = "default"
+    claude_permission_mode: str = "acceptEdits"
 
 
     def resolve_dir_channel(self, cwd: Path) -> str | None:
@@ -94,7 +94,7 @@ class Config:
         allowed = os.environ.get("ALLOWED_USERS", "")
         log_file = os.environ.get("LOG_FILE")
         model = os.environ.get("CLAUDE_MODEL")
-        perm_mode = os.environ.get("CLAUDE_PERMISSION_MODE", "default")
+        perm_mode = os.environ.get("CLAUDE_PERMISSION_MODE", "acceptEdits")
         # Parse CHANNEL_DIRS: "magaldi,slack-bot,frontend" or "magaldi=magaldi,web=frontend"
         channel_dirs: dict[str, str] = {}
         raw_dirs = os.environ.get("CHANNEL_DIRS", "")
