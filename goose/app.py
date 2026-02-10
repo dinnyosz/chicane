@@ -57,11 +57,22 @@ async def start(config: Config | None = None) -> None:
     handler = AsyncSocketModeHandler(app, config.slack_app_token)
     logger.info("Starting Goose...")
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     stop = asyncio.Event()
 
+    def _handle_signal() -> None:
+        if stop.is_set():
+            # Second signal — remove custom handlers and re-raise so the
+            # default Python SIGINT behaviour (KeyboardInterrupt) kicks in.
+            for s in (signal.SIGINT, signal.SIGTERM):
+                loop.remove_signal_handler(s)
+            os.kill(os.getpid(), signal.SIGINT)
+            return
+        logger.info("Received shutdown signal, stopping gracefully...")
+        stop.set()
+
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop.set)
+        loop.add_signal_handler(sig, _handle_signal)
 
     await handler.connect_async()
     logger.info("Goose is running. Press Ctrl+C to stop.")
