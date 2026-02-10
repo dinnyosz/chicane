@@ -177,7 +177,8 @@ def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
 
     # CHANNEL_DIRS
     console.print("  Map Slack channels to working directories.")
-    console.print("  Relative paths resolve under base directory (e.g. web=frontend).")
+    console.print("  Just a name = same-named folder under base directory (e.g. frontend).")
+    console.print("  Custom relative: channel=path under base dir (e.g. web=frontend).")
     console.print("  Absolute paths are used as-is (e.g. infra=/opt/infra).")
     val = _prompt_with_default(
         "Channel mappings, comma-separated",
