@@ -138,6 +138,52 @@ class TestChannelDirs:
         )
         assert config.resolve_channel_dir("random") is None
 
+    def test_resolve_dir_channel_relative_match(self, tmp_path):
+        """Relative mapped dir matches when resolved against base_directory."""
+        base = tmp_path / "code"
+        project = base / "magaldi"
+        project.mkdir(parents=True)
+
+        config = Config(
+            slack_bot_token="t",
+            slack_app_token="t",
+            base_directory=base,
+            channel_dirs={"magaldi": "magaldi"},
+        )
+        assert config.resolve_dir_channel(project) == "magaldi"
+
+    def test_resolve_dir_channel_absolute_match(self, tmp_path):
+        """Absolute mapped dir matches directly."""
+        project = tmp_path / "infra"
+        project.mkdir()
+
+        config = Config(
+            slack_bot_token="t",
+            slack_app_token="t",
+            base_directory=Path("/unused"),
+            channel_dirs={"infra": str(project)},
+        )
+        assert config.resolve_dir_channel(project) == "infra"
+
+    def test_resolve_dir_channel_no_match(self, tmp_path):
+        """Returns None when no channel maps to the given directory."""
+        config = Config(
+            slack_bot_token="t",
+            slack_app_token="t",
+            base_directory=tmp_path,
+            channel_dirs={"magaldi": "magaldi"},
+        )
+        assert config.resolve_dir_channel(tmp_path / "unknown") is None
+
+    def test_resolve_dir_channel_empty_dirs(self, tmp_path):
+        """Returns None when channel_dirs is empty."""
+        config = Config(
+            slack_bot_token="t",
+            slack_app_token="t",
+            channel_dirs={},
+        )
+        assert config.resolve_dir_channel(tmp_path) is None
+
     def test_empty_channel_dirs(self, monkeypatch):
         monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
         monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")

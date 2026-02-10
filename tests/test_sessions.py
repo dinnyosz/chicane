@@ -100,3 +100,27 @@ class TestSessionStore:
     def test_sessions_empty_allowed_tools_by_default(self, store, config):
         session = store.get_or_create("thread-1", config)
         assert session.allowed_tools == []
+
+    def test_create_with_explicit_session_id(self, store, config):
+        """When session_id is passed, the ClaudeSession should use --resume."""
+        session = store.get_or_create(
+            "thread-1", config, session_id="abc-123-def"
+        )
+        assert session.session_id == "abc-123-def"
+
+    def test_explicit_session_id_not_used_on_reuse(self, store, config):
+        """An existing session is returned as-is; session_id doesn't override it."""
+        s1 = store.get_or_create("thread-1", config)
+        s2 = store.get_or_create(
+            "thread-1", config, session_id="should-be-ignored"
+        )
+        assert s1 is s2
+        assert s2.session_id is None  # original session had no id
+
+    def test_session_id_with_cwd(self, store, config):
+        """session_id and cwd can be provided together."""
+        session = store.get_or_create(
+            "thread-1", config, cwd=Path("/tmp/work"), session_id="sess-42"
+        )
+        assert session.session_id == "sess-42"
+        assert session.cwd == Path("/tmp/work")

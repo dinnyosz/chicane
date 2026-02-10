@@ -9,6 +9,7 @@ from goose.config import Config
 from goose.handlers import (
     _bot_in_thread,
     _fetch_thread_history,
+    _HANDOFF_RE,
     _should_ignore,
     _split_message,
     register_handlers,
@@ -356,3 +357,49 @@ class TestThreadMentionRouting:
             await mention_handler(event=event, client=client)
             # Should still be 1 — not double-processed
             assert mock_process.call_count == 1
+
+
+class TestHandoffRegex:
+    """Test the _HANDOFF_RE pattern used to extract session_id from prompts."""
+
+    def test_plain_format(self):
+        text = "Working on auth feature (session_id: abc-123-def)"
+        m = _HANDOFF_RE.search(text)
+        assert m is not None
+        assert m.group(1) == "abc-123-def"
+
+    def test_slack_italic_format(self):
+        text = "Working on auth feature\n\n_(session_id: abc-123-def)_"
+        m = _HANDOFF_RE.search(text)
+        assert m is not None
+        assert m.group(1) == "abc-123-def"
+
+    def test_trailing_whitespace(self):
+        text = "Summary text (session_id: aaa-bbb-ccc)  "
+        m = _HANDOFF_RE.search(text)
+        assert m is not None
+        assert m.group(1) == "aaa-bbb-ccc"
+
+    def test_no_match_when_absent(self):
+        text = "Just a normal message with no handoff"
+        assert _HANDOFF_RE.search(text) is None
+
+    def test_no_match_mid_text(self):
+        """session_id pattern must be at the end of the prompt."""
+        text = "(session_id: abc-123) and then more text"
+        assert _HANDOFF_RE.search(text) is None
+
+    def test_strips_session_id_from_prompt(self):
+        """Verify the extraction + stripping logic that _process_message uses."""
+        prompt = "Working on auth feature\n\n_(session_id: abc-123-def)_"
+        m = _HANDOFF_RE.search(prompt)
+        assert m is not None
+        cleaned = prompt[: m.start()].rstrip()
+        assert cleaned == "Working on auth feature"
+        assert m.group(1) == "abc-123-def"
+
+    def test_full_uuid_format(self):
+        text = "Summary _(session_id: a1b2c3d4-e5f6-7890-abcd-ef1234567890)_"
+        m = _HANDOFF_RE.search(text)
+        assert m is not None
+        assert m.group(1) == "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
