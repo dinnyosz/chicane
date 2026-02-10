@@ -196,7 +196,29 @@ def _build_parser() -> argparse.ArgumentParser:
     # goose install-skill
     sub.add_parser("install-skill", help="Install the goose-handoff skill for Claude Code")
 
+    # goose help
+    sub.add_parser("help", help="Show this help message")
+
     return parser
+
+
+def _print_help() -> None:
+    print("""Goose — Slack bot powered by Claude Code
+
+Usage: goose <command> [options]
+
+Commands:
+  run              Start the Slack bot
+  handoff          Post a handoff message to Slack
+  install-skill    Install the goose-handoff skill for Claude Code
+  help             Show this help message
+
+Examples:
+  goose run                                      Start the bot
+  goose handoff --session-id ID --summary "..."  Hand off a session to Slack
+  goose install-skill                            Install the handoff skill
+
+Run 'goose <command> --help' for details on a specific command.""")
 
 
 def main() -> None:
@@ -204,10 +226,12 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
-    if args.command == "handoff":
+    if args.command == "run":
+        asyncio.run(start())
+    elif args.command == "handoff":
         handoff(args)
     elif args.command == "install-skill":
         install_skill(args)
     else:
-        # Default: run the bot (covers both 'run' and no subcommand)
-        asyncio.run(start())
+        # No command or 'help' — show help
+        _print_help()
