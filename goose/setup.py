@@ -156,6 +156,7 @@ def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
     values: dict[str, str] = {}
 
     # BASE_DIRECTORY
+    console.rule("Base Directory", style="dim")
     console.print("  Base path for channel->directory mappings below.")
     console.print("  e.g. base=/home/user/code + channel 'frontend' = /home/user/code/frontend")
     val = _prompt_with_default(
@@ -166,6 +167,7 @@ def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
         values["BASE_DIRECTORY"] = val
 
     # ALLOWED_USERS
+    console.rule("Allowed Users", style="dim")
     console.print("  Restrict who can use the bot by Slack member ID.")
     console.print("  (Find yours: Slack profile -> ⋮ menu -> Copy member ID)")
     val = _prompt_with_default(
@@ -176,6 +178,7 @@ def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
         values["ALLOWED_USERS"] = val
 
     # CHANNEL_DIRS
+    console.rule("Channel Directories", style="dim")
     console.print("  Map Slack channels to working directories.")
     console.print("  Just a name = same-named folder under base directory (e.g. frontend).")
     console.print("  Custom relative: channel=path under base dir (e.g. web=frontend).")
@@ -188,6 +191,7 @@ def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
         values["CHANNEL_DIRS"] = val
 
     # CLAUDE_MODEL
+    console.rule("Claude Model", style="dim")
     val = _prompt_with_default(
         "Claude model override (e.g. sonnet, opus)",
         defaults.get("CLAUDE_MODEL", ""),
@@ -196,6 +200,7 @@ def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
         values["CLAUDE_MODEL"] = val
 
     # CLAUDE_PERMISSION_MODE
+    console.rule("Claude Permission Mode", style="dim")
     val = _prompt_with_default(
         "Claude permission mode",
         defaults.get("CLAUDE_PERMISSION_MODE", "default"),
@@ -204,6 +209,7 @@ def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
         values["CLAUDE_PERMISSION_MODE"] = val
 
     # DEBUG
+    console.rule("Debug", style="dim")
     current_debug = defaults.get("DEBUG", "").lower() in ("1", "true", "yes")
     debug = Confirm.ask("  Enable debug logging", default=current_debug, console=console)
     if debug:
