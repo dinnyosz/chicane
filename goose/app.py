@@ -48,10 +48,15 @@ async def start(config: Config | None = None) -> None:
     if config is None:
         config = Config.from_env()
 
-    logging.basicConfig(
-        level=logging.DEBUG if config.debug else logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    log_level = logging.DEBUG if config.debug else logging.INFO
+    log_kwargs: dict = {
+        "level": log_level,
+        "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    }
+    if config.log_file:
+        config.log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_kwargs["filename"] = str(config.log_file)
+    logging.basicConfig(**log_kwargs)
 
     app = create_app(config)
 
@@ -215,7 +220,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     # goose run (default)
-    sub.add_parser("run", help="Start the Slack bot (default)")
+    run_parser = sub.add_parser("run", help="Start the Slack bot (default)")
+    run_parser.add_argument("--detach", action="store_true", help="Run in the background (daemonize)")
 
     # goose handoff
     ho = sub.add_parser("handoff", help="Post a handoff message to Slack")
@@ -252,10 +258,33 @@ Commands:
 Examples:
   goose setup                                    Set up Goose
   goose run                                      Start the bot
+  goose run --detach                              Start in the background
   goose handoff --summary "..."                  Hand off a session to Slack
   goose install-skill                            Install the handoff skill
 
 Run 'goose <command> --help' for details on a specific command.""")
+
+
+def _run_detached() -> None:
+    """Fork into background and run the bot as a daemon."""
+    config = Config.from_env()
+    if not config.log_file:
+        print("Error: --detach requires LOG_FILE to be set in .env", file=sys.stderr)
+        print("Run 'goose setup' to configure a log file path.", file=sys.stderr)
+        sys.exit(1)
+
+    pid = os.fork()
+    if pid > 0:
+        # Parent — print PID and exit
+        print(f"Goose running in background (PID {pid}). Logs → {config.log_file}")
+        sys.exit(0)
+
+    # Child — detach from terminal
+    os.setsid()
+    sys.stdin.close()
+    sys.stdout = open(os.devnull, "w")
+    sys.stderr = open(os.devnull, "w")
+    asyncio.run(start(config))
 
 
 def main() -> None:
@@ -264,7 +293,10 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "run":
-        asyncio.run(start())
+        if getattr(args, "detach", False):
+            _run_detached()
+        else:
+            asyncio.run(start())
     elif args.command == "setup":
         from .setup import setup_command
         setup_command(args)

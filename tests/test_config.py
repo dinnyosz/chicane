@@ -16,6 +16,7 @@ class TestConfig:
         monkeypatch.delenv("BASE_DIRECTORY", raising=False)
         monkeypatch.delenv("ALLOWED_USERS", raising=False)
         monkeypatch.delenv("DEBUG", raising=False)
+        monkeypatch.delenv("LOG_FILE", raising=False)
 
         config = Config.from_env()
 
@@ -24,6 +25,7 @@ class TestConfig:
         assert config.base_directory is None
         assert config.allowed_users == []
         assert config.debug is False
+        assert config.log_file is None
 
     def test_from_env_missing_tokens(self, monkeypatch):
         monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
@@ -40,6 +42,7 @@ class TestConfig:
         monkeypatch.setenv("DEBUG", "true")
         monkeypatch.setenv("CLAUDE_MODEL", "sonnet")
         monkeypatch.setenv("CLAUDE_PERMISSION_MODE", "bypassPermissions")
+        monkeypatch.setenv("LOG_FILE", "/var/log/goose.log")
 
         config = Config.from_env()
 
@@ -48,6 +51,7 @@ class TestConfig:
         assert config.debug is True
         assert config.claude_model == "sonnet"
         assert config.claude_permission_mode == "bypassPermissions"
+        assert config.log_file == Path("/var/log/goose.log")
 
     def test_debug_variants(self, monkeypatch):
         monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")

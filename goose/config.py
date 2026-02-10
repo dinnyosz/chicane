@@ -19,6 +19,7 @@ class Config:
     allowed_users: list[str] = field(default_factory=list)
     channel_dirs: dict[str, str] = field(default_factory=dict)
     debug: bool = False
+    log_file: Path | None = None
     claude_model: str | None = None
     claude_permission_mode: str = "default"
 
@@ -70,6 +71,7 @@ class Config:
 
         base_dir = os.environ.get("BASE_DIRECTORY")
         allowed = os.environ.get("ALLOWED_USERS", "")
+        log_file = os.environ.get("LOG_FILE")
         model = os.environ.get("CLAUDE_MODEL")
         perm_mode = os.environ.get("CLAUDE_PERMISSION_MODE", "default")
         # Parse CHANNEL_DIRS: "magaldi,slack-bot,frontend" or "magaldi=magaldi,web=frontend"
@@ -93,6 +95,7 @@ class Config:
             allowed_users=[u.strip() for u in allowed.split(",") if u.strip()],
             channel_dirs=channel_dirs,
             debug=os.environ.get("DEBUG", "").lower() in ("1", "true", "yes"),
+            log_file=Path(log_file) if log_file else None,
             claude_model=model,
             claude_permission_mode=perm_mode,
         )

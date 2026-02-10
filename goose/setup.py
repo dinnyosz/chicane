@@ -340,8 +340,18 @@ def _step_claude_settings(defaults: dict[str, str]) -> dict[str, str]:
     if val and val != "default":
         values["CLAUDE_PERMISSION_MODE"] = val
 
+    console.print("\n  [bold]Log File[/bold]")
+    console.print("  Write logs to a file instead of console output.")
+    console.print("  Useful with --detach mode. Leave empty to log to console only.")
+    val = _prompt_with_default(
+        "Log file path (e.g. goose.log)",
+        defaults.get("LOG_FILE", ""),
+    )
+    if val:
+        values["LOG_FILE"] = val
+
     console.print("\n  [bold]Debug[/bold]")
-    console.print("  Verbose logging to console output (stdout).")
+    console.print("  Verbose logging (to console, or log file if configured).")
     current_debug = defaults.get("DEBUG", "").lower() in ("1", "true", "yes")
     debug = Confirm.ask("  Enable debug logging", default=current_debug, console=console)
     if debug:
