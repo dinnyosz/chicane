@@ -146,8 +146,13 @@ async def _handoff(args: argparse.Namespace) -> None:
         print(f"Error: channel #{channel_name} not found.", file=sys.stderr)
         sys.exit(1)
 
-    # Post the handoff message
-    text = f"{args.summary}\n\n_(session_id: {args.session_id})_"
+    # Build the handoff message
+    parts = [args.summary]
+    if args.questions:
+        parts.append(f"\n{args.questions}")
+    parts.append(f"\n_(session_id: {args.session_id})_")
+    text = "\n".join(parts)
+
     await client.chat_postMessage(channel=channel_id, text=text)
     print(f"Handoff posted to #{channel_name}")
 
@@ -210,6 +215,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ho.add_argument("--summary", required=True, help="Summary text for the handoff message")
     ho.add_argument("--channel", default=None, help="Slack channel name (auto-resolved from cwd if omitted)")
     ho.add_argument("--cwd", default=None, help="Working directory to resolve channel from (defaults to $PWD)")
+    ho.add_argument("--questions", default=None, help="Open questions to post as a thread reply")
 
     # goose install-skill
     sub.add_parser("install-skill", help="Install the goose-handoff skill for Claude Code")
