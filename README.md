@@ -35,6 +35,16 @@ pip install -e .
 
 ## Setup
 
+The fastest way to get started is the guided setup wizard:
+
+```bash
+goose init
+```
+
+This walks you through creating a Slack app, getting your tokens, and writing the `.env` file — all in one step.
+
+Alternatively, you can set things up manually:
+
 ### 1. Create a Slack app
 
 Follow the [Slack app setup guide](docs/slack-setup.md) to create and install a Slack app. You'll need the **Bot Token** (`xoxb-...`) and **App-Level Token** (`xapp-...`).
@@ -97,10 +107,19 @@ goose <command> [options]
 
 | Command | Description |
 |---|---|
+| `init` | Guided setup wizard (creates `.env`) |
 | `run` | Start the Slack bot |
 | `handoff` | Post a handoff message to Slack |
 | `install-skill` | Install the goose-handoff skill for Claude Code |
 | `help` | Show help message |
+
+### `goose init`
+
+Interactive setup wizard. Walks through creating a Slack app, collecting tokens, and writing `.env`.
+
+| Flag | Description |
+|---|---|
+| `--force` | Overwrite existing `.env` without asking |
 
 ### `goose run`
 
