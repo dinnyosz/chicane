@@ -1,4 +1,4 @@
-"""Guided setup wizard for Goose (goose init)."""
+"""Guided setup wizard for Goose (goose setup)."""
 
 import json
 import subprocess
@@ -48,6 +48,21 @@ SLACK_MANIFEST = {
 }
 
 
+def _load_existing_env(path: Path) -> dict[str, str]:
+    """Parse an existing .env file into a dict. Returns empty dict if missing."""
+    if not path.exists():
+        return {}
+    values: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            key, val = line.split("=", 1)
+            values[key.strip()] = val.strip()
+    return values
+
+
 def _copy_to_clipboard(text: str) -> bool:
     """Best-effort copy text to system clipboard. Returns True on success."""
     for cmd in (["pbcopy"], ["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]):
@@ -59,10 +74,25 @@ def _copy_to_clipboard(text: str) -> bool:
     return False
 
 
-def _prompt_token(label: str, prefix: str) -> str:
+def _prompt_with_default(label: str, default: str = "") -> str:
+    """Prompt for input, showing and accepting a default value."""
+    if default:
+        val = input(f"    {label} [{default}]: ").strip()
+        return val if val else default
+    else:
+        return input(f"    {label} []: ").strip()
+
+
+def _prompt_token(label: str, prefix: str, default: str = "") -> str:
     """Prompt for a token, validating the prefix. Re-prompts on bad input."""
     while True:
-        value = input(f"  Paste your {label}: ").strip()
+        if default:
+            masked = default[:8] + "..." + default[-4:]
+            value = input(f"  Paste your {label} [{masked}]: ").strip()
+            if not value:
+                return default
+        else:
+            value = input(f"  Paste your {label}: ").strip()
         if value.startswith(prefix):
             return value
         print(f"  Token must start with '{prefix}'. Please try again.\n")
@@ -87,10 +117,10 @@ def _step_create_app() -> None:
     if copied:
         print("\n    (The manifest has been copied to your clipboard.)")
     print()
-    input("  Press Enter when your app is created...")
+    input("  Press Enter when your app is created (or to skip if already done)...")
 
 
-def _step_bot_token() -> str:
+def _step_bot_token(default: str = "") -> str:
     """Step 2: Get Bot Token."""
     print("""
   Step 2 of 5: Get Bot Token
@@ -99,12 +129,12 @@ def _step_bot_token() -> str:
     2. Click "Install to Workspace" and approve
     3. Copy the "Bot User OAuth Token" (starts with xoxb-)
 """)
-    token = _prompt_token("Bot Token", "xoxb-")
+    token = _prompt_token("Bot Token", "xoxb-", default)
     print("  \u2713 Saved")
     return token
 
 
-def _step_app_token() -> str:
+def _step_app_token(default: str = "") -> str:
     """Step 3: Get App Token."""
     print("""
   Step 3 of 5: Get App Token
@@ -115,27 +145,33 @@ def _step_app_token() -> str:
     4. Add the "connections:write" scope
     5. Click "Generate" and copy the token (starts with xapp-)
 """)
-    token = _prompt_token("App Token", "xapp-")
+    token = _prompt_token("App Token", "xapp-", default)
     print("  \u2713 Saved")
     return token
 
 
-def _step_optional_settings() -> dict[str, str]:
+def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
     """Step 4: Prompt for optional settings. Returns non-empty values only."""
     print("""
-  Step 4 of 5: Optional Settings (press Enter to skip)
+  Step 4 of 5: Optional Settings (press Enter to skip or keep current value)
 """)
     values: dict[str, str] = {}
 
     # BASE_DIRECTORY
-    val = input("    Base directory for Claude sessions []: ").strip()
+    val = _prompt_with_default(
+        "Base directory for Claude sessions",
+        defaults.get("BASE_DIRECTORY", ""),
+    )
     if val:
         values["BASE_DIRECTORY"] = val
 
     # ALLOWED_USERS
     print("    Restrict who can use the bot by Slack member ID.")
-    print("    (Find yours: Slack profile -> ⋮ menu -> Copy member ID)")
-    val = input("    Allowed user IDs, comma-separated (e.g. U01AB2CDE) []: ").strip()
+    print("    (Find yours: Slack profile -> \u22ee menu -> Copy member ID)")
+    val = _prompt_with_default(
+        "Allowed user IDs, comma-separated (e.g. U01AB2CDE)",
+        defaults.get("ALLOWED_USERS", ""),
+    )
     if val:
         values["ALLOWED_USERS"] = val
 
@@ -143,23 +179,37 @@ def _step_optional_settings() -> dict[str, str]:
     print("    Map Slack channels to working directories.")
     print("    Simple: channel name = directory name under base directory.")
     print("    Custom: channel=path (e.g. web=frontend, infra=/opt/infra)")
-    val = input("    Channel mappings, comma-separated []: ").strip()
+    val = _prompt_with_default(
+        "Channel mappings, comma-separated",
+        defaults.get("CHANNEL_DIRS", ""),
+    )
     if val:
         values["CHANNEL_DIRS"] = val
 
     # CLAUDE_MODEL
-    val = input("    Claude model override (e.g. sonnet, opus) []: ").strip()
+    val = _prompt_with_default(
+        "Claude model override (e.g. sonnet, opus)",
+        defaults.get("CLAUDE_MODEL", ""),
+    )
     if val:
         values["CLAUDE_MODEL"] = val
 
     # CLAUDE_PERMISSION_MODE
-    val = input("    Claude permission mode [default]: ").strip()
-    if val:
+    val = _prompt_with_default(
+        "Claude permission mode",
+        defaults.get("CLAUDE_PERMISSION_MODE", "default"),
+    )
+    if val and val != "default":
         values["CLAUDE_PERMISSION_MODE"] = val
 
     # DEBUG
-    debug = input("    Enable debug logging? (y/N): ").strip().lower()
-    if debug in ("y", "yes"):
+    current_debug = defaults.get("DEBUG", "").lower() in ("1", "true", "yes")
+    debug_default = "Y/n" if current_debug else "y/N"
+    debug = input(f"    Enable debug logging? ({debug_default}): ").strip().lower()
+    if debug:
+        if debug in ("y", "yes"):
+            values["DEBUG"] = "true"
+    elif current_debug:
         values["DEBUG"] = "true"
 
     return values
@@ -173,8 +223,8 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
     path.write_text("\n".join(lines) + "\n")
 
 
-def init_command(args) -> None:
-    """Main init wizard entrypoint."""
+def setup_command(args) -> None:
+    """Main setup wizard entrypoint."""
     try:
         _run_wizard(args)
     except KeyboardInterrupt:
@@ -185,29 +235,26 @@ def init_command(args) -> None:
 def _run_wizard(args) -> None:
     """Run the interactive wizard steps."""
     env_path = Path(".env")
-
-    if env_path.exists() and not getattr(args, "force", False):
-        print(f"  .env already exists at {env_path.resolve()}")
-        answer = input("  Overwrite? (y/N): ").strip().lower()
-        if answer not in ("y", "yes"):
-            print("  Aborted.")
-            return
+    existing = _load_existing_env(env_path)
 
     print()
-    print("  Goose — Setup Wizard")
+    print("  Goose \u2014 Setup Wizard")
     print("  =====================")
+
+    if existing:
+        print(f"\n  Found existing .env \u2014 current values shown as defaults.")
 
     # Step 1: Create Slack App
     _step_create_app()
 
     # Step 2: Bot Token
-    bot_token = _step_bot_token()
+    bot_token = _step_bot_token(existing.get("SLACK_BOT_TOKEN", ""))
 
     # Step 3: App Token
-    app_token = _step_app_token()
+    app_token = _step_app_token(existing.get("SLACK_APP_TOKEN", ""))
 
     # Step 4: Optional Settings
-    optional = _step_optional_settings()
+    optional = _step_optional_settings(existing)
 
     # Step 5: Write config
     print("""

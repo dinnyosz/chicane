@@ -38,10 +38,10 @@ pip install -e .
 The fastest way to get started is the guided setup wizard:
 
 ```bash
-goose init
+goose setup
 ```
 
-This walks you through creating a Slack app, getting your tokens, and writing the `.env` file — all in one step.
+This walks you through creating a Slack app, getting your tokens, and writing the `.env` file — all in one step. Run it again any time to update your config.
 
 Alternatively, you can set things up manually:
 
@@ -107,19 +107,15 @@ goose <command> [options]
 
 | Command | Description |
 |---|---|
-| `init` | Guided setup wizard (creates `.env`) |
+| `setup` | Guided setup wizard (creates/updates `.env`) |
 | `run` | Start the Slack bot |
 | `handoff` | Post a handoff message to Slack |
 | `install-skill` | Install the goose-handoff skill for Claude Code |
 | `help` | Show help message |
 
-### `goose init`
+### `goose setup`
 
-Interactive setup wizard. Walks through creating a Slack app, collecting tokens, and writing `.env`.
-
-| Flag | Description |
-|---|---|
-| `--force` | Overwrite existing `.env` without asking |
+Interactive setup wizard. Walks through creating a Slack app, collecting tokens, and writing `.env`. If a `.env` already exists, current values are shown as defaults — just press Enter to keep them.
 
 ### `goose run`
 

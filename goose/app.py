@@ -217,9 +217,8 @@ def _build_parser() -> argparse.ArgumentParser:
     ho.add_argument("--cwd", default=None, help="Working directory to resolve channel from (defaults to $PWD)")
     ho.add_argument("--questions", default=None, help="Open questions to post as a thread reply")
 
-    # goose init
-    init_p = sub.add_parser("init", help="Guided setup wizard")
-    init_p.add_argument("--force", action="store_true", help="Overwrite existing .env without asking")
+    # goose setup
+    sub.add_parser("setup", help="Guided setup wizard")
 
     # goose install-skill
     sub.add_parser("install-skill", help="Install the goose-handoff skill for Claude Code")
@@ -236,14 +235,14 @@ def _print_help() -> None:
 Usage: goose <command> [options]
 
 Commands:
-  init             Guided setup wizard
+  setup            Guided setup wizard
   run              Start the Slack bot
   handoff          Post a handoff message to Slack
   install-skill    Install the goose-handoff skill for Claude Code
   help             Show this help message
 
 Examples:
-  goose init                                     Set up Goose (first time)
+  goose setup                                    Set up Goose
   goose run                                      Start the bot
   goose handoff --summary "..."                  Hand off a session to Slack
   goose install-skill                            Install the handoff skill
@@ -258,9 +257,9 @@ def main() -> None:
 
     if args.command == "run":
         asyncio.run(start())
-    elif args.command == "init":
-        from .init import init_command
-        init_command(args)
+    elif args.command == "setup":
+        from .setup import setup_command
+        setup_command(args)
     elif args.command == "handoff":
         handoff(args)
     elif args.command == "install-skill":
