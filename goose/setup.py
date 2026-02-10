@@ -253,45 +253,41 @@ def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
 def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
     """Step 5: Prompt for optional settings. Returns non-empty values only."""
     console.rule("Step 5 of 6: Optional Settings")
-    console.print("\n  Press Enter to skip (or keep current value). Type '-' to clear a value.\n")
+    console.print("\n  Press Enter to skip (or keep current value). Type '-' to clear a value.")
 
     values: dict[str, str] = {}
 
     # ALLOWED_USERS
-    console.print()
-    console.rule("Allowed Users", style="dim")
+    console.print("\n  [bold]Allowed Users[/bold]")
     console.print("  Restrict who can use the bot by Slack member ID.")
     console.print("  (Find yours: Slack profile -> ⋮ menu -> Copy member ID)")
     val = _prompt_with_default(
-        "Allowed user IDs, comma-separated (e.g. U01AB2CDE)",
+        "User IDs, comma-separated (e.g. U01AB2CDE)",
         defaults.get("ALLOWED_USERS", ""),
     )
     if val:
         values["ALLOWED_USERS"] = val
 
     # CLAUDE_MODEL
-    console.print()
-    console.rule("Claude Model", style="dim")
+    console.print("\n  [bold]Claude Model[/bold]")
     val = _prompt_with_default(
-        "Claude model override (e.g. sonnet, opus)",
+        "Model override (e.g. sonnet, opus)",
         defaults.get("CLAUDE_MODEL", ""),
     )
     if val:
         values["CLAUDE_MODEL"] = val
 
     # CLAUDE_PERMISSION_MODE
-    console.print()
-    console.rule("Claude Permission Mode", style="dim")
+    console.print("\n  [bold]Claude Permission Mode[/bold]")
     val = _prompt_with_default(
-        "Claude permission mode",
+        "Permission mode",
         defaults.get("CLAUDE_PERMISSION_MODE", "default"),
     )
     if val and val != "default":
         values["CLAUDE_PERMISSION_MODE"] = val
 
     # DEBUG
-    console.print()
-    console.rule("Debug", style="dim")
+    console.print("\n  [bold]Debug[/bold]")
     current_debug = defaults.get("DEBUG", "").lower() in ("1", "true", "yes")
     debug = Confirm.ask("  Enable debug logging", default=current_debug, console=console)
     if debug:
