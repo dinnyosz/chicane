@@ -218,7 +218,7 @@ def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
 
     while True:
         action = Prompt.ask(
-            "  [a]dd / [r]emove / [d]one",
+            "  \\[a]dd / \\[r]emove / \\[d]one",
             choices=["a", "r", "d"],
             default="d",
             console=console,
