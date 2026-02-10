@@ -139,7 +139,7 @@ def _show_channel_table(mappings: dict[str, str]) -> None:
 
 def _step_create_app(has_tokens: bool) -> None:
     """Step 1: Print manifest and wait for user to create the app."""
-    console.rule("Step 1 of 7: Create Slack App")
+    console.rule("Step 1 of 10: Create Slack App")
 
     if has_tokens:
         console.print("\n  Tokens found in config — Slack app likely already configured.")
@@ -171,7 +171,7 @@ def _step_create_app(has_tokens: bool) -> None:
 
 def _step_bot_token(default: str = "") -> str:
     """Step 2: Get Bot Token."""
-    console.rule("Step 2 of 7: Get Bot Token")
+    console.rule("Step 2 of 10: Get Bot Token")
 
     if default:
         console.print("\n  Bot token found in config. Press Enter to keep it,")
@@ -189,7 +189,7 @@ def _step_bot_token(default: str = "") -> str:
 
 def _step_app_token(default: str = "") -> str:
     """Step 3: Get App Token."""
-    console.rule("Step 3 of 7: Get App Token")
+    console.rule("Step 3 of 10: Get App Token")
 
     if default:
         console.print("\n  App token found in config. Press Enter to keep it,")
@@ -212,7 +212,7 @@ def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
 
     Returns (base_directory, channel_dirs_string).
     """
-    console.rule("Step 4 of 7: Directory Settings")
+    console.rule("Step 4 of 10: Directory Settings")
     console.print("\n  [yellow]Note:[/yellow] Goose will run Claude Code in these directories remotely.")
     console.print("  Only add directories you trust and are okay to tinker with.\n")
 
@@ -270,7 +270,7 @@ def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
 
 def _step_allowed_users(defaults: dict[str, str]) -> str:
     """Step 5: Configure allowed users interactively. Returns comma-separated IDs or empty."""
-    console.rule("Step 5 of 7: Allowed Users")
+    console.rule("Step 5 of 10: Allowed Users")
     console.print("\n  Restrict who can use the bot by Slack member ID.")
     console.print("  (Find yours: Slack profile -> ⋮ menu -> Copy member ID)\n")
 
@@ -311,43 +311,34 @@ def _step_allowed_users(defaults: dict[str, str]) -> str:
     return ",".join(allowed)
 
 
-def _step_claude_settings(defaults: dict[str, str]) -> dict[str, str]:
-    """Step 6: Configure Claude model, permission mode, and debug. Returns non-empty values."""
-    console.rule("Step 6 of 7: Claude Settings")
-    console.print("\n  Press Enter to skip (or keep current value). Type '-' to clear.")
-
-    values: dict[str, str] = {}
-
-    console.print("\n  [bold]Model[/bold]")
-    console.print("  Override the Claude model used for tasks.")
+def _step_claude_model(default: str = "") -> str:
+    """Step 6: Configure Claude model."""
+    console.rule("Step 6 of 10: Claude Model")
+    console.print("\n  Override the Claude model used for tasks.")
     console.print("  Options: sonnet, opus, haiku (or any Claude model ID).")
     console.print("  Leave empty to use the Claude CLI default.")
-    val = _prompt_with_default(
-        "Model",
-        defaults.get("CLAUDE_MODEL", ""),
-    )
-    if val:
-        values["CLAUDE_MODEL"] = val
+    return _prompt_with_default("Model", default)
 
-    console.print("\n  [bold]Permission Mode[/bold]")
-    console.print("  Controls what Claude Code can do autonomously.")
+
+def _step_permission_mode(default: str = "acceptEdits") -> str:
+    """Step 7: Configure permission mode."""
+    console.rule("Step 7 of 10: Permission Mode")
+    console.print("\n  Controls what Claude Code can do autonomously.")
     console.print("  [dim]acceptEdits[/dim]       — auto-accepts file edits, use allowed tools for shell")
     console.print("  [dim]dontAsk[/dim]           — auto-denies everything except allowed tools")
     console.print("  [dim]bypassPermissions[/dim] — auto-approves everything (containers/VMs only)")
     valid_modes = {"acceptEdits", "dontAsk", "bypassPermissions"}
     while True:
-        val = _prompt_with_default(
-            "Permission mode",
-            defaults.get("CLAUDE_PERMISSION_MODE", "acceptEdits"),
-        )
+        val = _prompt_with_default("Permission mode", default)
         if not val or val in valid_modes:
-            break
+            return val
         console.print(f"  [red]Invalid mode '{val}'. Choose from: {', '.join(sorted(valid_modes))}[/red]\n")
-    if val:
-        values["CLAUDE_PERMISSION_MODE"] = val
 
-    console.print("\n  [bold]Allowed Tools[/bold]")
-    console.print("  Pre-approve specific tools so Claude doesn't prompt for them.")
+
+def _step_allowed_tools(default: str = "") -> str:
+    """Step 8: Configure allowed tools."""
+    console.rule("Step 8 of 10: Allowed Tools")
+    console.print("\n  Pre-approve specific tools so Claude doesn't prompt for them.")
     console.print("  [yellow]Warning:[/yellow] This overrides your Claude settings.json permissions.")
     console.print("  Leave empty to use your existing Claude config as-is.")
     console.print("  Comma-separated. Supports patterns:")
@@ -355,31 +346,24 @@ def _step_claude_settings(defaults: dict[str, str]) -> dict[str, str]:
     console.print("  [dim]Edit(./src/**)[/dim]   — allow edits to files under a path")
     console.print("  [dim]Read[/dim]             — allow all file reads")
     console.print("  [dim]WebFetch[/dim]         — allow web fetching")
-    val = _prompt_with_default(
-        "Allowed tools",
-        defaults.get("CLAUDE_ALLOWED_TOOLS", ""),
-    )
-    if val:
-        values["CLAUDE_ALLOWED_TOOLS"] = val
+    return _prompt_with_default("Allowed tools", default)
 
+
+def _step_logging(defaults: dict[str, str]) -> tuple[str, bool]:
+    """Step 9: Configure log file and debug. Returns (log_file, debug)."""
+    console.rule("Step 9 of 10: Logging")
     console.print("\n  [bold]Log File[/bold]")
     console.print("  Write logs to a file instead of console output.")
     console.print("  Useful with --detach mode. Leave empty to log to console only.")
-    val = _prompt_with_default(
+    log_file = _prompt_with_default(
         "Log file path (e.g. goose.log)",
         defaults.get("LOG_FILE", ""),
     )
-    if val:
-        values["LOG_FILE"] = val
-
     console.print("\n  [bold]Debug[/bold]")
     console.print("  Verbose logging (to console, or log file if configured).")
     current_debug = defaults.get("DEBUG", "").lower() in ("1", "true", "yes")
     debug = Confirm.ask("  Enable debug logging", default=current_debug, console=console)
-    if debug:
-        values["DEBUG"] = "true"
-
-    return values
+    return log_file, debug
 
 
 def _write_env(path: Path, values: dict[str, str]) -> None:
@@ -420,6 +404,12 @@ def _run_wizard(args) -> None:
 
     has_tokens = bool(existing.get("SLACK_BOT_TOKEN") and existing.get("SLACK_APP_TOKEN"))
 
+    def _set_or_clear(key: str, val: str) -> None:
+        if val:
+            env_values[key] = val
+        else:
+            env_values.pop(key, None)
+
     # Step 1: Create Slack App
     _step_create_app(has_tokens)
 
@@ -433,35 +423,34 @@ def _run_wizard(args) -> None:
 
     # Step 4: Directory Settings
     base_dir, channel_dirs = _step_channel_dirs(existing)
-    if base_dir:
-        env_values["BASE_DIRECTORY"] = base_dir
-    else:
-        env_values.pop("BASE_DIRECTORY", None)
-    if channel_dirs:
-        env_values["CHANNEL_DIRS"] = channel_dirs
-    else:
-        env_values.pop("CHANNEL_DIRS", None)
+    _set_or_clear("BASE_DIRECTORY", base_dir)
+    _set_or_clear("CHANNEL_DIRS", channel_dirs)
     _save()
 
     # Step 5: Allowed Users
-    allowed_users = _step_allowed_users(existing)
-    if allowed_users:
-        env_values["ALLOWED_USERS"] = allowed_users
-    else:
-        env_values.pop("ALLOWED_USERS", None)
+    _set_or_clear("ALLOWED_USERS", _step_allowed_users(existing))
     _save()
 
-    # Step 6: Claude Settings
-    claude_settings = _step_claude_settings(existing)
-    for key in ("CLAUDE_MODEL", "CLAUDE_PERMISSION_MODE", "CLAUDE_ALLOWED_TOOLS", "LOG_FILE", "DEBUG"):
-        if key in claude_settings:
-            env_values[key] = claude_settings[key]
-        else:
-            env_values.pop(key, None)
+    # Step 6: Claude Model
+    _set_or_clear("CLAUDE_MODEL", _step_claude_model(existing.get("CLAUDE_MODEL", "")))
     _save()
 
-    # Step 7: Done
-    console.rule("Step 7 of 7: Done")
+    # Step 7: Permission Mode
+    _set_or_clear("CLAUDE_PERMISSION_MODE", _step_permission_mode(existing.get("CLAUDE_PERMISSION_MODE", "acceptEdits")))
+    _save()
+
+    # Step 8: Allowed Tools
+    _set_or_clear("CLAUDE_ALLOWED_TOOLS", _step_allowed_tools(existing.get("CLAUDE_ALLOWED_TOOLS", "")))
+    _save()
+
+    # Step 9: Logging
+    log_file, debug = _step_logging(existing)
+    _set_or_clear("LOG_FILE", log_file)
+    _set_or_clear("DEBUG", "true" if debug else "")
+    _save()
+
+    # Step 10: Done
+    console.rule("Step 10 of 10: Done")
     console.print()
     console.print(Panel(
         f"[green]✓[/green] Config saved to {env_path}\n"

@@ -15,11 +15,14 @@ from goose.setup import (
     _prompt_token,
     _prompt_with_default,
     _serialize_channel_dirs,
+    _step_allowed_tools,
     _step_allowed_users,
     _step_bot_token,
     _step_app_token,
     _step_channel_dirs,
-    _step_claude_settings,
+    _step_claude_model,
+    _step_logging,
+    _step_permission_mode,
     _write_env,
     setup_command,
 )
@@ -367,93 +370,108 @@ class TestStepAllowedUsers:
             assert result == "U123"
 
 
-class TestStepClaudeSettings:
-    # Prompt order: model, permission, allowed_tools, log_file
-
-    def test_all_defaults(self):
-        with patch("goose.setup.Prompt.ask", side_effect=["", "acceptEdits", "", ""]), \
-             patch("goose.setup.Confirm.ask", return_value=False), \
+class TestStepClaudeModel:
+    def test_empty_returns_empty(self):
+        with patch("goose.setup.Prompt.ask", return_value=""), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
-            result = _step_claude_settings({})
-            assert result == {"CLAUDE_PERMISSION_MODE": "acceptEdits"}
+            assert _step_claude_model() == ""
 
-    def test_model_set(self):
-        with patch("goose.setup.Prompt.ask", side_effect=["sonnet", "", "", ""]), \
-             patch("goose.setup.Confirm.ask", return_value=False), \
+    def test_returns_value(self):
+        with patch("goose.setup.Prompt.ask", return_value="sonnet"), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
-            result = _step_claude_settings({})
-            assert result == {"CLAUDE_MODEL": "sonnet"}
+            assert _step_claude_model() == "sonnet"
 
-    def test_permission_mode_set(self):
-        with patch("goose.setup.Prompt.ask", side_effect=["", "bypassPermissions", "", ""]), \
-             patch("goose.setup.Confirm.ask", return_value=False), \
+    def test_keeps_default(self):
+        with patch("goose.setup.Prompt.ask", return_value="opus"), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
-            result = _step_claude_settings({})
-            assert result == {"CLAUDE_PERMISSION_MODE": "bypassPermissions"}
+            assert _step_claude_model("opus") == "opus"
 
-    def test_allowed_tools_set(self):
-        with patch("goose.setup.Prompt.ask", side_effect=["", "acceptEdits", "Bash(npm run *),Read", ""]), \
-             patch("goose.setup.Confirm.ask", return_value=False), \
+
+class TestStepPermissionMode:
+    def test_default_kept(self):
+        with patch("goose.setup.Prompt.ask", return_value="acceptEdits"), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
-            result = _step_claude_settings({})
-            assert result["CLAUDE_ALLOWED_TOOLS"] == "Bash(npm run *),Read"
+            assert _step_permission_mode() == "acceptEdits"
 
-    def test_log_file_set(self):
-        with patch("goose.setup.Prompt.ask", side_effect=["", "acceptEdits", "", "goose.log"]), \
-             patch("goose.setup.Confirm.ask", return_value=False), \
+    def test_valid_mode(self):
+        with patch("goose.setup.Prompt.ask", return_value="bypassPermissions"), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
-            result = _step_claude_settings({})
-            assert result == {"CLAUDE_PERMISSION_MODE": "acceptEdits", "LOG_FILE": "goose.log"}
+            assert _step_permission_mode() == "bypassPermissions"
 
-    def test_debug_enabled(self):
-        with patch("goose.setup.Prompt.ask", side_effect=["", "acceptEdits", "", ""]), \
-             patch("goose.setup.Confirm.ask", return_value=True), \
+    def test_invalid_reprompts(self):
+        with patch("goose.setup.Prompt.ask", side_effect=["bogus", "dontAsk"]), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
-            result = _step_claude_settings({})
-            assert result == {"CLAUDE_PERMISSION_MODE": "acceptEdits", "DEBUG": "true"}
+            assert _step_permission_mode() == "dontAsk"
 
-    def test_invalid_permission_mode_reprompts(self):
-        # model, bad mode, good mode, allowed_tools, log_file
-        with patch("goose.setup.Prompt.ask", side_effect=["", "bogus", "dontAsk", "", ""]), \
-             patch("goose.setup.Confirm.ask", return_value=False), \
-             patch("goose.setup.console.print"), \
-             patch("goose.setup.console.rule"):
-            result = _step_claude_settings({})
-            assert result == {"CLAUDE_PERMISSION_MODE": "dontAsk"}
-
-    def test_all_valid_permission_modes(self):
+    def test_all_valid_modes(self):
         for mode in ("acceptEdits", "dontAsk", "bypassPermissions"):
-            with patch("goose.setup.Prompt.ask", side_effect=["", mode, "", ""]), \
-                 patch("goose.setup.Confirm.ask", return_value=False), \
+            with patch("goose.setup.Prompt.ask", return_value=mode), \
                  patch("goose.setup.console.print"), \
                  patch("goose.setup.console.rule"):
-                result = _step_claude_settings({})
-                assert result["CLAUDE_PERMISSION_MODE"] == mode
+                assert _step_permission_mode() == mode
 
-    def test_defaults_kept(self):
-        defaults = {
-            "CLAUDE_MODEL": "opus",
-            "CLAUDE_PERMISSION_MODE": "bypassPermissions",
-            "CLAUDE_ALLOWED_TOOLS": "Bash(npm run *),Read",
-            "LOG_FILE": "goose.log",
-            "DEBUG": "true",
-        }
-        with patch("goose.setup.Prompt.ask", side_effect=["opus", "bypassPermissions", "Bash(npm run *),Read", "goose.log"]), \
+
+class TestStepAllowedTools:
+    def test_empty_returns_empty(self):
+        with patch("goose.setup.Prompt.ask", return_value=""), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
+            assert _step_allowed_tools() == ""
+
+    def test_returns_value(self):
+        with patch("goose.setup.Prompt.ask", return_value="Bash(npm run *),Read"), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
+            assert _step_allowed_tools() == "Bash(npm run *),Read"
+
+    def test_keeps_default(self):
+        with patch("goose.setup.Prompt.ask", return_value="Read,Edit"), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
+            assert _step_allowed_tools("Read,Edit") == "Read,Edit"
+
+
+class TestStepLogging:
+    def test_all_empty(self):
+        with patch("goose.setup.Prompt.ask", return_value=""), \
+             patch("goose.setup.Confirm.ask", return_value=False), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
+            log_file, debug = _step_logging({})
+            assert log_file == ""
+            assert debug is False
+
+    def test_log_file_set(self):
+        with patch("goose.setup.Prompt.ask", return_value="goose.log"), \
+             patch("goose.setup.Confirm.ask", return_value=False), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
+            log_file, debug = _step_logging({})
+            assert log_file == "goose.log"
+            assert debug is False
+
+    def test_debug_enabled(self):
+        with patch("goose.setup.Prompt.ask", return_value=""), \
              patch("goose.setup.Confirm.ask", return_value=True), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
-            result = _step_claude_settings(defaults)
-            assert result["CLAUDE_MODEL"] == "opus"
-            assert result["CLAUDE_PERMISSION_MODE"] == "bypassPermissions"
-            assert result["CLAUDE_ALLOWED_TOOLS"] == "Bash(npm run *),Read"
-            assert result["LOG_FILE"] == "goose.log"
-            assert result["DEBUG"] == "true"
+            _, debug = _step_logging({})
+            assert debug is True
+
+    def test_defaults_kept(self):
+        with patch("goose.setup.Prompt.ask", return_value="goose.log"), \
+             patch("goose.setup.Confirm.ask", return_value=True), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
+            log_file, debug = _step_logging({"LOG_FILE": "goose.log", "DEBUG": "true"})
+            assert log_file == "goose.log"
+            assert debug is True
 
 
 class TestWriteEnv:
