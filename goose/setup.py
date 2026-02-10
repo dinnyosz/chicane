@@ -5,47 +5,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+_MANIFEST_PATH = Path(__file__).resolve().parent / "slack-app-manifest.json"
 
-# The Slack app manifest — kept in sync with slack-app-manifest.json
-SLACK_MANIFEST = {
-    "display_information": {
-        "name": "Goose",
-        "description": "Claude Code assistant in Slack",
-        "background_color": "#D97706",
-    },
-    "features": {
-        "app_home": {
-            "home_tab_enabled": False,
-            "messages_tab_enabled": True,
-            "messages_tab_read_only_enabled": False,
-        },
-        "bot_user": {"display_name": "Goose", "always_online": True},
-    },
-    "oauth_config": {
-        "scopes": {
-            "bot": [
-                "app_mentions:read",
-                "channels:history",
-                "channels:read",
-                "chat:write",
-                "chat:write.public",
-                "im:history",
-                "im:read",
-                "im:write",
-                "reactions:read",
-                "reactions:write",
-                "users:read",
-            ]
-        }
-    },
-    "settings": {
-        "event_subscriptions": {"bot_events": ["app_mention", "message.im"]},
-        "interactivity": {"is_enabled": False},
-        "org_deploy_enabled": False,
-        "socket_mode_enabled": True,
-        "token_rotation_enabled": False,
-    },
-}
+
+def _load_manifest() -> dict:
+    """Load the Slack app manifest from the bundled JSON file."""
+    return json.loads(_MANIFEST_PATH.read_text())
 
 
 def _load_existing_env(path: Path) -> dict[str, str]:
@@ -75,9 +40,14 @@ def _copy_to_clipboard(text: str) -> bool:
 
 
 def _prompt_with_default(label: str, default: str = "") -> str:
-    """Prompt for input, showing and accepting a default value."""
+    """Prompt for input, showing and accepting a default value.
+
+    Enter keeps the default. Type '-' to clear it.
+    """
     if default:
         val = input(f"    {label} [{default}]: ").strip()
+        if val == "-":
+            return ""
         return val if val else default
     else:
         return input(f"    {label} []: ").strip()
@@ -87,7 +57,10 @@ def _prompt_token(label: str, prefix: str, default: str = "") -> str:
     """Prompt for a token, validating the prefix. Re-prompts on bad input."""
     while True:
         if default:
-            masked = default[:8] + "..." + default[-4:]
+            if len(default) > 12:
+                masked = default[:8] + "..." + default[-4:]
+            else:
+                masked = default[:5] + "..."
             value = input(f"  Paste your {label} [{masked}]: ").strip()
             if not value:
                 return default
@@ -100,7 +73,7 @@ def _prompt_token(label: str, prefix: str, default: str = "") -> str:
 
 def _step_create_app() -> None:
     """Step 1: Print manifest and wait for user to create the app."""
-    manifest_json = json.dumps(SLACK_MANIFEST, indent=2)
+    manifest_json = json.dumps(_load_manifest(), indent=2)
     copied = _copy_to_clipboard(manifest_json)
 
     print("""
@@ -153,7 +126,9 @@ def _step_app_token(default: str = "") -> str:
 def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
     """Step 4: Prompt for optional settings. Returns non-empty values only."""
     print("""
-  Step 4 of 5: Optional Settings (press Enter to skip or keep current value)
+  Step 4 of 5: Optional Settings
+
+    Press Enter to skip (or keep current value). Type '-' to clear a value.
 """)
     values: dict[str, str] = {}
 

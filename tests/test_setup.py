@@ -9,6 +9,7 @@ import pytest
 from goose.setup import (
     _copy_to_clipboard,
     _load_existing_env,
+    _load_manifest,
     _prompt_token,
     _prompt_with_default,
     _step_bot_token,
@@ -17,6 +18,14 @@ from goose.setup import (
     _write_env,
     setup_command,
 )
+
+
+class TestLoadManifest:
+    def test_loads_valid_manifest(self):
+        manifest = _load_manifest()
+        assert manifest["display_information"]["name"] == "Goose"
+        assert "bot" in manifest["oauth_config"]["scopes"]
+        assert manifest["settings"]["socket_mode_enabled"] is True
 
 
 class TestLoadExistingEnv:
@@ -71,6 +80,14 @@ class TestPromptWithDefault:
         with patch("builtins.input", return_value="new-value"):
             assert _prompt_with_default("Label", "old-value") == "new-value"
 
+    def test_dash_clears_default(self):
+        with patch("builtins.input", return_value="-"):
+            assert _prompt_with_default("Label", "old-value") == ""
+
+    def test_dash_without_default_is_literal(self):
+        with patch("builtins.input", return_value="-"):
+            assert _prompt_with_default("Label") == "-"
+
 
 class TestPromptToken:
     def test_valid_on_first_try(self):
@@ -100,6 +117,14 @@ class TestPromptToken:
             _prompt_token("Bot Token", "xoxb-", default="xoxb-1234567890")
             prompt_text = mock_input.call_args[0][0]
             assert "xoxb-123...7890" in prompt_text
+
+    def test_short_token_masked_safely(self):
+        with patch("builtins.input", return_value="") as mock_input:
+            _prompt_token("Bot Token", "xoxb-", default="xoxb-abc")
+            prompt_text = mock_input.call_args[0][0]
+            assert "xoxb-..." in prompt_text
+            # Should not contain the full token
+            assert "xoxb-abc]" not in prompt_text
 
 
 class TestStepBotToken:
@@ -170,6 +195,24 @@ class TestStepOptionalSettings:
             assert result["CLAUDE_MODEL"] == "opus"
             assert result["CLAUDE_PERMISSION_MODE"] == "bypassPermissions"
             assert result["DEBUG"] == "true"
+
+    def test_dash_clears_value(self):
+        defaults = {
+            "BASE_DIRECTORY": "/old/path",
+            "ALLOWED_USERS": "U111",
+        }
+        inputs = [
+            "",     # BASE_DIRECTORY (keep)
+            "-",    # ALLOWED_USERS (clear)
+            "",     # CHANNEL_DIRS
+            "",     # CLAUDE_MODEL
+            "",     # CLAUDE_PERMISSION_MODE
+            "n",    # DEBUG
+        ]
+        with patch("builtins.input", side_effect=inputs):
+            result = _step_optional_settings(defaults)
+            assert result["BASE_DIRECTORY"] == "/old/path"
+            assert "ALLOWED_USERS" not in result
 
     def test_defaults_overridden(self):
         defaults = {
