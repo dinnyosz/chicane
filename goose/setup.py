@@ -213,8 +213,8 @@ def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
     Returns (base_directory, channel_dirs_string).
     """
     console.rule("Step 4 of 7: Directory Settings")
-    console.print("\n  [yellow]Note:[/yellow] Goose will run Claude Code in these directories.")
-    console.print("  Only add directories you trust.\n")
+    console.print("\n  [yellow]Note:[/yellow] Goose will run Claude Code in these directories remotely.")
+    console.print("  Only add directories you trust and are okay to tinker with.\n")
 
     # Base directory
     console.rule("Base Directory", style="dim")
