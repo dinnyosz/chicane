@@ -56,8 +56,14 @@ class SessionStore:
         thread_ts: str,
         config: Config,
         cwd: Path | None = None,
+        session_id: str | None = None,
     ) -> ClaudeSession:
-        """Get existing session for a thread or create a new one."""
+        """Get existing session for a thread or create a new one.
+
+        When *session_id* is provided the new ``ClaudeSession`` is created
+        with that id so it resumes an existing Claude Code conversation
+        (e.g. a desktop-to-Slack handoff).
+        """
         if thread_ts in self._sessions:
             info = self._sessions[thread_ts]
             info.touch()
@@ -72,6 +78,7 @@ class SessionStore:
 
         session = ClaudeSession(
             cwd=work_dir,
+            session_id=session_id,
             model=config.claude_model,
             permission_mode=config.claude_permission_mode,
             system_prompt=SLACK_SYSTEM_PROMPT,
