@@ -18,6 +18,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "aiohttp>=3.9.0",
     "certifi",
+    "rich>=13.0",
 ]
 
 [project.optional-dependencies]

@@ -5,6 +5,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Confirm, Prompt
+
+console = Console()
+
 _MANIFEST_PATH = Path(__file__).resolve().parent / "slack-app-manifest.json"
 
 
@@ -45,12 +51,13 @@ def _prompt_with_default(label: str, default: str = "") -> str:
     Enter keeps the default. Type '-' to clear it.
     """
     if default:
-        val = input(f"    {label} [{default}]: ").strip()
+        val = Prompt.ask(f"  {label}", default=default, console=console)
         if val == "-":
             return ""
-        return val if val else default
+        return val
     else:
-        return input(f"    {label} []: ").strip()
+        val = Prompt.ask(f"  {label}", default="", console=console)
+        return val
 
 
 def _prompt_token(label: str, prefix: str, default: str = "") -> str:
@@ -61,14 +68,14 @@ def _prompt_token(label: str, prefix: str, default: str = "") -> str:
                 masked = default[:8] + "..." + default[-4:]
             else:
                 masked = default[:5] + "..."
-            value = input(f"  Paste your {label} [{masked}] (Enter to keep): ").strip()
+            value = console.input(f"  Paste your {label} \\[{masked}] (Enter to keep): ").strip()
             if not value:
                 return default
         else:
-            value = input(f"  Paste your {label}: ").strip()
+            value = console.input(f"  Paste your {label}: ").strip()
         if value.startswith(prefix):
             return value
-        print(f"  Token must start with '{prefix}'. Please try again.\n")
+        console.print(f"  [red]Token must start with '{prefix}'. Please try again.[/red]\n")
 
 
 def _step_create_app(has_tokens: bool) -> None:
@@ -76,83 +83,79 @@ def _step_create_app(has_tokens: bool) -> None:
     manifest_json = json.dumps(_load_manifest(), indent=2)
     copied = _copy_to_clipboard(manifest_json)
 
-    print("\n  Step 1 of 5: Create Slack App")
+    console.rule("Step 1 of 5: Create Slack App")
 
     if has_tokens:
-        print("\n    Slack app already configured. Press Enter to skip,")
-        print("    or follow the steps below to create a new one.\n")
+        console.print("\n  Slack app already configured. Press Enter to skip,")
+        console.print("  or follow the steps below to create a new one.\n")
 
-    print("    1. Open https://api.slack.com/apps")
-    print('    2. Click "Create New App" -> "From a manifest"')
-    print("    3. Select your workspace")
-    print("    4. Switch to the JSON tab and paste the manifest")
+    console.print("  1. Open https://api.slack.com/apps")
+    console.print('  2. Click "Create New App" -> "From a manifest"')
+    console.print("  3. Select your workspace")
+    console.print("  4. Switch to the JSON tab and paste the manifest")
 
     if copied:
-        print("\n    \u2713 Manifest copied to your clipboard.")
-        show = input("\n  Show manifest in console? (y/N): ").strip().lower()
-        if show in ("y", "yes"):
-            print("\n    ──────────────────────────────────")
-            print(manifest_json)
-            print("    ──────────────────────────────────")
+        console.print("\n  [green]✓[/green] Manifest copied to your clipboard.")
+        show = Confirm.ask("\n  Show manifest in console?", default=False, console=console)
+        if show:
+            console.print()
+            console.print_json(manifest_json)
     else:
-        print("\n    ──────────────────────────────────")
-        print(manifest_json)
-        print("    ──────────────────────────────────")
+        console.print()
+        console.print_json(manifest_json)
 
-    print()
-    input("  Press Enter when your app is created...")
+    console.print()
+    console.input("  Press Enter when your app is created...")
 
 
 def _step_bot_token(default: str = "") -> str:
     """Step 2: Get Bot Token."""
-    print("\n  Step 2 of 5: Get Bot Token")
+    console.rule("Step 2 of 5: Get Bot Token")
 
     if default:
-        print("\n    Bot token found in .env. Press Enter to keep it,")
-        print("    or paste a new one. To generate a new token:")
+        console.print("\n  Bot token found in .env. Press Enter to keep it,")
+        console.print("  or paste a new one. To generate a new token:")
 
-    print("""
-    1. In the sidebar, go to "OAuth & Permissions"
-    2. Click "Install to Workspace" and approve
-    3. Copy the "Bot User OAuth Token" (starts with xoxb-)
+    console.print("""
+  1. In the sidebar, go to "OAuth & Permissions"
+  2. Click "Install to Workspace" and approve
+  3. Copy the "Bot User OAuth Token" (starts with xoxb-)
 """)
     token = _prompt_token("Bot Token", "xoxb-", default)
-    print("  \u2713 Saved")
+    console.print("  [green]✓[/green] Saved")
     return token
 
 
 def _step_app_token(default: str = "") -> str:
     """Step 3: Get App Token."""
-    print("\n  Step 3 of 5: Get App Token")
+    console.rule("Step 3 of 5: Get App Token")
 
     if default:
-        print("\n    App token found in .env. Press Enter to keep it,")
-        print("    or paste a new one. To generate a new token:")
+        console.print("\n  App token found in .env. Press Enter to keep it,")
+        console.print("  or paste a new one. To generate a new token:")
 
-    print("""
-    1. In the sidebar, go to "Basic Information"
-    2. Scroll to "App-Level Tokens" -> "Generate Token and Scopes"
-    3. Name it anything (e.g. "goose-socket")
-    4. Add the "connections:write" scope
-    5. Click "Generate" and copy the token (starts with xapp-)
+    console.print("""
+  1. In the sidebar, go to "Basic Information"
+  2. Scroll to "App-Level Tokens" -> "Generate Token and Scopes"
+  3. Name it anything (e.g. "goose-socket")
+  4. Add the "connections:write" scope
+  5. Click "Generate" and copy the token (starts with xapp-)
 """)
     token = _prompt_token("App Token", "xapp-", default)
-    print("  \u2713 Saved")
+    console.print("  [green]✓[/green] Saved")
     return token
 
 
 def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
     """Step 4: Prompt for optional settings. Returns non-empty values only."""
-    print("""
-  Step 4 of 5: Optional Settings
+    console.rule("Step 4 of 5: Optional Settings")
+    console.print("\n  Press Enter to skip (or keep current value). Type '-' to clear a value.\n")
 
-    Press Enter to skip (or keep current value). Type '-' to clear a value.
-""")
     values: dict[str, str] = {}
 
     # BASE_DIRECTORY
-    print("    Base path for channel->directory mappings below.")
-    print("    e.g. base=/home/user/code + channel 'frontend' = /home/user/code/frontend")
+    console.print("  Base path for channel->directory mappings below.")
+    console.print("  e.g. base=/home/user/code + channel 'frontend' = /home/user/code/frontend")
     val = _prompt_with_default(
         "Base directory (e.g. /home/user/code)",
         defaults.get("BASE_DIRECTORY", ""),
@@ -161,8 +164,8 @@ def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
         values["BASE_DIRECTORY"] = val
 
     # ALLOWED_USERS
-    print("    Restrict who can use the bot by Slack member ID.")
-    print("    (Find yours: Slack profile -> \u22ee menu -> Copy member ID)")
+    console.print("  Restrict who can use the bot by Slack member ID.")
+    console.print("  (Find yours: Slack profile -> ⋮ menu -> Copy member ID)")
     val = _prompt_with_default(
         "Allowed user IDs, comma-separated (e.g. U01AB2CDE)",
         defaults.get("ALLOWED_USERS", ""),
@@ -171,9 +174,9 @@ def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
         values["ALLOWED_USERS"] = val
 
     # CHANNEL_DIRS
-    print("    Map Slack channels to working directories.")
-    print("    Simple: channel name = directory name under base directory.")
-    print("    Custom: channel=path (e.g. web=frontend, infra=/opt/infra)")
+    console.print("  Map Slack channels to working directories.")
+    console.print("  Simple: channel name = directory name under base directory.")
+    console.print("  Custom: channel=path (e.g. web=frontend, infra=/opt/infra)")
     val = _prompt_with_default(
         "Channel mappings, comma-separated",
         defaults.get("CHANNEL_DIRS", ""),
@@ -199,12 +202,8 @@ def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
 
     # DEBUG
     current_debug = defaults.get("DEBUG", "").lower() in ("1", "true", "yes")
-    debug_default = "Y/n" if current_debug else "y/N"
-    debug = input(f"    Enable debug logging? ({debug_default}): ").strip().lower()
+    debug = Confirm.ask("  Enable debug logging", default=current_debug, console=console)
     if debug:
-        if debug in ("y", "yes"):
-            values["DEBUG"] = "true"
-    elif current_debug:
         values["DEBUG"] = "true"
 
     return values
@@ -223,7 +222,7 @@ def setup_command(args) -> None:
     try:
         _run_wizard(args)
     except KeyboardInterrupt:
-        print("\n  Aborted.")
+        console.print("\n  [yellow]Aborted.[/yellow]")
         sys.exit(130)
 
 
@@ -232,9 +231,8 @@ def _run_wizard(args) -> None:
     env_path = Path(".env")
     existing = _load_existing_env(env_path)
 
-    print()
-    print("  Goose \u2014 Setup Wizard")
-    print("  =====================")
+    console.print()
+    console.print(Panel("[bold]Goose — Setup Wizard[/bold]"))
 
     has_tokens = bool(existing.get("SLACK_BOT_TOKEN") and existing.get("SLACK_APP_TOKEN"))
 
@@ -251,9 +249,8 @@ def _run_wizard(args) -> None:
     optional = _step_optional_settings(existing)
 
     # Step 5: Write config
-    print("""
-  Step 5 of 5: Writing config
-""")
+    console.rule("Step 5 of 5: Writing config")
+    console.print()
 
     env_values: dict[str, str] = {
         "SLACK_BOT_TOKEN": bot_token,
@@ -262,7 +259,8 @@ def _run_wizard(args) -> None:
     env_values.update(optional)
 
     _write_env(env_path, env_values)
-    print(f"    \u2713 Wrote .env")
-    print(f"    \u2713 Next: run 'goose run' to start the bot")
-    print(f"    \u2713 Tip: invite @Goose to channels with /invite @Goose")
-    print()
+    console.print(Panel(
+        "[green]✓[/green] Wrote .env\n"
+        "[green]✓[/green] Next: run [bold]goose run[/bold]\n"
+        "[green]✓[/green] Tip: invite @Goose with /invite @Goose"
+    ))

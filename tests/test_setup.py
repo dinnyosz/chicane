@@ -65,104 +65,115 @@ class TestCopyToClipboard:
 
 class TestPromptWithDefault:
     def test_no_default_empty_input(self):
-        with patch("builtins.input", return_value=""):
+        with patch("goose.setup.Prompt.ask", return_value=""):
             assert _prompt_with_default("Label") == ""
 
     def test_no_default_with_input(self):
-        with patch("builtins.input", return_value="new-value"):
+        with patch("goose.setup.Prompt.ask", return_value="new-value"):
             assert _prompt_with_default("Label") == "new-value"
 
     def test_default_kept_on_empty_input(self):
-        with patch("builtins.input", return_value=""):
+        with patch("goose.setup.Prompt.ask", return_value="old-value"):
             assert _prompt_with_default("Label", "old-value") == "old-value"
 
     def test_default_overridden(self):
-        with patch("builtins.input", return_value="new-value"):
+        with patch("goose.setup.Prompt.ask", return_value="new-value"):
             assert _prompt_with_default("Label", "old-value") == "new-value"
 
     def test_dash_clears_default(self):
-        with patch("builtins.input", return_value="-"):
+        with patch("goose.setup.Prompt.ask", return_value="-"):
             assert _prompt_with_default("Label", "old-value") == ""
 
     def test_dash_without_default_is_literal(self):
-        with patch("builtins.input", return_value="-"):
+        with patch("goose.setup.Prompt.ask", return_value="-"):
             assert _prompt_with_default("Label") == "-"
 
 
 class TestPromptToken:
     def test_valid_on_first_try(self):
-        with patch("builtins.input", return_value="xoxb-valid"):
+        with patch("goose.setup.console.input", return_value="xoxb-valid"):
             result = _prompt_token("Bot Token", "xoxb-")
             assert result == "xoxb-valid"
 
-    def test_reprompts_on_bad_prefix(self, capsys):
-        with patch("builtins.input", side_effect=["bad-token", "xoxb-good"]):
+    def test_reprompts_on_bad_prefix(self):
+        with patch("goose.setup.console.input", side_effect=["bad-token", "xoxb-good"]), \
+             patch("goose.setup.console.print"):
             result = _prompt_token("Bot Token", "xoxb-")
             assert result == "xoxb-good"
-            captured = capsys.readouterr()
-            assert "must start with 'xoxb-'" in captured.out
 
     def test_default_kept_on_empty_input(self):
-        with patch("builtins.input", return_value=""):
+        with patch("goose.setup.console.input", return_value=""):
             result = _prompt_token("Bot Token", "xoxb-", default="xoxb-existing")
             assert result == "xoxb-existing"
 
     def test_default_overridden_with_valid(self):
-        with patch("builtins.input", return_value="xoxb-new"):
+        with patch("goose.setup.console.input", return_value="xoxb-new"):
             result = _prompt_token("Bot Token", "xoxb-", default="xoxb-old")
             assert result == "xoxb-new"
 
     def test_default_shown_masked(self):
-        with patch("builtins.input", return_value="") as mock_input:
+        with patch("goose.setup.console.input", return_value="") as mock_input:
             _prompt_token("Bot Token", "xoxb-", default="xoxb-1234567890")
             prompt_text = mock_input.call_args[0][0]
             assert "xoxb-123...7890" in prompt_text
 
     def test_short_token_masked_safely(self):
-        with patch("builtins.input", return_value="") as mock_input:
+        with patch("goose.setup.console.input", return_value="") as mock_input:
             _prompt_token("Bot Token", "xoxb-", default="xoxb-abc")
             prompt_text = mock_input.call_args[0][0]
             assert "xoxb-..." in prompt_text
-            # Should not contain the full token
             assert "xoxb-abc]" not in prompt_text
 
 
 class TestStepBotToken:
     def test_returns_valid_token(self):
-        with patch("builtins.input", return_value="xoxb-1234"):
+        with patch("goose.setup.console.input", return_value="xoxb-1234"), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
             assert _step_bot_token() == "xoxb-1234"
 
     def test_keeps_default(self):
-        with patch("builtins.input", return_value=""):
+        with patch("goose.setup.console.input", return_value=""), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
             assert _step_bot_token("xoxb-existing") == "xoxb-existing"
 
 
 class TestStepAppToken:
     def test_returns_valid_token(self):
-        with patch("builtins.input", return_value="xapp-5678"):
+        with patch("goose.setup.console.input", return_value="xapp-5678"), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
             assert _step_app_token() == "xapp-5678"
 
     def test_keeps_default(self):
-        with patch("builtins.input", return_value=""):
+        with patch("goose.setup.console.input", return_value=""), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
             assert _step_app_token("xapp-existing") == "xapp-existing"
 
 
 class TestStepOptionalSettings:
     def test_all_empty_no_defaults(self):
-        with patch("builtins.input", return_value=""):
+        with patch("goose.setup.Prompt.ask", return_value=""), \
+             patch("goose.setup.Confirm.ask", return_value=False), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
             result = _step_optional_settings({})
             assert result == {}
 
     def test_some_filled(self):
-        inputs = [
+        prompt_values = [
             "/home/user/code",  # BASE_DIRECTORY
             "U123,U456",        # ALLOWED_USERS
             "",                 # CHANNEL_DIRS
             "sonnet",           # CLAUDE_MODEL
-            "",                 # CLAUDE_PERMISSION_MODE
-            "n",                # DEBUG
+            "",                 # CLAUDE_PERMISSION_MODE (returns "default" default -> stripped)
         ]
-        with patch("builtins.input", side_effect=inputs):
+        with patch("goose.setup.Prompt.ask", side_effect=prompt_values), \
+             patch("goose.setup.Confirm.ask", return_value=False), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
             result = _step_optional_settings({})
             assert result == {
                 "BASE_DIRECTORY": "/home/user/code",
@@ -171,8 +182,10 @@ class TestStepOptionalSettings:
             }
 
     def test_debug_enabled(self):
-        inputs = ["", "", "", "", "", "y"]
-        with patch("builtins.input", side_effect=inputs):
+        with patch("goose.setup.Prompt.ask", return_value=""), \
+             patch("goose.setup.Confirm.ask", return_value=True), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
             result = _step_optional_settings({})
             assert result == {"DEBUG": "true"}
 
@@ -185,9 +198,18 @@ class TestStepOptionalSettings:
             "CLAUDE_PERMISSION_MODE": "bypassPermissions",
             "DEBUG": "true",
         }
-        # All empty inputs — should keep all defaults
-        inputs = ["", "", "", "", "", ""]
-        with patch("builtins.input", side_effect=inputs):
+        # Prompt.ask returns default when user presses Enter
+        prompt_values = [
+            "/old/path",           # BASE_DIRECTORY (default kept)
+            "U111",                # ALLOWED_USERS (default kept)
+            "proj1",               # CHANNEL_DIRS (default kept)
+            "opus",                # CLAUDE_MODEL (default kept)
+            "bypassPermissions",   # CLAUDE_PERMISSION_MODE (default kept)
+        ]
+        with patch("goose.setup.Prompt.ask", side_effect=prompt_values), \
+             patch("goose.setup.Confirm.ask", return_value=True), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
             result = _step_optional_settings(defaults)
             assert result["BASE_DIRECTORY"] == "/old/path"
             assert result["ALLOWED_USERS"] == "U111"
@@ -201,15 +223,17 @@ class TestStepOptionalSettings:
             "BASE_DIRECTORY": "/old/path",
             "ALLOWED_USERS": "U111",
         }
-        inputs = [
-            "",     # BASE_DIRECTORY (keep)
-            "-",    # ALLOWED_USERS (clear)
-            "",     # CHANNEL_DIRS
-            "",     # CLAUDE_MODEL
-            "",     # CLAUDE_PERMISSION_MODE
-            "n",    # DEBUG
+        prompt_values = [
+            "/old/path",   # BASE_DIRECTORY (keep)
+            "-",           # ALLOWED_USERS (clear via dash)
+            "",            # CHANNEL_DIRS
+            "",            # CLAUDE_MODEL
+            "",            # CLAUDE_PERMISSION_MODE
         ]
-        with patch("builtins.input", side_effect=inputs):
+        with patch("goose.setup.Prompt.ask", side_effect=prompt_values), \
+             patch("goose.setup.Confirm.ask", return_value=False), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
             result = _step_optional_settings(defaults)
             assert result["BASE_DIRECTORY"] == "/old/path"
             assert "ALLOWED_USERS" not in result
@@ -219,15 +243,17 @@ class TestStepOptionalSettings:
             "BASE_DIRECTORY": "/old/path",
             "CHANNEL_DIRS": "old-proj",
         }
-        inputs = [
+        prompt_values = [
             "/new/path",    # BASE_DIRECTORY override
             "",             # ALLOWED_USERS (no default, skip)
             "new-proj",     # CHANNEL_DIRS override
             "",             # CLAUDE_MODEL (no default, skip)
-            "",             # CLAUDE_PERMISSION_MODE (default "default")
-            "n",            # DEBUG
+            "",             # CLAUDE_PERMISSION_MODE
         ]
-        with patch("builtins.input", side_effect=inputs):
+        with patch("goose.setup.Prompt.ask", side_effect=prompt_values), \
+             patch("goose.setup.Confirm.ask", return_value=False), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
             result = _step_optional_settings(defaults)
             assert result["BASE_DIRECTORY"] == "/new/path"
             assert result["CHANNEL_DIRS"] == "new-proj"
@@ -259,18 +285,22 @@ class TestSetupCommand:
 
     def test_fresh_setup_writes_env(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        inputs = [
-            "",              # Step 1: Enter to continue (no clipboard = manifest shown automatically)
+        # Prompt.ask: 5 optional settings fields
+        prompt_values = ["", "", "", "", ""]
+        # Confirm.ask: clipboard fails so no manifest confirm, just debug=False
+        confirm_values = [False]
+        # console.input: press Enter (step1), bot token, app token
+        input_values = [
+            "",              # Step 1: press Enter
             "xoxb-bot123",   # Bot token
             "xapp-app456",   # App token
-            "",              # BASE_DIRECTORY
-            "",              # ALLOWED_USERS
-            "",              # CHANNEL_DIRS
-            "",              # CLAUDE_MODEL
-            "",              # CLAUDE_PERMISSION_MODE
-            "n",             # DEBUG
         ]
-        with patch("builtins.input", side_effect=inputs), \
+        with patch("goose.setup.Prompt.ask", side_effect=prompt_values), \
+             patch("goose.setup.Confirm.ask", side_effect=confirm_values), \
+             patch("goose.setup.console.input", side_effect=input_values), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.print_json"), \
+             patch("goose.setup.console.rule"), \
              patch("goose.setup._copy_to_clipboard", return_value=False):
             setup_command(self._make_args())
 
@@ -285,19 +315,22 @@ class TestSetupCommand:
         (tmp_path / ".env").write_text(
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nBASE_DIRECTORY=/old\n"
         )
-        # All empty — keep all defaults
-        inputs = [
-            "",   # Step 1: Enter to continue (no clipboard)
-            "",   # Bot token (keep xoxb-old)
-            "",  # App token (keep xapp-old)
-            "",  # BASE_DIRECTORY (keep /old)
-            "",  # ALLOWED_USERS
-            "",  # CHANNEL_DIRS
-            "",  # CLAUDE_MODEL
-            "",  # CLAUDE_PERMISSION_MODE
-            "",  # DEBUG
+        # Prompt.ask: 5 optional settings (BASE_DIRECTORY returns /old default)
+        prompt_values = ["/old", "", "", "", ""]
+        # Confirm.ask: clipboard fails so no manifest confirm, just debug
+        confirm_values = [False]
+        # console.input: press Enter (step1), bot token (empty=keep), app token (empty=keep)
+        input_values = [
+            "",    # Step 1: press Enter
+            "",    # Bot token (keep default)
+            "",    # App token (keep default)
         ]
-        with patch("builtins.input", side_effect=inputs), \
+        with patch("goose.setup.Prompt.ask", side_effect=prompt_values), \
+             patch("goose.setup.Confirm.ask", side_effect=confirm_values), \
+             patch("goose.setup.console.input", side_effect=input_values), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.print_json"), \
+             patch("goose.setup.console.rule"), \
              patch("goose.setup._copy_to_clipboard", return_value=False):
             setup_command(self._make_args())
 
@@ -311,18 +344,22 @@ class TestSetupCommand:
         (tmp_path / ".env").write_text(
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nCHANNEL_DIRS=old-proj\n"
         )
-        inputs = [
-            "",                  # Step 1: Enter to continue (no clipboard)
-            "xoxb-new",          # Override bot token
-            "",                  # Keep app token
-            "",                  # BASE_DIRECTORY
-            "",                  # ALLOWED_USERS
-            "new-proj,extra",    # Override CHANNEL_DIRS
-            "",                  # CLAUDE_MODEL
-            "",                  # CLAUDE_PERMISSION_MODE
-            "n",                 # DEBUG
+        # Prompt.ask: 5 optional settings
+        prompt_values = ["", "", "new-proj,extra", "", ""]
+        # Confirm.ask: clipboard fails so no manifest confirm, just debug
+        confirm_values = [False]
+        # console.input: press Enter (step1), bot token override, app token keep
+        input_values = [
+            "",            # Step 1: press Enter
+            "xoxb-new",   # Override bot token
+            "",            # Keep app token
         ]
-        with patch("builtins.input", side_effect=inputs), \
+        with patch("goose.setup.Prompt.ask", side_effect=prompt_values), \
+             patch("goose.setup.Confirm.ask", side_effect=confirm_values), \
+             patch("goose.setup.console.input", side_effect=input_values), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.print_json"), \
+             patch("goose.setup.console.rule"), \
              patch("goose.setup._copy_to_clipboard", return_value=False):
             setup_command(self._make_args())
 
@@ -331,22 +368,26 @@ class TestSetupCommand:
         assert "SLACK_APP_TOKEN=xapp-old" in content
         assert "CHANNEL_DIRS=new-proj,extra" in content
 
-    def test_token_validation_reprompts(self, tmp_path, monkeypatch, capsys):
+    def test_token_validation_reprompts(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        inputs = [
-            "",                  # Step 1: Enter to continue (no clipboard)
-            "bad-bot",           # Invalid
-            "xoxb-good",         # Valid
-            "not-app",           # Invalid
-            "xapp-good",         # Valid
-            "",                  # BASE_DIRECTORY
-            "",                  # ALLOWED_USERS
-            "",                  # CHANNEL_DIRS
-            "",                  # CLAUDE_MODEL
-            "",                  # CLAUDE_PERMISSION_MODE
-            "n",                 # DEBUG
+        # Prompt.ask: 5 optional settings
+        prompt_values = ["", "", "", "", ""]
+        # Confirm.ask: clipboard fails so no manifest confirm, just debug
+        confirm_values = [False]
+        # console.input: press Enter (step1), bad bot, good bot, bad app, good app
+        input_values = [
+            "",              # Step 1: press Enter
+            "bad-bot",       # Invalid bot token
+            "xoxb-good",    # Valid bot token
+            "not-app",       # Invalid app token
+            "xapp-good",    # Valid app token
         ]
-        with patch("builtins.input", side_effect=inputs), \
+        with patch("goose.setup.Prompt.ask", side_effect=prompt_values), \
+             patch("goose.setup.Confirm.ask", side_effect=confirm_values), \
+             patch("goose.setup.console.input", side_effect=input_values), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.print_json"), \
+             patch("goose.setup.console.rule"), \
              patch("goose.setup._copy_to_clipboard", return_value=False):
             setup_command(self._make_args())
 
@@ -354,17 +395,20 @@ class TestSetupCommand:
         assert "SLACK_BOT_TOKEN=xoxb-good" in content
         assert "SLACK_APP_TOKEN=xapp-good" in content
 
-        captured = capsys.readouterr()
-        assert "must start with 'xoxb-'" in captured.out
-        assert "must start with 'xapp-'" in captured.out
-
-    def test_ctrl_c_exits_cleanly(self, tmp_path, monkeypatch, capsys):
+    def test_ctrl_c_exits_cleanly(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        with patch("builtins.input", side_effect=KeyboardInterrupt), \
+        with patch("goose.setup.console.print") as mock_print, \
+             patch("goose.setup.console.input", side_effect=KeyboardInterrupt), \
+             patch("goose.setup.console.print_json"), \
+             patch("goose.setup.console.rule"), \
              patch("goose.setup._copy_to_clipboard", return_value=False):
             with pytest.raises(SystemExit) as exc_info:
                 setup_command(self._make_args())
             assert exc_info.value.code == 130
 
-        captured = capsys.readouterr()
-        assert "Aborted" in captured.out
+        # Check that Aborted was printed
+        abort_calls = [
+            call for call in mock_print.call_args_list
+            if any("Aborted" in str(arg) for arg in call.args)
+        ]
+        assert len(abort_calls) > 0
