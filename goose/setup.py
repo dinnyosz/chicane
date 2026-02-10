@@ -331,8 +331,11 @@ def _step_claude_settings(defaults: dict[str, str]) -> dict[str, str]:
 
     console.print("\n  [bold]Permission Mode[/bold]")
     console.print("  Controls what Claude Code can do without asking.")
-    console.print("  default — prompts for risky actions (file writes, shell commands).")
-    console.print("  bypassPermissions — auto-approve everything (use with caution).")
+    console.print("  [dim]default[/dim]           — prompts on first use of each tool")
+    console.print("  [dim]acceptEdits[/dim]       — auto-accepts file edits, prompts for shell")
+    console.print("  [dim]plan[/dim]              — read-only analysis, no modifications")
+    console.print("  [dim]dontAsk[/dim]           — auto-denies unless pre-approved via rules")
+    console.print("  [dim]bypassPermissions[/dim] — skips all prompts (containers/VMs only)")
     val = _prompt_with_default(
         "Permission mode",
         defaults.get("CLAUDE_PERMISSION_MODE", "default"),
