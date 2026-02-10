@@ -420,15 +420,15 @@ class TestStepClaudeSettings:
 
     def test_invalid_permission_mode_reprompts(self):
         # model, bad mode, good mode, allowed_tools, log_file
-        with patch("goose.setup.Prompt.ask", side_effect=["", "bogus", "plan", "", ""]), \
+        with patch("goose.setup.Prompt.ask", side_effect=["", "bogus", "dontAsk", "", ""]), \
              patch("goose.setup.Confirm.ask", return_value=False), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
             result = _step_claude_settings({})
-            assert result == {"CLAUDE_PERMISSION_MODE": "plan"}
+            assert result == {"CLAUDE_PERMISSION_MODE": "dontAsk"}
 
     def test_all_valid_permission_modes(self):
-        for mode in ("default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"):
+        for mode in ("acceptEdits", "dontAsk", "bypassPermissions"):
             with patch("goose.setup.Prompt.ask", side_effect=["", mode, "", ""]), \
                  patch("goose.setup.Confirm.ask", return_value=False), \
                  patch("goose.setup.console.print"), \
