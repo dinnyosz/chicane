@@ -108,14 +108,13 @@ def _step_bot_token(default: str = "") -> str:
 
     if default:
         print("\n    Bot token found in .env. Press Enter to keep it,")
-        print("    or paste a new one to replace it.")
-    else:
-        print("""
+        print("    or paste a new one. To generate a new token:")
+
+    print("""
     1. In the sidebar, go to "OAuth & Permissions"
     2. Click "Install to Workspace" and approve
-    3. Copy the "Bot User OAuth Token" (starts with xoxb-)""")
-
-    print()
+    3. Copy the "Bot User OAuth Token" (starts with xoxb-)
+""")
     token = _prompt_token("Bot Token", "xoxb-", default)
     print("  \u2713 Saved")
     return token
@@ -127,16 +126,15 @@ def _step_app_token(default: str = "") -> str:
 
     if default:
         print("\n    App token found in .env. Press Enter to keep it,")
-        print("    or paste a new one to replace it.")
-    else:
-        print("""
+        print("    or paste a new one. To generate a new token:")
+
+    print("""
     1. In the sidebar, go to "Basic Information"
     2. Scroll to "App-Level Tokens" -> "Generate Token and Scopes"
     3. Name it anything (e.g. "goose-socket")
     4. Add the "connections:write" scope
-    5. Click "Generate" and copy the token (starts with xapp-)""")
-
-    print()
+    5. Click "Generate" and copy the token (starts with xapp-)
+""")
     token = _prompt_token("App Token", "xapp-", default)
     print("  \u2713 Saved")
     return token
