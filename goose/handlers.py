@@ -163,6 +163,17 @@ async def _process_message(
         and thread_ts != event["ts"]
     )
 
+    # On reconnect, try to find a session_id in the thread first so we can
+    # resume the original Claude session instead of rebuilding from history.
+    if is_reconnect and not handoff_session_id:
+        found_id = await _find_session_id_in_thread(channel, thread_ts, client)
+        if found_id:
+            handoff_session_id = found_id
+            is_reconnect = False
+            logger.info(
+                f"Reconnect: found session_id {found_id} in thread {thread_ts}"
+            )
+
     # Get or create a Claude session for this thread
     session = sessions.get_or_create(
         thread_ts=thread_ts,
@@ -171,7 +182,8 @@ async def _process_message(
         session_id=handoff_session_id,
     )
 
-    # On reconnect, rebuild context from Slack thread history
+    # On reconnect (no session_id found), fall back to rebuilding context
+    # from Slack thread history.
     if is_reconnect:
         history = await _fetch_thread_history(channel, thread_ts, event["ts"], client)
         if history:
@@ -316,6 +328,33 @@ async def _fetch_thread_history(
     except Exception:
         logger.exception(f"Failed to fetch thread history for {thread_ts}")
         return None
+
+
+async def _find_session_id_in_thread(
+    channel: str,
+    thread_ts: str,
+    client: AsyncWebClient,
+) -> str | None:
+    """Scan thread messages for a handoff session_id.
+
+    Returns the session_id if found in any message, otherwise None.
+    Used on reconnect to resume the original Claude session instead of
+    rebuilding context from scratch.
+    """
+    try:
+        replies = await client.conversations_replies(
+            channel=channel, ts=thread_ts, limit=100
+        )
+        for msg in replies.get("messages", []):
+            text = msg.get("text", "")
+            m = _HANDOFF_RE.search(text)
+            if m:
+                return m.group(1)
+    except Exception:
+        logger.warning(
+            f"Could not scan thread {thread_ts} for session_id", exc_info=True
+        )
+    return None
 
 
 async def _bot_in_thread(

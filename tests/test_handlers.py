@@ -9,6 +9,7 @@ from goose.config import Config
 from goose.handlers import (
     _bot_in_thread,
     _fetch_thread_history,
+    _find_session_id_in_thread,
     _HANDOFF_RE,
     _should_ignore,
     _split_message,
@@ -403,3 +404,75 @@ class TestHandoffRegex:
         m = _HANDOFF_RE.search(text)
         assert m is not None
         assert m.group(1) == "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
+
+class TestFindSessionIdInThread:
+    """Test scanning thread messages for a handoff session_id."""
+
+    @pytest.mark.asyncio
+    async def test_finds_session_id_in_thread(self):
+        client = AsyncMock()
+        client.conversations_replies.return_value = {
+            "messages": [
+                {"user": "UHUMAN1", "ts": "1000.0", "text": "start a task"},
+                {
+                    "user": "UBOT123",
+                    "ts": "1001.0",
+                    "text": "Working on auth\n\n_(session_id: abc-123-def)_",
+                },
+                {"user": "UHUMAN1", "ts": "1002.0", "text": "continue please"},
+            ]
+        }
+
+        result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
+        assert result == "abc-123-def"
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_session_id(self):
+        client = AsyncMock()
+        client.conversations_replies.return_value = {
+            "messages": [
+                {"user": "UHUMAN1", "ts": "1000.0", "text": "hello"},
+                {"user": "UBOT123", "ts": "1001.0", "text": "hi there"},
+            ]
+        }
+
+        result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_first_session_id_found(self):
+        client = AsyncMock()
+        client.conversations_replies.return_value = {
+            "messages": [
+                {
+                    "user": "UBOT123",
+                    "ts": "1000.0",
+                    "text": "First handoff _(session_id: aaa-111)_",
+                },
+                {
+                    "user": "UBOT123",
+                    "ts": "1001.0",
+                    "text": "Second handoff _(session_id: bbb-222)_",
+                },
+            ]
+        }
+
+        result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
+        assert result == "aaa-111"
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_api_error(self):
+        client = AsyncMock()
+        client.conversations_replies.side_effect = Exception("API error")
+
+        result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_handles_empty_thread(self):
+        client = AsyncMock()
+        client.conversations_replies.return_value = {"messages": []}
+
+        result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
+        assert result is None
