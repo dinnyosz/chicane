@@ -23,6 +23,22 @@ class Config:
     claude_permission_mode: str = "default"
     claude_allowed_tools: list[str] = field(default_factory=list)
 
+    def resolve_dir_channel(self, cwd: Path) -> str | None:
+        """Reverse lookup: given a directory path, find the Slack channel name.
+
+        Iterates channel_dirs, resolves each mapped path (relative to
+        base_directory if needed), and returns the channel name whose
+        resolved path matches *cwd*.  Returns None if no match.
+        """
+        cwd = cwd.resolve()
+        for channel_name, mapped in self.channel_dirs.items():
+            path = Path(mapped)
+            if not path.is_absolute() and self.base_directory:
+                path = self.base_directory / mapped
+            if path.resolve() == cwd:
+                return channel_name
+        return None
+
     def resolve_channel_dir(self, channel_name: str) -> Path | None:
         """Resolve working directory for a channel.
 
