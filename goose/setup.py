@@ -80,16 +80,18 @@ def _prompt_token(label: str, prefix: str, default: str = "") -> str:
 
 def _step_create_app(has_tokens: bool) -> None:
     """Step 1: Print manifest and wait for user to create the app."""
-    manifest_json = json.dumps(_load_manifest(), indent=2)
-    copied = _copy_to_clipboard(manifest_json)
-
     console.rule("Step 1 of 5: Create Slack App")
 
     if has_tokens:
-        console.print("\n  Slack app already configured. Press Enter to skip,")
-        console.print("  or follow the steps below to create a new one.\n")
+        console.print("\n  Slack app already configured.")
+        skip = Confirm.ask("  Skip this step?", default=True, console=console)
+        if skip:
+            return
 
-    console.print("  1. Open https://api.slack.com/apps")
+    manifest_json = json.dumps(_load_manifest(), indent=2)
+    copied = _copy_to_clipboard(manifest_json)
+
+    console.print("\n  1. Open https://api.slack.com/apps")
     console.print('  2. Click "Create New App" -> "From a manifest"')
     console.print("  3. Select your workspace")
     console.print("  4. Switch to the JSON tab and paste the manifest")

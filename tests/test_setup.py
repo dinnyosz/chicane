@@ -317,11 +317,10 @@ class TestSetupCommand:
         )
         # Prompt.ask: 5 optional settings (BASE_DIRECTORY returns /old default)
         prompt_values = ["/old", "", "", "", ""]
-        # Confirm.ask: clipboard fails so no manifest confirm, just debug
-        confirm_values = [False]
-        # console.input: press Enter (step1), bot token (empty=keep), app token (empty=keep)
+        # Confirm.ask: skip step1=True, debug=False
+        confirm_values = [True, False]
+        # console.input: bot token (empty=keep), app token (empty=keep) — no step1 input
         input_values = [
-            "",    # Step 1: press Enter
             "",    # Bot token (keep default)
             "",    # App token (keep default)
         ]
@@ -346,11 +345,10 @@ class TestSetupCommand:
         )
         # Prompt.ask: 5 optional settings
         prompt_values = ["", "", "new-proj,extra", "", ""]
-        # Confirm.ask: clipboard fails so no manifest confirm, just debug
-        confirm_values = [False]
-        # console.input: press Enter (step1), bot token override, app token keep
+        # Confirm.ask: skip step1=True, debug=False
+        confirm_values = [True, False]
+        # console.input: bot token override, app token keep — no step1 input
         input_values = [
-            "",            # Step 1: press Enter
             "xoxb-new",   # Override bot token
             "",            # Keep app token
         ]
