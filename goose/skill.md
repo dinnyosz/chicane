@@ -5,18 +5,15 @@ or similar.
 
 ## How it works
 
-1. Extract the current session ID by reading the last line of `~/.claude/history.jsonl`:
-
-```bash
-SESSION_ID=$(tail -1 ~/.claude/history.jsonl | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['sessionId'])")
-```
-2. Write a 2-sentence summary of the current session — what you were working on
+1. Write a 2-sentence summary of the current session — what you were working on
    and the current state.
-3. Run the handoff command:
+2. Run the handoff command:
 
 ```bash
-{{GOOSE_PATH}} handoff --session-id "$SESSION_ID" --summary "Your summary here"
+{{GOOSE_PATH}} handoff --summary "Your summary here"
 ```
+
+The session ID is auto-detected from Claude Code's history.
 
 The command resolves the Slack channel from the current working directory
 (using the `CHANNEL_DIRS` mapping configured in Goose). If it fails to

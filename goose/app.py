@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import signal
@@ -86,11 +87,28 @@ async def start(config: Config | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_session_id(explicit: str | None) -> str:
+    """Return the session ID — use explicit value or auto-detect from history."""
+    if explicit:
+        return explicit
+    history = Path.home() / ".claude" / "history.jsonl"
+    if not history.exists():
+        print("Error: no Claude history found. Pass --session-id explicitly.", file=sys.stderr)
+        sys.exit(1)
+    last_line = history.read_text().strip().rsplit("\n", 1)[-1]
+    session_id = json.loads(last_line).get("sessionId")
+    if not session_id:
+        print("Error: could not extract session ID from history. Pass --session-id explicitly.", file=sys.stderr)
+        sys.exit(1)
+    return session_id
+
+
 async def _handoff(args: argparse.Namespace) -> None:
     """Post a handoff message to Slack so the session can be resumed."""
     from slack_sdk.web.async_client import AsyncWebClient
 
     config = Config.from_env()
+    args.session_id = _resolve_session_id(args.session_id)
 
     # Resolve channel name
     channel_name: str | None = args.channel
@@ -188,7 +206,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # goose handoff
     ho = sub.add_parser("handoff", help="Post a handoff message to Slack")
-    ho.add_argument("--session-id", required=True, help="Claude session ID to resume")
+    ho.add_argument("--session-id", default=None, help="Claude session ID (auto-detected from history if omitted)")
     ho.add_argument("--summary", required=True, help="Summary text for the handoff message")
     ho.add_argument("--channel", default=None, help="Slack channel name (auto-resolved from cwd if omitted)")
     ho.add_argument("--cwd", default=None, help="Working directory to resolve channel from (defaults to $PWD)")
@@ -215,7 +233,7 @@ Commands:
 
 Examples:
   goose run                                      Start the bot
-  goose handoff --session-id ID --summary "..."  Hand off a session to Slack
+  goose handoff --summary "..."                  Hand off a session to Slack
   goose install-skill                            Install the handoff skill
 
 Run 'goose <command> --help' for details on a specific command.""")
