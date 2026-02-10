@@ -124,7 +124,7 @@ def _step_create_app(has_tokens: bool) -> None:
     console.rule("Step 1 of 6: Create Slack App")
 
     if has_tokens:
-        console.print("\n  Slack app already configured.")
+        console.print("\n  Tokens found in .env — Slack app likely already configured.")
         skip = Confirm.ask("  Skip this step?", default=True, console=console)
         if skip:
             return
