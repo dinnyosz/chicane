@@ -1,4 +1,4 @@
-"""Goose application — Slack bot powered by Claude Code."""
+"""Goose application — Send coding tasks from Slack, get results back."""
 
 import argparse
 import asyncio
@@ -210,7 +210,7 @@ class _GooseParser(argparse.ArgumentParser):
 def _build_parser() -> argparse.ArgumentParser:
     parser = _GooseParser(
         prog="goose",
-        description="Goose — Slack bot powered by Claude Code",
+        description="Goose — Send coding tasks from Slack, get results back",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -238,7 +238,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _print_help() -> None:
-    print("""Goose — Slack bot powered by Claude Code
+    print("""Goose — Send coding tasks from Slack, get results back
 
 Usage: goose <command> [options]
 

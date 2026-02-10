@@ -1,6 +1,6 @@
 # Goose
 
-Slack bot powered by Claude Code. Send coding tasks from Slack, get results back.
+Send coding tasks from Slack, get results back.
 
 Goose connects Slack to the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI via Socket Mode. When you @mention the bot or DM it, Goose spawns a Claude Code subprocess, streams the response back to Slack, and keeps the session alive for follow-up messages in the same thread.
 
