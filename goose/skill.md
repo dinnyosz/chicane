@@ -5,8 +5,11 @@ or similar.
 
 ## How it works
 
-1. Get the current Claude Code session ID from the environment variable `$CLAUDE_SESSION_ID`,
-   or parse it from the output of `claude --version --verbose` if needed.
+1. Extract the current session ID by reading the last line of `~/.claude/history.jsonl`:
+
+```bash
+SESSION_ID=$(tail -1 ~/.claude/history.jsonl | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['sessionId'])")
+```
 2. Write a 2-sentence summary of the current session — what you were working on
    and the current state.
 3. Run the handoff command:
