@@ -91,6 +91,9 @@ class ClaudeSession:
         if self.allowed_tools:
             cmd.extend(["--allowedTools", *self.allowed_tools])
 
+        # Use "--" to separate flags from the positional prompt argument.
+        # Without this, variadic flags like --allowedTools consume the prompt.
+        cmd.append("--")
         cmd.append(prompt)
         return cmd
 
