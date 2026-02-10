@@ -133,8 +133,7 @@ def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
     values: dict[str, str] = {}
 
     # BASE_DIRECTORY
-    print("    Where Goose reads and writes code when handling tasks.")
-    print("    Also the base path for channel->directory mappings below.")
+    print("    Base path for channel->directory mappings below.")
     print("    e.g. base=/home/user/code + channel 'frontend' = /home/user/code/frontend")
     val = _prompt_with_default(
         "Base directory (e.g. /home/user/code)",
