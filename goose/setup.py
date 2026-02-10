@@ -133,8 +133,10 @@ def _step_optional_settings(defaults: dict[str, str]) -> dict[str, str]:
     values: dict[str, str] = {}
 
     # BASE_DIRECTORY
+    print("    Root directory where Claude Code runs.")
+    print("    Channel mappings below are relative to this path.")
     val = _prompt_with_default(
-        "Base directory for Claude sessions",
+        "Base directory (e.g. /home/user/code)",
         defaults.get("BASE_DIRECTORY", ""),
     )
     if val:
