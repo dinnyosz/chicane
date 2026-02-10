@@ -10,6 +10,7 @@ from goose.setup import (
     _copy_to_clipboard,
     _load_existing_env,
     _load_manifest,
+    _parse_allowed_tools,
     _parse_allowed_users,
     _parse_channel_dirs,
     _prompt_token,
@@ -417,24 +418,62 @@ class TestStepPermissionMode:
                 assert _step_permission_mode() == mode
 
 
+class TestParseAllowedTools:
+    def test_empty_string(self):
+        assert _parse_allowed_tools("") == []
+
+    def test_single_tool(self):
+        assert _parse_allowed_tools("Read") == ["Read"]
+
+    def test_multiple_tools(self):
+        assert _parse_allowed_tools("Read,Edit,Bash(npm run *)") == ["Read", "Edit", "Bash(npm run *)"]
+
+    def test_whitespace_handling(self):
+        assert _parse_allowed_tools(" Read , Edit ") == ["Read", "Edit"]
+
+
 class TestStepAllowedTools:
-    def test_empty_returns_empty(self):
-        with patch("goose.setup.Prompt.ask", return_value=""), \
+    def test_no_defaults_done_immediately(self):
+        with patch("goose.setup.Prompt.ask", side_effect=["d"]), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
             assert _step_allowed_tools() == ""
 
-    def test_returns_value(self):
-        with patch("goose.setup.Prompt.ask", return_value="Bash(npm run *),Read"), \
+    def test_add_one_tool(self):
+        with patch("goose.setup.Prompt.ask", side_effect=["a", "Read", "d"]), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
-            assert _step_allowed_tools() == "Bash(npm run *),Read"
+            assert _step_allowed_tools() == "Read"
 
-    def test_keeps_default(self):
-        with patch("goose.setup.Prompt.ask", return_value="Read,Edit"), \
+    def test_add_multiple_tools(self):
+        with patch("goose.setup.Prompt.ask", side_effect=["a", "Read", "a", "Bash(npm run *)", "d"]), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
+            assert _step_allowed_tools() == "Read,Bash(npm run *)"
+
+    def test_add_and_remove(self):
+        with patch("goose.setup.Prompt.ask", side_effect=["a", "Read", "a", "Edit", "r", "Read", "d"]), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
+            assert _step_allowed_tools() == "Edit"
+
+    def test_existing_tools_kept(self):
+        with patch("goose.setup.Prompt.ask", side_effect=["d"]), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
             assert _step_allowed_tools("Read,Edit") == "Read,Edit"
+
+    def test_duplicate_not_added(self):
+        with patch("goose.setup.Prompt.ask", side_effect=["a", "Read", "a", "Read", "d"]), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
+            assert _step_allowed_tools() == "Read"
+
+    def test_remove_nonexistent(self):
+        with patch("goose.setup.Prompt.ask", side_effect=["a", "Read", "r", "Edit", "d"]), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
+            assert _step_allowed_tools() == "Read"
 
 
 class TestStepLogging:
@@ -499,8 +538,8 @@ class TestSetupCommand:
 
     def test_fresh_setup_writes_env(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GOOSE_CONFIG_DIR", str(tmp_path))
-        # Prompt.ask: base dir, done (channels), done (users), model, permission, allowed_tools, log_file
-        prompt_values = ["", "d", "d", "", "", "", ""]
+        # Prompt.ask: base dir, done(channels), done(users), model, permission, done(tools), log_file
+        prompt_values = ["", "d", "d", "", "", "d", ""]
         # Confirm.ask: debug=False
         confirm_values = [False]
         # console.input: press Enter (step1), bot token, app token
@@ -529,8 +568,8 @@ class TestSetupCommand:
         (tmp_path / ".env").write_text(
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nBASE_DIRECTORY=/old\n"
         )
-        # Prompt.ask: base dir (keep), done (channels), done (users), model, permission, allowed_tools, log_file
-        prompt_values = ["/old", "d", "d", "", "", "", ""]
+        # Prompt.ask: base dir (keep), done(channels), done(users), model, permission, done(tools), log_file
+        prompt_values = ["/old", "d", "d", "", "", "d", ""]
         # Confirm.ask: skip step1=True, debug=False
         confirm_values = [True, False]
         # console.input: bot token (empty=keep), app token (empty=keep)
@@ -557,8 +596,8 @@ class TestSetupCommand:
         (tmp_path / ".env").write_text(
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nCHANNEL_DIRS=old-proj\n"
         )
-        # Prompt.ask: base dir, add channels, done (users), model, permission, allowed_tools, log_file
-        prompt_values = ["", "a", "new-proj", "new-proj", "a", "extra", "extra", "d", "d", "", "", "", ""]
+        # Prompt.ask: base dir, add channels, done(users), model, permission, done(tools), log_file
+        prompt_values = ["", "a", "new-proj", "new-proj", "a", "extra", "extra", "d", "d", "", "", "d", ""]
         # Confirm.ask: skip step1=True, debug=False
         confirm_values = [True, False]
         # console.input: bot token override, app token keep
@@ -583,8 +622,8 @@ class TestSetupCommand:
 
     def test_token_validation_reprompts(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GOOSE_CONFIG_DIR", str(tmp_path))
-        # Prompt.ask: base dir, done (channels), done (users), model, permission, allowed_tools, log_file
-        prompt_values = ["", "d", "d", "", "", "", ""]
+        # Prompt.ask: base dir, done (channels), done (users), model, permission, done (tools), log_file
+        prompt_values = ["", "d", "d", "", "", "d", ""]
         # Confirm.ask: debug=False
         confirm_values = [False]
         # console.input: press Enter (step1), bad bot, good bot, bad app, good app

@@ -335,18 +335,67 @@ def _step_permission_mode(default: str = "acceptEdits") -> str:
         console.print(f"  [red]Invalid mode '{val}'. Choose from: {', '.join(sorted(valid_modes))}[/red]\n")
 
 
+def _parse_allowed_tools(raw: str) -> list[str]:
+    """Parse CLAUDE_ALLOWED_TOOLS string into a list of tool rules."""
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+def _show_allowed_tools(tools: list[str]) -> None:
+    """Display current allowed tools."""
+    if not tools:
+        console.print("  [dim]No pre-approved tools — using your Claude config as-is.[/dim]\n")
+        return
+    table = Table(show_header=True, padding=(0, 2))
+    table.add_column("Tool Rule", style="bold")
+    for tool in tools:
+        table.add_row(tool)
+    console.print(table)
+    console.print()
+
+
 def _step_allowed_tools(default: str = "") -> str:
-    """Step 8: Configure allowed tools."""
+    """Step 8: Configure allowed tools interactively. Returns comma-separated rules."""
     console.rule("Step 8 of 10: Allowed Tools")
     console.print("\n  Pre-approve specific tools so Claude doesn't prompt for them.")
     console.print("  [yellow]Warning:[/yellow] This overrides your Claude settings.json permissions.")
     console.print("  Leave empty to use your existing Claude config as-is.")
-    console.print("  Comma-separated. Supports patterns:")
-    console.print("  [dim]Bash(npm run *)[/dim]  — allow shell commands matching a pattern")
-    console.print("  [dim]Edit(./src/**)[/dim]   — allow edits to files under a path")
-    console.print("  [dim]Read[/dim]             — allow all file reads")
-    console.print("  [dim]WebFetch[/dim]         — allow web fetching")
-    return _prompt_with_default("Allowed tools", default)
+    console.print("  Patterns: [dim]Bash(npm run *)[/dim], [dim]Edit(./src/**)[/dim], [dim]Read[/dim], [dim]WebFetch[/dim]\n")
+
+    tools = _parse_allowed_tools(default)
+    _show_allowed_tools(tools)
+
+    while True:
+        action = Prompt.ask(
+            "  \\[a]dd / \\[r]emove / \\[d]one",
+            choices=["a", "r", "d"],
+            default="d",
+            console=console,
+        )
+        if action == "d":
+            break
+        elif action == "a":
+            rule = Prompt.ask("  Tool rule", console=console).strip()
+            if not rule:
+                continue
+            if rule in tools:
+                console.print(f"  [dim]{rule} already in list.[/dim]\n")
+                continue
+            tools.append(rule)
+            console.print(f"  [green]✓[/green] Added {rule}\n")
+            _show_allowed_tools(tools)
+        elif action == "r":
+            if not tools:
+                console.print("  [dim]Nothing to remove.[/dim]\n")
+                continue
+            rule = Prompt.ask("  Tool rule to remove", console=console).strip()
+            if rule in tools:
+                tools.remove(rule)
+                console.print(f"  [green]✓[/green] Removed {rule}\n")
+                _show_allowed_tools(tools)
+            else:
+                console.print(f"  [red]{rule} not found.[/red]\n")
+
+    return ",".join(tools)
 
 
 def _step_logging(defaults: dict[str, str]) -> tuple[str, bool]:
@@ -354,7 +403,7 @@ def _step_logging(defaults: dict[str, str]) -> tuple[str, bool]:
     console.rule("Step 9 of 10: Logging")
     console.print("\n  [bold]Log File[/bold]")
     console.print("  Write logs to a file instead of console output.")
-    console.print("  Useful with --detach mode. Leave empty to log to console only.")
+    console.print("  Required for --detach mode (no console in background).")
     log_file = _prompt_with_default(
         "Log file path (e.g. goose.log)",
         defaults.get("LOG_FILE", ""),
