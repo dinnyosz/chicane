@@ -1,11 +1,11 @@
-"""Tests for goose.app — session ID resolution."""
+"""Tests for chicane.app — session ID resolution."""
 
 import json
 from pathlib import Path
 
 import pytest
 
-from goose.app import _resolve_session_id
+from chicane.app import _resolve_session_id
 
 
 class TestResolveSessionId:

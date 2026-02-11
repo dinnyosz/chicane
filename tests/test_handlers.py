@@ -1,12 +1,12 @@
-"""Tests for goose.handlers."""
+"""Tests for chicane.handlers."""
 
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from goose.config import Config
-from goose.handlers import (
+from chicane.config import Config
+from chicane.handlers import (
     _bot_in_thread,
     _fetch_thread_history,
     _find_session_id_in_thread,
@@ -16,7 +16,7 @@ from goose.handlers import (
     register_handlers,
     SLACK_MAX_LENGTH,
 )
-from goose.sessions import SessionStore
+from chicane.sessions import SessionStore
 
 
 @pytest.fixture
@@ -145,7 +145,7 @@ class TestFetchThreadHistory:
 
         assert result is not None
         assert "[User] hello there" in result
-        assert "[Goose] Hi! How can I help?" in result
+        assert "[Chicane] Hi! How can I help?" in result
         # Current message should be excluded
         assert "follow-up question" not in result
 
@@ -165,7 +165,7 @@ class TestFetchThreadHistory:
 
         assert "this is the new prompt" not in result
         assert "[User] first" in result
-        assert "[Goose] response" in result
+        assert "[Chicane] response" in result
 
     @pytest.mark.asyncio
     async def test_strips_bot_mentions_from_user_messages(self):
@@ -226,7 +226,7 @@ class TestFetchThreadHistory:
         lines = result.split("\n")
         assert len(lines) == 2
         assert "[User] hello" in lines[0]
-        assert "[Goose] response" in lines[1]
+        assert "[Chicane] response" in lines[1]
 
     @pytest.mark.asyncio
     async def test_user_message_only_mention_skipped(self):
@@ -246,7 +246,7 @@ class TestFetchThreadHistory:
         assert result is not None
         lines = result.split("\n")
         assert len(lines) == 1
-        assert "[Goose] response" in lines[0]
+        assert "[Chicane] response" in lines[0]
 
 
 class TestThreadMentionRouting:
@@ -312,7 +312,7 @@ class TestThreadMentionRouting:
         await message_handler(event=event, client=client)
 
         # Now the app_mention handler fires
-        with patch("goose.handlers._process_message", new_callable=AsyncMock) as mock_process:
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
             await mention_handler(event=event, client=client)
             # The mention handler should have called _process_message
             mock_process.assert_called_once()
@@ -349,7 +349,7 @@ class TestThreadMentionRouting:
             "text": "<@UBOT123> follow up",
         }
 
-        with patch("goose.handlers._process_message", new_callable=AsyncMock) as mock_process:
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
             # message handler handles it (session exists)
             await message_handler(event=event, client=client)
             assert mock_process.call_count == 1

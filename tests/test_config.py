@@ -1,4 +1,4 @@
-"""Tests for goose.config."""
+"""Tests for chicane.config."""
 
 import os
 import sys
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from goose.config import Config, config_dir, env_file
+from chicane.config import Config, config_dir, env_file
 
 
 class TestConfig:
@@ -44,7 +44,7 @@ class TestConfig:
         monkeypatch.setenv("LOG_LEVEL", "DEBUG")
         monkeypatch.setenv("CLAUDE_MODEL", "sonnet")
         monkeypatch.setenv("CLAUDE_PERMISSION_MODE", "bypassPermissions")
-        monkeypatch.setenv("LOG_DIR", "/var/log/goose")
+        monkeypatch.setenv("LOG_DIR", "/var/log/chicane")
         monkeypatch.setenv("CLAUDE_ALLOWED_TOOLS", "Bash(npm run *), Read, Edit(./src/**)")
 
         config = Config.from_env()
@@ -54,7 +54,7 @@ class TestConfig:
         assert config.log_level == "DEBUG"
         assert config.claude_model == "sonnet"
         assert config.claude_permission_mode == "bypassPermissions"
-        assert config.log_dir == Path("/var/log/goose")
+        assert config.log_dir == Path("/var/log/chicane")
         assert config.claude_allowed_tools == ["Bash(npm run *)", "Read", "Edit(./src/**)"]
 
     def test_log_level_variants(self, monkeypatch):
@@ -197,15 +197,15 @@ class TestChannelDirs:
 
 class TestConfigDir:
     def test_override_via_env(self, monkeypatch):
-        monkeypatch.setenv("GOOSE_CONFIG_DIR", "/custom/path")
+        monkeypatch.setenv("CHICANE_CONFIG_DIR", "/custom/path")
         assert config_dir() == Path("/custom/path")
 
     def test_default_uses_platformdirs(self, monkeypatch):
-        monkeypatch.delenv("GOOSE_CONFIG_DIR", raising=False)
+        monkeypatch.delenv("CHICANE_CONFIG_DIR", raising=False)
         result = config_dir()
-        assert result.name == "goose-code"
+        assert result.name == "chicane"
         assert result.is_absolute()
 
     def test_env_file_inside_config_dir(self, monkeypatch):
-        monkeypatch.setenv("GOOSE_CONFIG_DIR", "/custom/path")
+        monkeypatch.setenv("CHICANE_CONFIG_DIR", "/custom/path")
         assert env_file() == Path("/custom/path/.env")

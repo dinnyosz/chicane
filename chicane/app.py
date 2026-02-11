@@ -1,4 +1,4 @@
-"""Goose application — Send coding tasks from Slack, get results back."""
+"""Chicane application — When Claude Code can't go straight, take the chicane."""
 
 import argparse
 import asyncio
@@ -37,8 +37,8 @@ def create_app(config: Config | None = None) -> AsyncApp:
     register_handlers(app, config, sessions)
 
     # Store references on the app for access elsewhere
-    app._goose_config = config  # type: ignore[attr-defined]
-    app._goose_sessions = sessions  # type: ignore[attr-defined]
+    app._chicane_config = config  # type: ignore[attr-defined]
+    app._chicane_sessions = sessions  # type: ignore[attr-defined]
 
     return app
 
@@ -55,7 +55,7 @@ async def start(config: Config | None = None) -> None:
     if config.log_dir:
         config.log_dir.mkdir(parents=True, exist_ok=True)
         from datetime import datetime
-        log_file = config.log_dir / f"goose-{datetime.now():%Y-%m-%d}.log"
+        log_file = config.log_dir / f"chicane-{datetime.now():%Y-%m-%d}.log"
         handlers.append(logging.FileHandler(str(log_file)))
 
     logging.basicConfig(level=log_level, format=log_format, handlers=handlers)
@@ -63,10 +63,10 @@ async def start(config: Config | None = None) -> None:
     app = create_app(config)
 
     handler = AsyncSocketModeHandler(app, config.slack_app_token)
-    logger.info("Starting Goose...")
+    logger.info("Starting Chicane...")
 
     await handler.connect_async()
-    logger.info("Goose is running. Press Ctrl+C to stop.")
+    logger.info("Chicane is running. Press Ctrl+C to stop.")
 
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
@@ -90,7 +90,7 @@ async def start(config: Config | None = None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# CLI: goose handoff
+# CLI: chicane handoff
 # ---------------------------------------------------------------------------
 
 
@@ -170,17 +170,17 @@ def handoff(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
-# CLI: goose install-skill
+# CLI: chicane install-skill
 # ---------------------------------------------------------------------------
 
 
 def install_skill(args: argparse.Namespace) -> None:
-    """Install the goose-handoff skill for Claude Code."""
-    # Resolve path to the goose binary
-    goose_path = shutil.which("goose")
-    if not goose_path:
+    """Install the chicane-handoff skill for Claude Code."""
+    # Resolve path to the chicane binary
+    chicane_path = shutil.which("chicane")
+    if not chicane_path:
         # Fallback: use the repo checkout
-        goose_path = str(Path(__file__).resolve().parent.parent / "goose")
+        chicane_path = str(Path(__file__).resolve().parent.parent / "chicane")
 
     # Read the bundled template
     template_path = Path(__file__).resolve().parent / "skill.md"
@@ -190,15 +190,15 @@ def install_skill(args: argparse.Namespace) -> None:
     template = template_path.read_text()
 
     # Replace placeholder
-    content = template.replace("{{GOOSE_PATH}}", goose_path)
+    content = template.replace("{{CHICANE_PATH}}", chicane_path)
 
-    # Write to ~/.claude/skills/goose-handoff/SKILL.md
-    target_dir = Path.home() / ".claude" / "skills" / "goose-handoff"
+    # Write to ~/.claude/skills/chicane-handoff/SKILL.md
+    target_dir = Path.home() / ".claude" / "skills" / "chicane-handoff"
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / "SKILL.md"
     target.write_text(content)
 
-    print(f"Installed goose-handoff skill to {target}")
+    print(f"Installed chicane-handoff skill to {target}")
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +206,7 @@ def install_skill(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 
-class _GooseParser(argparse.ArgumentParser):
+class _ChicaneParser(argparse.ArgumentParser):
     """ArgumentParser that shows our help instead of argparse's error message."""
 
     def error(self, message: str) -> None:
@@ -215,17 +215,17 @@ class _GooseParser(argparse.ArgumentParser):
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = _GooseParser(
-        prog="goose",
-        description="Goose — Send coding tasks from Slack, get results back",
+    parser = _ChicaneParser(
+        prog="chicane",
+        description="Chicane — When Claude Code can't go straight, take the chicane",
     )
     sub = parser.add_subparsers(dest="command")
 
-    # goose run (default)
+    # chicane run (default)
     run_parser = sub.add_parser("run", help="Start the Slack bot (default)")
     run_parser.add_argument("--detach", action="store_true", help="Run in the background (daemonize)")
 
-    # goose handoff
+    # chicane handoff
     ho = sub.add_parser("handoff", help="Post a handoff message to Slack")
     ho.add_argument("--session-id", default=None, help="Claude session ID (auto-detected from history if omitted)")
     ho.add_argument("--summary", required=True, help="Summary text for the handoff message")
@@ -233,38 +233,38 @@ def _build_parser() -> argparse.ArgumentParser:
     ho.add_argument("--cwd", default=None, help="Working directory to resolve channel from (defaults to $PWD)")
     ho.add_argument("--questions", default=None, help="Open questions to post as a thread reply")
 
-    # goose setup
+    # chicane setup
     sub.add_parser("setup", help="Guided setup wizard")
 
-    # goose install-skill
-    sub.add_parser("install-skill", help="Install the goose-handoff skill for Claude Code")
+    # chicane install-skill
+    sub.add_parser("install-skill", help="Install the chicane-handoff skill for Claude Code")
 
-    # goose help
+    # chicane help
     sub.add_parser("help", help="Show this help message")
 
     return parser
 
 
 def _print_help() -> None:
-    print("""Goose — Send coding tasks from Slack, get results back
+    print("""Chicane — When Claude Code can't go straight, take the chicane
 
-Usage: goose <command> [options]
+Usage: chicane <command> [options]
 
 Commands:
   setup            Guided setup wizard
   run              Start the Slack bot
   handoff          Post a handoff message to Slack
-  install-skill    Install the goose-handoff skill for Claude Code
+  install-skill    Install the chicane-handoff skill for Claude Code
   help             Show this help message
 
 Examples:
-  goose setup                                    Set up Goose
-  goose run                                      Start the bot
-  goose run --detach                              Start in the background
-  goose handoff --summary "..."                  Hand off a session to Slack
-  goose install-skill                            Install the handoff skill
+  chicane setup                                Set up Chicane
+  chicane run                                  Start the bot
+  chicane run --detach                          Start in the background
+  chicane handoff --summary "..."              Hand off a session to Slack
+  chicane install-skill                        Install the handoff skill
 
-Run 'goose <command> --help' for details on a specific command.""")
+Run 'chicane <command> --help' for details on a specific command.""")
 
 
 def _run_detached() -> None:
@@ -272,13 +272,13 @@ def _run_detached() -> None:
     config = Config.from_env()
     if not config.log_dir:
         print("Error: --detach requires LOG_DIR to be configured.", file=sys.stderr)
-        print("Run 'goose setup' to set a log directory.", file=sys.stderr)
+        print("Run 'chicane setup' to set a log directory.", file=sys.stderr)
         sys.exit(1)
 
     pid = os.fork()
     if pid > 0:
         # Parent — print PID and exit
-        print(f"Goose running in background (PID {pid}). Logs → {config.log_dir}")
+        print(f"Chicane running in background (PID {pid}). Logs → {config.log_dir}")
         sys.exit(0)
 
     # Child — detach from terminal

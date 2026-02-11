@@ -1,4 +1,4 @@
-"""Guided setup wizard for Goose (goose setup)."""
+"""Guided setup wizard for Chicane (chicane setup)."""
 
 import json
 import subprocess
@@ -113,7 +113,7 @@ def _parse_allowed_users(raw: str) -> list[str]:
 def _show_allowed_users(users: list[str]) -> None:
     """Display current allowed users."""
     if not users:
-        console.print("  [dim]No user restrictions — all workspace users can use Goose.[/dim]\n")
+        console.print("  [dim]No user restrictions — all workspace users can use Chicane.[/dim]\n")
         return
     table = Table(show_header=True, padding=(0, 2))
     table.add_column("Member ID", style="bold")
@@ -198,7 +198,7 @@ def _step_app_token(default: str = "") -> str:
     console.print("""
   1. In the sidebar, go to "Basic Information"
   2. Scroll to "App-Level Tokens" -> "Generate Token and Scopes"
-  3. Name it anything (e.g. "goose-socket")
+  3. Name it anything (e.g. "chicane-socket")
   4. Add the "connections:write" scope
   5. Click "Generate" and copy the token (starts with xapp-)
 """)
@@ -213,7 +213,7 @@ def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
     Returns (base_directory, channel_dirs_string).
     """
     console.rule("Step 4 of 10: Directory Settings")
-    console.print("\n  [yellow]Note:[/yellow] Goose will run Claude Code in these directories remotely.")
+    console.print("\n  [yellow]Note:[/yellow] Chicane will run Claude Code in these directories remotely.")
     console.print("  Only add directories you trust and are okay to tinker with.\n")
 
     # Base directory
@@ -229,7 +229,7 @@ def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
     console.print()
     console.rule("Channel Mappings", style="dim")
     console.print("  Map Slack channels to working directories.")
-    console.print("  Each mapping allows Goose to run Claude Code in that directory.\n")
+    console.print("  Each mapping allows Chicane to run Claude Code in that directory.\n")
 
     mappings = _parse_channel_dirs(defaults.get("CHANNEL_DIRS", ""))
     _show_channel_table(mappings)
@@ -403,7 +403,7 @@ def _step_logging(defaults: dict[str, str]) -> tuple[str, str]:
     console.rule("Step 9 of 10: Logging")
     from platformdirs import user_log_dir
 
-    default_log_dir = defaults.get("LOG_DIR", "") or user_log_dir("goose-code", appauthor=False)
+    default_log_dir = defaults.get("LOG_DIR", "") or user_log_dir("chicane", appauthor=False)
     console.print("\n  [bold]Log Directory[/bold]")
     console.print("  Directory for log files (a new file is created per day).")
     console.print("  Logs go to both console and file. Required for --detach mode.")
@@ -462,7 +462,7 @@ def _run_wizard(args) -> None:
         _write_env(env_path, env_values)
 
     console.print()
-    console.print(Panel("[bold]Goose — Setup Wizard[/bold]"))
+    console.print(Panel("[bold]Chicane — Setup Wizard[/bold]"))
 
     has_tokens = bool(existing.get("SLACK_BOT_TOKEN") and existing.get("SLACK_APP_TOKEN"))
 
@@ -516,6 +516,6 @@ def _run_wizard(args) -> None:
     console.print()
     console.print(Panel(
         f"[green]✓[/green] Config saved to {env_path}\n"
-        "[green]✓[/green] Next: run [bold]goose run[/bold]\n"
-        "[green]✓[/green] Tip: invite @Goose with /invite @Goose"
+        "[green]✓[/green] Next: run [bold]chicane run[/bold]\n"
+        "[green]✓[/green] Tip: invite @Chicane with /invite @Chicane"
     ))

@@ -78,18 +78,18 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
             return
 
         # Channel thread follow-ups: respond if it's a reply in a thread
-        # that Goose already has a session for, OR if the bot previously
+        # that Chicane already has a session for, OR if the bot previously
         # posted in the thread (survives bot restarts)
         thread_ts = event.get("thread_ts")
         if thread_ts:
-            is_goose_thread = sessions.has(thread_ts)
-            if not is_goose_thread:
+            is_chicane_thread = sessions.has(thread_ts)
+            if not is_chicane_thread:
                 logger.info(f"No session for thread {thread_ts}, checking Slack history")
-                is_goose_thread = await _bot_in_thread(
+                is_chicane_thread = await _bot_in_thread(
                     thread_ts, event["channel"], client
                 )
-                logger.info(f"Bot in thread {thread_ts}: {is_goose_thread}")
-            if is_goose_thread:
+                logger.info(f"Bot in thread {thread_ts}: {is_chicane_thread}")
+            if is_chicane_thread:
                 if _should_ignore(event, config):
                     return
                 # Mark in mention set too to prevent app_mention from
@@ -97,7 +97,7 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
                 _mark_processed(event["ts"], mention_processed_ts)
                 await _process_message(event, text, client, config, sessions)
                 return
-            # Not a Goose thread — don't handle here. If the user @mentioned
+            # Not a Chicane thread — don't handle here. If the user @mentioned
             # the bot, the app_mention handler will pick it up and start
             # a new session for this thread.
             return
@@ -325,7 +325,7 @@ async def _fetch_thread_history(
                 continue
 
             if msg.get("user") == bot_id:
-                lines.append(f"[Goose] {text}")
+                lines.append(f"[Chicane] {text}")
             else:
                 # Strip bot mentions from user messages
                 clean = re.sub(r"<@[A-Z0-9]+>\s*", "", text).strip()

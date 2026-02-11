@@ -1,8 +1,8 @@
-"""Tests for goose.claude."""
+"""Tests for chicane.claude."""
 
 import pytest
 
-from goose.claude import ClaudeEvent, ClaudeSession
+from chicane.claude import ClaudeEvent, ClaudeSession
 
 
 class TestClaudeEvent:
@@ -156,4 +156,3 @@ class TestClaudeSession:
         session = ClaudeSession()
         cmd = session._build_command("do stuff")
         assert "--allowedTools" not in cmd
-

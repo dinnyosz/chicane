@@ -1,8 +1,8 @@
-# Slaude — Implementation Plan
+# Chicane — Implementation Plan
 
 ## Goal
 
-Build a Slack bot ("Slaude") that bridges Slack messages to local Claude Code CLI sessions, allowing you to send coding tasks from your phone and have them executed on your machine.
+Build a Slack bot ("Chicane") that bridges Slack messages to local Claude Code CLI sessions, allowing you to send coding tasks from your phone and have them executed on your machine.
 
 **Stack:** Python + slack-bolt + Claude Code CLI (`claude --print --output-format stream-json`)
 
@@ -34,7 +34,7 @@ Key design: **extensible handler pattern** — the bot routes messages through h
 - [ ] Restructure into a proper package:
   ```
   slack-bot/
-  ├── slaude/
+  ├── chicane/
   │   ├── __init__.py
   │   ├── app.py          # slack-bolt app setup + event routing
   │   ├── claude.py        # Claude CLI subprocess wrapper
@@ -80,11 +80,11 @@ Key design: **extensible handler pattern** — the bot routes messages through h
 
 ## Phase 5: MCP Server Mode
 
-Expose Slaude as an MCP server so any Claude Code session can send Slack messages (e.g. notify you when a long-running task finishes).
+Expose Chicane as an MCP server so any Claude Code session can send Slack messages (e.g. notify you when a long-running task finishes).
 
-- [ ] `slaude/mcp_server.py` — MCP tool definitions (`slack_send_message`, `slack_notify`)
+- [ ] `chicane/mcp_server.py` — MCP tool definitions (`slack_send_message`, `slack_notify`)
 - [ ] Register as an MCP server in `~/.claude/settings.json`
-- [ ] Any Claude session can call `mcp__slaude__slack_notify` to ping you
+- [ ] Any Claude session can call `mcp__chicane__slack_notify` to ping you
 
 ---
 

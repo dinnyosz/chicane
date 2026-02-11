@@ -1,12 +1,12 @@
-"""Tests for goose.sessions."""
+"""Tests for chicane.sessions."""
 
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from goose.config import Config
-from goose.sessions import SessionStore
+from chicane.config import Config
+from chicane.sessions import SessionStore
 
 
 @pytest.fixture
@@ -81,7 +81,7 @@ class TestSessionStore:
         )
         store = SessionStore()
         session = store.get_or_create("thread-1", config)
-        assert str(session.cwd).startswith("/tmp/goose-") or "goose-" in str(session.cwd)
+        assert str(session.cwd).startswith("/tmp/chicane-") or "chicane-" in str(session.cwd)
 
     def test_sessions_include_slack_system_prompt(self, store, config):
         session = store.get_or_create("thread-1", config)

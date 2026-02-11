@@ -9,17 +9,17 @@ from platformdirs import user_config_dir
 
 
 def config_dir() -> Path:
-    """Return the Goose configuration directory.
+    """Return the Chicane configuration directory.
 
-    Override with GOOSE_CONFIG_DIR env var. Platform defaults:
-    - macOS: ~/Library/Application Support/goose
-    - Linux: ~/.config/goose (or $XDG_CONFIG_HOME/goose)
-    - Windows: %APPDATA%/goose
+    Override with CHICANE_CONFIG_DIR env var. Platform defaults:
+    - macOS: ~/Library/Application Support/chicane
+    - Linux: ~/.config/chicane (or $XDG_CONFIG_HOME/chicane)
+    - Windows: %APPDATA%/chicane
     """
-    override = os.environ.get("GOOSE_CONFIG_DIR")
+    override = os.environ.get("CHICANE_CONFIG_DIR")
     if override:
         return Path(override)
-    return Path(user_config_dir("goose-code", appauthor=False))
+    return Path(user_config_dir("chicane", appauthor=False))
 
 
 def env_file() -> Path:
@@ -101,7 +101,7 @@ class Config:
         if not bot_token or not app_token:
             raise ValueError(
                 "SLACK_BOT_TOKEN and SLACK_APP_TOKEN must be set. "
-                "Run 'goose setup' to configure."
+                "Run 'chicane setup' to configure."
             )
 
         base_dir = os.environ.get("BASE_DIRECTORY")

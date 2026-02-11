@@ -1,12 +1,12 @@
-# Slaude Setup Guide
+# Chicane Setup Guide
 
-**Slaude** (Slack + Claude) is your always-available coding assistant. She bridges Slack and your local Claude Code instances, so you can send her tasks from your phone and she'll handle them on your machine.
+**Chicane** (Slack + Claude) is your always-available coding assistant. She bridges Slack and your local Claude Code instances, so you can send her tasks from your phone and she'll handle them on your machine.
 
 Based on **mpociot/claude-code-slack-bot**.
 
 ---
 
-## What Slaude Can Do
+## What Chicane Can Do
 
 | Feature | Support |
 |---------|---------|
@@ -54,7 +54,7 @@ npm install
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps)
 2. Click **Create New App** → **From scratch**
-3. Name it "Slaude", select workspace
+3. Name it "Chicane", select workspace
 
 #### Configure OAuth Scopes
 
@@ -201,7 +201,7 @@ cwd
 **In channels** (mention her):
 
 ```
-@Slaude fix the login bug in auth.ts
+@Chicane fix the login bug in auth.ts
 ```
 
 **In DMs** (no mention needed):
@@ -212,13 +212,13 @@ add unit tests for the user service
 
 ### Conversation Flow
 
-Slaude's clarifying questions appear in the thread:
+Chicane's clarifying questions appear in the thread:
 
 ```
-You:    @Slaude add caching to the API
-Slaude: What caching strategy do you prefer - Redis, in-memory, or file-based?
+You:    @Chicane add caching to the API
+Chicane: What caching strategy do you prefer - Redis, in-memory, or file-based?
 You:    Redis
-Slaude: Got it, implementing Redis caching...
+Chicane: Got it, implementing Redis caching...
 ```
 
 ---
@@ -253,11 +253,11 @@ Commands:
 
 ### Linux (systemd)
 
-Create `/etc/systemd/system/slaude.service`:
+Create `/etc/systemd/system/chicane.service`:
 
 ```ini
 [Unit]
-Description=Slaude - Claude Code Slack Bot
+Description=Chicane - Claude Code Slack Bot
 After=network.target
 
 [Service]
@@ -275,13 +275,13 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable slaude
-sudo systemctl start slaude
+sudo systemctl enable chicane
+sudo systemctl start chicane
 ```
 
 ### macOS (launchd)
 
-Create `~/Library/LaunchAgents/com.slaude.plist`:
+Create `~/Library/LaunchAgents/com.chicane.plist`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -289,7 +289,7 @@ Create `~/Library/LaunchAgents/com.slaude.plist`:
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.slaude</string>
+    <string>com.chicane</string>
     <key>ProgramArguments</key>
     <array>
         <string>/usr/local/bin/npm</string>
@@ -303,15 +303,15 @@ Create `~/Library/LaunchAgents/com.slaude.plist`:
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/tmp/slaude.log</string>
+    <string>/tmp/chicane.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/slaude.err</string>
+    <string>/tmp/chicane.err</string>
 </dict>
 </plist>
 ```
 
 ```bash
-launchctl load ~/Library/LaunchAgents/com.slaude.plist
+launchctl load ~/Library/LaunchAgents/com.chicane.plist
 ```
 
 ---
@@ -333,14 +333,14 @@ Set `BASE_DIRECTORY=/home/user/projects/` in `.env`, then:
 
 ```
 cwd backend
-@Slaude add rate limiting to the auth endpoints
+@Chicane add rate limiting to the auth endpoints
 ```
 
 ---
 
 ## Troubleshooting
 
-### Slaude not responding
+### Chicane not responding
 
 1. Check she's running (`npm run dev`)
 2. Verify all env vars are set
@@ -380,8 +380,8 @@ Set `DEBUG=true` in `.env` for verbose logging.
 | Check current directory | `cwd` or `get directory` |
 | List MCP servers | `mcp` |
 | Reload MCP config | `mcp reload` |
-| Ask Slaude (channel) | `@Slaude your request` |
-| Ask Slaude (DM) | Just type your request |
+| Ask Chicane (channel) | `@Chicane your request` |
+| Ask Chicane (DM) | Just type your request |
 
 ---
 

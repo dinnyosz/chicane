@@ -1,0 +1,5 @@
+# Magaldi configuration for chicane
+# Scope groups related repositories (e.g., org name, username)
+
+scope: code
+repository: chicane

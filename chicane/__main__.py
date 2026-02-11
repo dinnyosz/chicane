@@ -1,4 +1,4 @@
-"""Entry point: python -m goose"""
+"""Entry point: python -m chicane"""
 
 from .app import main
 

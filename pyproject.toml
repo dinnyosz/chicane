@@ -1,7 +1,7 @@
 [project]
-name = "goose-code"
+name = "chicane"
 version = "0.1.0"
-description = "Slack + Claude Code bridge — send coding tasks from Slack, get results back"
+description = "Chicane — When Claude Code can't go straight, take the chicane. A Slack bridge for Claude Code."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"
@@ -29,14 +29,14 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/dinnyosz/goose-code"
-Repository = "https://github.com/dinnyosz/goose-code"
+Homepage = "https://github.com/dinnyosz/chicane"
+Repository = "https://github.com/dinnyosz/chicane"
 
 [project.scripts]
-goose = "goose.app:main"
+chicane = "chicane.app:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["goose"]
+packages = ["chicane"]
 
 [build-system]
 requires = ["hatchling"]

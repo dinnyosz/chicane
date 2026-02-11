@@ -1,6 +1,6 @@
 # Slack App Setup
 
-Step-by-step guide to create and configure a Slack app for Goose.
+Step-by-step guide to create and configure a Slack app for Chicane.
 
 ## 1. Create the app
 
@@ -24,7 +24,7 @@ Step-by-step guide to create and configure a Slack app for Goose.
 1. In the sidebar, go to **Basic Information**
 2. Scroll down to **App-Level Tokens**
 3. Click **Generate Token and Scopes**
-4. Name it anything (e.g. `goose-socket`)
+4. Name it anything (e.g. `chicane-socket`)
 5. Add the `connections:write` scope
 6. Click **Generate**
 7. Copy the token (`xapp-...`)
@@ -54,6 +54,6 @@ SLACK_APP_TOKEN=xapp-your-app-token
 The bot can respond to DMs immediately. To use it in channels:
 
 1. Open the channel in Slack
-2. Type `/invite @Goose` (or whatever you named the bot)
+2. Type `/invite @Chicane` (or whatever you named the bot)
 
 The bot will now respond to @mentions in that channel.
