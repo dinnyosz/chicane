@@ -477,40 +477,50 @@ class TestStepAllowedTools:
 
 
 class TestStepLogging:
-    def test_all_empty(self):
-        with patch("goose.setup.Prompt.ask", return_value=""), \
-             patch("goose.setup.Confirm.ask", return_value=False), \
+    def test_all_defaults(self):
+        with patch("goose.setup.Prompt.ask", side_effect=["", "INFO"]), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
-            log_dir, debug = _step_logging({})
+            log_dir, log_level = _step_logging({})
             assert log_dir == ""
-            assert debug is False
+            assert log_level == "INFO"
 
     def test_log_dir_set(self):
-        with patch("goose.setup.Prompt.ask", return_value="/var/log/goose"), \
-             patch("goose.setup.Confirm.ask", return_value=False), \
+        with patch("goose.setup.Prompt.ask", side_effect=["/var/log/goose", "INFO"]), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
-            log_dir, debug = _step_logging({})
+            log_dir, log_level = _step_logging({})
             assert log_dir == "/var/log/goose"
-            assert debug is False
+            assert log_level == "INFO"
 
-    def test_debug_enabled(self):
-        with patch("goose.setup.Prompt.ask", return_value=""), \
-             patch("goose.setup.Confirm.ask", return_value=True), \
+    def test_debug_level(self):
+        with patch("goose.setup.Prompt.ask", side_effect=["", "DEBUG"]), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
-            _, debug = _step_logging({})
-            assert debug is True
+            _, log_level = _step_logging({})
+            assert log_level == "DEBUG"
+
+    def test_case_insensitive(self):
+        with patch("goose.setup.Prompt.ask", side_effect=["", "warning"]), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
+            _, log_level = _step_logging({})
+            assert log_level == "WARNING"
+
+    def test_invalid_reprompts(self):
+        with patch("goose.setup.Prompt.ask", side_effect=["", "almafa", "ERROR"]), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
+            _, log_level = _step_logging({})
+            assert log_level == "ERROR"
 
     def test_defaults_kept(self):
-        with patch("goose.setup.Prompt.ask", return_value="/var/log/goose"), \
-             patch("goose.setup.Confirm.ask", return_value=True), \
+        with patch("goose.setup.Prompt.ask", side_effect=["/var/log/goose", "DEBUG"]), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
-            log_dir, debug = _step_logging({"LOG_DIR": "/var/log/goose", "DEBUG": "true"})
+            log_dir, log_level = _step_logging({"LOG_DIR": "/var/log/goose", "LOG_LEVEL": "DEBUG"})
             assert log_dir == "/var/log/goose"
-            assert debug is True
+            assert log_level == "DEBUG"
 
 
 class TestWriteEnv:
@@ -538,10 +548,8 @@ class TestSetupCommand:
 
     def test_fresh_setup_writes_env(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GOOSE_CONFIG_DIR", str(tmp_path))
-        # Prompt.ask: base dir, done(channels), done(users), model, permission, done(tools), log_dir
-        prompt_values = ["", "d", "d", "", "", "d", ""]
-        # Confirm.ask: debug=False
-        confirm_values = [False]
+        # Prompt.ask: base dir, done(channels), done(users), model, permission, done(tools), log_dir, log_level
+        prompt_values = ["", "d", "d", "", "", "d", "", "INFO"]
         # console.input: press Enter (step1), bot token, app token
         input_values = [
             "",              # Step 1: press Enter
@@ -549,7 +557,6 @@ class TestSetupCommand:
             "xapp-app456",   # App token
         ]
         with patch("goose.setup.Prompt.ask", side_effect=prompt_values), \
-             patch("goose.setup.Confirm.ask", side_effect=confirm_values), \
              patch("goose.setup.console.input", side_effect=input_values), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.print_json"), \
@@ -568,10 +575,10 @@ class TestSetupCommand:
         (tmp_path / ".env").write_text(
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nBASE_DIRECTORY=/old\n"
         )
-        # Prompt.ask: base dir (keep), done(channels), done(users), model, permission, done(tools), log_dir
-        prompt_values = ["/old", "d", "d", "", "", "d", ""]
-        # Confirm.ask: skip step1=True, debug=False
-        confirm_values = [True, False]
+        # Prompt.ask: base dir (keep), done(channels), done(users), model, permission, done(tools), log_dir, log_level
+        prompt_values = ["/old", "d", "d", "", "", "d", "", "INFO"]
+        # Confirm.ask: skip step1=True
+        confirm_values = [True]
         # console.input: bot token (empty=keep), app token (empty=keep)
         input_values = [
             "",    # Bot token (keep default)
@@ -596,10 +603,10 @@ class TestSetupCommand:
         (tmp_path / ".env").write_text(
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nCHANNEL_DIRS=old-proj\n"
         )
-        # Prompt.ask: base dir, add channels, done(users), model, permission, done(tools), log_dir
-        prompt_values = ["", "a", "new-proj", "new-proj", "a", "extra", "extra", "d", "d", "", "", "d", ""]
-        # Confirm.ask: skip step1=True, debug=False
-        confirm_values = [True, False]
+        # Prompt.ask: base dir, add channels, done(users), model, permission, done(tools), log_dir, log_level
+        prompt_values = ["", "a", "new-proj", "new-proj", "a", "extra", "extra", "d", "d", "", "", "d", "", "INFO"]
+        # Confirm.ask: skip step1=True
+        confirm_values = [True]
         # console.input: bot token override, app token keep
         input_values = [
             "xoxb-new",   # Override bot token
@@ -622,10 +629,8 @@ class TestSetupCommand:
 
     def test_token_validation_reprompts(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GOOSE_CONFIG_DIR", str(tmp_path))
-        # Prompt.ask: base dir, done (channels), done (users), model, permission, done (tools), log_file
-        prompt_values = ["", "d", "d", "", "", "d", ""]
-        # Confirm.ask: debug=False
-        confirm_values = [False]
+        # Prompt.ask: base dir, done (channels), done (users), model, permission, done (tools), log_dir, log_level
+        prompt_values = ["", "d", "d", "", "", "d", "", "INFO"]
         # console.input: press Enter (step1), bad bot, good bot, bad app, good app
         input_values = [
             "",              # Step 1: press Enter
@@ -635,7 +640,6 @@ class TestSetupCommand:
             "xapp-good",    # Valid app token
         ]
         with patch("goose.setup.Prompt.ask", side_effect=prompt_values), \
-             patch("goose.setup.Confirm.ask", side_effect=confirm_values), \
              patch("goose.setup.console.input", side_effect=input_values), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.print_json"), \

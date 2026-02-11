@@ -398,8 +398,8 @@ def _step_allowed_tools(default: str = "") -> str:
     return ",".join(tools)
 
 
-def _step_logging(defaults: dict[str, str]) -> tuple[str, bool]:
-    """Step 9: Configure log directory and debug. Returns (log_dir, debug)."""
+def _step_logging(defaults: dict[str, str]) -> tuple[str, str]:
+    """Step 9: Configure log directory and log level. Returns (log_dir, log_level)."""
     console.rule("Step 9 of 10: Logging")
     console.print("\n  [bold]Log Directory[/bold]")
     console.print("  Directory for log files (a new file is created per day).")
@@ -408,11 +408,21 @@ def _step_logging(defaults: dict[str, str]) -> tuple[str, bool]:
         "Log directory (e.g. /var/log/goose)",
         defaults.get("LOG_DIR", ""),
     )
-    console.print("\n  [bold]Debug[/bold]")
-    console.print("  Verbose logging (to console, or log file if configured).")
-    current_debug = defaults.get("DEBUG", "").lower() in ("1", "true", "yes")
-    debug = Confirm.ask("  Enable debug logging", default=current_debug, console=console)
-    return log_dir, debug
+    valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR"}
+    console.print("\n  [bold]Log Level[/bold]")
+    console.print("  Messages below this level are suppressed.")
+    console.print("  DEBUG > INFO > WARNING > ERROR (most → least verbose)")
+    while True:
+        log_level = _prompt_with_default(
+            "Log level",
+            defaults.get("LOG_LEVEL", "INFO"),
+        ).upper()
+        if not log_level:
+            log_level = "INFO"
+        if log_level in valid_levels:
+            break
+        console.print(f"  [red]Invalid level. Choose from: {', '.join(sorted(valid_levels))}[/red]\n")
+    return log_dir, log_level
 
 
 def _write_env(path: Path, values: dict[str, str]) -> None:
@@ -493,9 +503,9 @@ def _run_wizard(args) -> None:
     _save()
 
     # Step 9: Logging
-    log_dir, debug = _step_logging(existing)
+    log_dir, log_level = _step_logging(existing)
     _set_or_clear("LOG_DIR", log_dir)
-    _set_or_clear("DEBUG", "true" if debug else "")
+    _set_or_clear("LOG_LEVEL", log_level if log_level != "INFO" else "")
     _save()
 
     # Step 10: Done

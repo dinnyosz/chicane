@@ -48,7 +48,7 @@ async def start(config: Config | None = None) -> None:
     if config is None:
         config = Config.from_env()
 
-    log_level = logging.DEBUG if config.debug else logging.INFO
+    log_level = getattr(logging, config.log_level, logging.INFO)
     log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
     handlers: list[logging.Handler] = [logging.StreamHandler()]

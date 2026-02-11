@@ -16,7 +16,7 @@ class TestConfig:
         # Clear optional vars
         monkeypatch.delenv("BASE_DIRECTORY", raising=False)
         monkeypatch.delenv("ALLOWED_USERS", raising=False)
-        monkeypatch.delenv("DEBUG", raising=False)
+        monkeypatch.delenv("LOG_LEVEL", raising=False)
         monkeypatch.delenv("LOG_DIR", raising=False)
 
         config = Config.from_env()
@@ -25,7 +25,7 @@ class TestConfig:
         assert config.slack_app_token == "xapp-test"
         assert config.base_directory is None
         assert config.allowed_users == []
-        assert config.debug is False
+        assert config.log_level == "INFO"
         assert config.log_dir is None
         assert config.claude_allowed_tools == []
 
@@ -41,7 +41,7 @@ class TestConfig:
         monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
         monkeypatch.setenv("BASE_DIRECTORY", "/tmp/projects")
         monkeypatch.setenv("ALLOWED_USERS", "U123, U456")
-        monkeypatch.setenv("DEBUG", "true")
+        monkeypatch.setenv("LOG_LEVEL", "DEBUG")
         monkeypatch.setenv("CLAUDE_MODEL", "sonnet")
         monkeypatch.setenv("CLAUDE_PERMISSION_MODE", "bypassPermissions")
         monkeypatch.setenv("LOG_DIR", "/var/log/goose")
@@ -51,23 +51,25 @@ class TestConfig:
 
         assert str(config.base_directory) == "/tmp/projects"
         assert config.allowed_users == ["U123", "U456"]
-        assert config.debug is True
+        assert config.log_level == "DEBUG"
         assert config.claude_model == "sonnet"
         assert config.claude_permission_mode == "bypassPermissions"
         assert config.log_dir == Path("/var/log/goose")
         assert config.claude_allowed_tools == ["Bash(npm run *)", "Read", "Edit(./src/**)"]
 
-    def test_debug_variants(self, monkeypatch):
+    def test_log_level_variants(self, monkeypatch):
         monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
         monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
 
-        for val in ("1", "true", "True", "yes", "YES"):
-            monkeypatch.setenv("DEBUG", val)
-            assert Config.from_env().debug is True
+        for val, expected in [("debug", "DEBUG"), ("WARNING", "WARNING"), ("error", "ERROR")]:
+            monkeypatch.setenv("LOG_LEVEL", val)
+            assert Config.from_env().log_level == expected
 
-        for val in ("0", "false", "no", ""):
-            monkeypatch.setenv("DEBUG", val)
-            assert Config.from_env().debug is False
+    def test_log_level_default(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.delenv("LOG_LEVEL", raising=False)
+        assert Config.from_env().log_level == "INFO"
 
     def test_empty_allowed_users(self, monkeypatch):
         monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")

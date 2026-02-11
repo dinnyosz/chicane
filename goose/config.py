@@ -39,7 +39,7 @@ class Config:
     base_directory: Path | None = None
     allowed_users: list[str] = field(default_factory=list)
     channel_dirs: dict[str, str] = field(default_factory=dict)
-    debug: bool = False
+    log_level: str = "INFO"
     log_dir: Path | None = None
     claude_model: str | None = None
     claude_permission_mode: str = "acceptEdits"
@@ -117,7 +117,7 @@ class Config:
             base_directory=Path(base_dir) if base_dir else None,
             allowed_users=[u.strip() for u in allowed.split(",") if u.strip()],
             channel_dirs=channel_dirs,
-            debug=os.environ.get("DEBUG", "").lower() in ("1", "true", "yes"),
+            log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
             log_dir=Path(log_dir) if log_dir else None,
             claude_model=model,
             claude_permission_mode=perm_mode,
