@@ -399,20 +399,20 @@ def _step_allowed_tools(default: str = "") -> str:
 
 
 def _step_logging(defaults: dict[str, str]) -> tuple[str, bool]:
-    """Step 9: Configure log file and debug. Returns (log_file, debug)."""
+    """Step 9: Configure log directory and debug. Returns (log_dir, debug)."""
     console.rule("Step 9 of 10: Logging")
-    console.print("\n  [bold]Log File[/bold]")
-    console.print("  Write logs to a file instead of console output.")
+    console.print("\n  [bold]Log Directory[/bold]")
+    console.print("  Directory for log files (a new file is created per day).")
     console.print("  Required for --detach mode (no console in background).")
-    log_file = _prompt_with_default(
-        "Log file path (e.g. goose.log)",
-        defaults.get("LOG_FILE", ""),
+    log_dir = _prompt_with_default(
+        "Log directory (e.g. /var/log/goose)",
+        defaults.get("LOG_DIR", ""),
     )
     console.print("\n  [bold]Debug[/bold]")
     console.print("  Verbose logging (to console, or log file if configured).")
     current_debug = defaults.get("DEBUG", "").lower() in ("1", "true", "yes")
     debug = Confirm.ask("  Enable debug logging", default=current_debug, console=console)
-    return log_file, debug
+    return log_dir, debug
 
 
 def _write_env(path: Path, values: dict[str, str]) -> None:
@@ -493,8 +493,8 @@ def _run_wizard(args) -> None:
     _save()
 
     # Step 9: Logging
-    log_file, debug = _step_logging(existing)
-    _set_or_clear("LOG_FILE", log_file)
+    log_dir, debug = _step_logging(existing)
+    _set_or_clear("LOG_DIR", log_dir)
     _set_or_clear("DEBUG", "true" if debug else "")
     _save()
 

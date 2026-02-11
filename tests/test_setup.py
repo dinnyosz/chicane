@@ -482,17 +482,17 @@ class TestStepLogging:
              patch("goose.setup.Confirm.ask", return_value=False), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
-            log_file, debug = _step_logging({})
-            assert log_file == ""
+            log_dir, debug = _step_logging({})
+            assert log_dir == ""
             assert debug is False
 
-    def test_log_file_set(self):
-        with patch("goose.setup.Prompt.ask", return_value="goose.log"), \
+    def test_log_dir_set(self):
+        with patch("goose.setup.Prompt.ask", return_value="/var/log/goose"), \
              patch("goose.setup.Confirm.ask", return_value=False), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
-            log_file, debug = _step_logging({})
-            assert log_file == "goose.log"
+            log_dir, debug = _step_logging({})
+            assert log_dir == "/var/log/goose"
             assert debug is False
 
     def test_debug_enabled(self):
@@ -504,12 +504,12 @@ class TestStepLogging:
             assert debug is True
 
     def test_defaults_kept(self):
-        with patch("goose.setup.Prompt.ask", return_value="goose.log"), \
+        with patch("goose.setup.Prompt.ask", return_value="/var/log/goose"), \
              patch("goose.setup.Confirm.ask", return_value=True), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
-            log_file, debug = _step_logging({"LOG_FILE": "goose.log", "DEBUG": "true"})
-            assert log_file == "goose.log"
+            log_dir, debug = _step_logging({"LOG_DIR": "/var/log/goose", "DEBUG": "true"})
+            assert log_dir == "/var/log/goose"
             assert debug is True
 
 
@@ -538,7 +538,7 @@ class TestSetupCommand:
 
     def test_fresh_setup_writes_env(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GOOSE_CONFIG_DIR", str(tmp_path))
-        # Prompt.ask: base dir, done(channels), done(users), model, permission, done(tools), log_file
+        # Prompt.ask: base dir, done(channels), done(users), model, permission, done(tools), log_dir
         prompt_values = ["", "d", "d", "", "", "d", ""]
         # Confirm.ask: debug=False
         confirm_values = [False]
@@ -568,7 +568,7 @@ class TestSetupCommand:
         (tmp_path / ".env").write_text(
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nBASE_DIRECTORY=/old\n"
         )
-        # Prompt.ask: base dir (keep), done(channels), done(users), model, permission, done(tools), log_file
+        # Prompt.ask: base dir (keep), done(channels), done(users), model, permission, done(tools), log_dir
         prompt_values = ["/old", "d", "d", "", "", "d", ""]
         # Confirm.ask: skip step1=True, debug=False
         confirm_values = [True, False]
@@ -596,7 +596,7 @@ class TestSetupCommand:
         (tmp_path / ".env").write_text(
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nCHANNEL_DIRS=old-proj\n"
         )
-        # Prompt.ask: base dir, add channels, done(users), model, permission, done(tools), log_file
+        # Prompt.ask: base dir, add channels, done(users), model, permission, done(tools), log_dir
         prompt_values = ["", "a", "new-proj", "new-proj", "a", "extra", "extra", "d", "d", "", "", "d", ""]
         # Confirm.ask: skip step1=True, debug=False
         confirm_values = [True, False]

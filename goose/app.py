@@ -53,9 +53,11 @@ async def start(config: Config | None = None) -> None:
         "level": log_level,
         "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     }
-    if config.log_file:
-        config.log_file.parent.mkdir(parents=True, exist_ok=True)
-        log_kwargs["filename"] = str(config.log_file)
+    if config.log_dir:
+        config.log_dir.mkdir(parents=True, exist_ok=True)
+        from datetime import datetime
+        log_file = config.log_dir / f"goose-{datetime.now():%Y-%m-%d}.log"
+        log_kwargs["filename"] = str(log_file)
     logging.basicConfig(**log_kwargs)
 
     app = create_app(config)
@@ -268,15 +270,15 @@ Run 'goose <command> --help' for details on a specific command.""")
 def _run_detached() -> None:
     """Fork into background and run the bot as a daemon."""
     config = Config.from_env()
-    if not config.log_file:
-        print("Error: --detach requires LOG_FILE to be configured.", file=sys.stderr)
-        print("Run 'goose setup' to set a log file path.", file=sys.stderr)
+    if not config.log_dir:
+        print("Error: --detach requires LOG_DIR to be configured.", file=sys.stderr)
+        print("Run 'goose setup' to set a log directory.", file=sys.stderr)
         sys.exit(1)
 
     pid = os.fork()
     if pid > 0:
         # Parent — print PID and exit
-        print(f"Goose running in background (PID {pid}). Logs → {config.log_file}")
+        print(f"Goose running in background (PID {pid}). Logs → {config.log_dir}")
         sys.exit(0)
 
     # Child — detach from terminal

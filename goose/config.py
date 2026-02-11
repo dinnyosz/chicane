@@ -40,7 +40,7 @@ class Config:
     allowed_users: list[str] = field(default_factory=list)
     channel_dirs: dict[str, str] = field(default_factory=dict)
     debug: bool = False
-    log_file: Path | None = None
+    log_dir: Path | None = None
     claude_model: str | None = None
     claude_permission_mode: str = "acceptEdits"
     claude_allowed_tools: list[str] = field(default_factory=list)
@@ -93,7 +93,7 @@ class Config:
 
         base_dir = os.environ.get("BASE_DIRECTORY")
         allowed = os.environ.get("ALLOWED_USERS", "")
-        log_file = os.environ.get("LOG_FILE")
+        log_dir = os.environ.get("LOG_DIR")
         model = os.environ.get("CLAUDE_MODEL")
         perm_mode = os.environ.get("CLAUDE_PERMISSION_MODE", "acceptEdits")
         raw_tools = os.environ.get("CLAUDE_ALLOWED_TOOLS", "")
@@ -118,7 +118,7 @@ class Config:
             allowed_users=[u.strip() for u in allowed.split(",") if u.strip()],
             channel_dirs=channel_dirs,
             debug=os.environ.get("DEBUG", "").lower() in ("1", "true", "yes"),
-            log_file=Path(log_file) if log_file else None,
+            log_dir=Path(log_dir) if log_dir else None,
             claude_model=model,
             claude_permission_mode=perm_mode,
             claude_allowed_tools=[t.strip() for t in raw_tools.split(",") if t.strip()],

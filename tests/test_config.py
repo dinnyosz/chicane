@@ -17,7 +17,7 @@ class TestConfig:
         monkeypatch.delenv("BASE_DIRECTORY", raising=False)
         monkeypatch.delenv("ALLOWED_USERS", raising=False)
         monkeypatch.delenv("DEBUG", raising=False)
-        monkeypatch.delenv("LOG_FILE", raising=False)
+        monkeypatch.delenv("LOG_DIR", raising=False)
 
         config = Config.from_env()
 
@@ -26,7 +26,7 @@ class TestConfig:
         assert config.base_directory is None
         assert config.allowed_users == []
         assert config.debug is False
-        assert config.log_file is None
+        assert config.log_dir is None
         assert config.claude_allowed_tools == []
 
     def test_from_env_missing_tokens(self, monkeypatch):
@@ -44,7 +44,7 @@ class TestConfig:
         monkeypatch.setenv("DEBUG", "true")
         monkeypatch.setenv("CLAUDE_MODEL", "sonnet")
         monkeypatch.setenv("CLAUDE_PERMISSION_MODE", "bypassPermissions")
-        monkeypatch.setenv("LOG_FILE", "/var/log/goose.log")
+        monkeypatch.setenv("LOG_DIR", "/var/log/goose")
         monkeypatch.setenv("CLAUDE_ALLOWED_TOOLS", "Bash(npm run *), Read, Edit(./src/**)")
 
         config = Config.from_env()
@@ -54,7 +54,7 @@ class TestConfig:
         assert config.debug is True
         assert config.claude_model == "sonnet"
         assert config.claude_permission_mode == "bypassPermissions"
-        assert config.log_file == Path("/var/log/goose.log")
+        assert config.log_dir == Path("/var/log/goose")
         assert config.claude_allowed_tools == ["Bash(npm run *)", "Read", "Edit(./src/**)"]
 
     def test_debug_variants(self, monkeypatch):
