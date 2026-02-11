@@ -250,11 +250,11 @@ class TestFetchThreadHistory:
 
 
 class TestThreadMentionRouting:
-    """Test that @mentioning the bot in a thread it hasn't seen before works.
+    """Test thread reply routing for both @mentions and plain follow-ups.
 
-    Slack fires both 'message' and 'app_mention' events for @mentions.
-    The message handler must NOT consume the event when it can't handle it,
-    so the app_mention handler can pick it up.
+    Slack fires 'message.channels' for all channel messages (including thread
+    replies) and 'app_mention' only for @mentions.  Plain thread follow-ups
+    without an @mention rely solely on the message handler.
     """
 
     @pytest.fixture
@@ -358,6 +358,82 @@ class TestThreadMentionRouting:
             await mention_handler(event=event, client=client)
             # Should still be 1 — not double-processed
             assert mock_process.call_count == 1
+
+
+    @pytest.mark.asyncio
+    async def test_plain_thread_reply_without_mention_is_processed(
+        self, app, config, sessions
+    ):
+        """A plain thread reply (no @mention) should be processed when
+        the bot already has a session for the thread.  This requires
+        message.channels to be subscribed in the Slack app manifest."""
+        register_handlers(app, config, sessions)
+
+        message_handler = self._handlers["message"]
+
+        # Pre-create a session for this thread
+        sessions.get_or_create("1000.0", config)
+
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {
+            "channel": {"name": "general"}
+        }
+
+        event = {
+            "ts": "1001.0",
+            "thread_ts": "1000.0",
+            "channel": "C_CHAN",
+            "channel_type": "channel",
+            "user": "UHUMAN1",
+            "text": "follow up without mentioning the bot",
+        }
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            await message_handler(event=event, client=client)
+            mock_process.assert_called_once()
+            # Text should be passed as-is (no mention stripping needed)
+            assert mock_process.call_args[0][1] == "follow up without mentioning the bot"
+
+    @pytest.mark.asyncio
+    async def test_plain_thread_reply_bot_in_history_is_processed(
+        self, app, config, sessions
+    ):
+        """A plain thread reply should be processed when the bot has posted
+        in the thread before (e.g. after a bot restart cleared in-memory sessions)."""
+        register_handlers(app, config, sessions)
+
+        message_handler = self._handlers["message"]
+
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+        # Bot HAS posted in this thread before
+        client.conversations_replies.return_value = {
+            "messages": [
+                {"user": "UHUMAN1", "ts": "1000.0", "text": "start"},
+                {"user": "UBOT123", "ts": "1000.5", "text": "I'm here"},
+            ]
+        }
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {
+            "channel": {"name": "general"}
+        }
+        # Also mock conversations_history for _find_session_id_in_thread fallback
+        client.conversations_history.return_value = {"messages": []}
+
+        event = {
+            "ts": "1001.0",
+            "thread_ts": "1000.0",
+            "channel": "C_CHAN",
+            "channel_type": "channel",
+            "user": "UHUMAN1",
+            "text": "continue working on this",
+        }
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            await message_handler(event=event, client=client)
+            mock_process.assert_called_once()
 
 
 class TestHandoffRegex:
