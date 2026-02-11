@@ -49,16 +49,16 @@ async def start(config: Config | None = None) -> None:
         config = Config.from_env()
 
     log_level = logging.DEBUG if config.debug else logging.INFO
-    log_kwargs: dict = {
-        "level": log_level,
-        "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    }
+    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
     if config.log_dir:
         config.log_dir.mkdir(parents=True, exist_ok=True)
         from datetime import datetime
         log_file = config.log_dir / f"goose-{datetime.now():%Y-%m-%d}.log"
-        log_kwargs["filename"] = str(log_file)
-    logging.basicConfig(**log_kwargs)
+        handlers.append(logging.FileHandler(str(log_file)))
+
+    logging.basicConfig(level=log_level, format=log_format, handlers=handlers)
 
     app = create_app(config)
 

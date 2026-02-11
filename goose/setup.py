@@ -403,7 +403,7 @@ def _step_logging(defaults: dict[str, str]) -> tuple[str, bool]:
     console.rule("Step 9 of 10: Logging")
     console.print("\n  [bold]Log Directory[/bold]")
     console.print("  Directory for log files (a new file is created per day).")
-    console.print("  Required for --detach mode (no console in background).")
+    console.print("  Logs go to both console and file. Required for --detach mode.")
     log_dir = _prompt_with_default(
         "Log directory (e.g. /var/log/goose)",
         defaults.get("LOG_DIR", ""),
