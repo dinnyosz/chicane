@@ -6,11 +6,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from chicane.config import Config
+from chicane.claude import ClaudeEvent
 from chicane.handlers import (
     _bot_in_thread,
     _fetch_thread_history,
     _find_session_id_in_thread,
     _HANDOFF_RE,
+    _process_message,
     _should_ignore,
     _split_message,
     register_handlers,
@@ -436,6 +438,73 @@ class TestThreadMentionRouting:
             mock_process.assert_called_once()
 
 
+    @pytest.mark.asyncio
+    async def test_top_level_mention_not_double_processed(self, app, config, sessions):
+        """When a user @mentions the bot in a channel (not in a thread),
+        both app_mention and message handlers fire. Only one should process it."""
+        register_handlers(app, config, sessions)
+
+        mention_handler = self._handlers["app_mention"]
+        message_handler = self._handlers["message"]
+
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {
+            "channel": {"name": "general"}
+        }
+
+        event = {
+            "ts": "1001.0",
+            "channel": "C_CHAN",
+            "channel_type": "channel",
+            "user": "UHUMAN1",
+            "text": "<@UBOT123> do something",
+        }
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            # Both handlers fire for the same event
+            await mention_handler(event=event, client=client)
+            await message_handler(event=event, client=client)
+            # Should only be processed once
+            assert mock_process.call_count == 1
+
+
+    @pytest.mark.asyncio
+    async def test_top_level_mention_message_first_not_double_processed(
+        self, app, config, sessions
+    ):
+        """When message handler fires BEFORE app_mention for a top-level
+        @mention, the message should still only be processed once."""
+        register_handlers(app, config, sessions)
+
+        mention_handler = self._handlers["app_mention"]
+        message_handler = self._handlers["message"]
+
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {
+            "channel": {"name": "general"}
+        }
+
+        event = {
+            "ts": "1001.0",
+            "channel": "C_CHAN",
+            "channel_type": "channel",
+            "user": "UHUMAN1",
+            "text": "<@UBOT123> do something",
+        }
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            # message handler fires first this time
+            await message_handler(event=event, client=client)
+            # app_mention fires second
+            await mention_handler(event=event, client=client)
+            # Should only be processed once
+            assert mock_process.call_count == 1
+
+
 class TestHandoffRegex:
     """Test the _HANDOFF_RE pattern used to extract session_id from prompts."""
 
@@ -552,3 +621,97 @@ class TestFindSessionIdInThread:
 
         result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
         assert result is None
+
+
+class TestProcessMessageFormatting:
+    """Test that _process_message preserves newlines from streamed text."""
+
+    @pytest.fixture
+    def config(self):
+        return Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+        )
+
+    @pytest.fixture
+    def sessions(self):
+        return SessionStore()
+
+    def _make_event(self, type: str, text: str = "", **kwargs) -> ClaudeEvent:
+        """Helper to create ClaudeEvent instances."""
+        if type == "assistant":
+            raw = {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": text}]},
+                **kwargs,
+            }
+        elif type == "result":
+            raw = {"type": "result", "result": text, **kwargs}
+        else:
+            raw = {"type": type, **kwargs}
+        return ClaudeEvent(type=type, raw=raw)
+
+    @pytest.mark.asyncio
+    async def test_streamed_text_with_newlines_not_overwritten_by_result(
+        self, config, sessions
+    ):
+        """The result event often flattens newlines. Streamed text should win."""
+        streamed = "First paragraph.\n\nSecond paragraph.\n\n- bullet 1\n- bullet 2"
+        flat_result = "First paragraph. Second paragraph. - bullet 1 - bullet 2"
+
+        async def fake_stream(prompt):
+            yield self._make_event("system", subtype="init", session_id="sess-1")
+            yield self._make_event("assistant", text=streamed)
+            yield self._make_event("result", text=flat_result)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "sess-1"
+
+        client = AsyncMock()
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {"channel": {"name": "general"}}
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {
+                "ts": "1000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event, "hello", client, config, sessions)
+
+        # The final chat_update should use the streamed text (with newlines),
+        # NOT the flattened result text.
+        final_update = client.chat_update.call_args_list[-1]
+        assert "\n\n" in final_update.kwargs["text"]
+        assert final_update.kwargs["text"] == streamed
+
+    @pytest.mark.asyncio
+    async def test_result_text_used_when_no_streamed_content(
+        self, config, sessions
+    ):
+        """When no assistant events arrive, fall back to result text."""
+        result_text = "Fallback result text."
+
+        async def fake_stream(prompt):
+            yield self._make_event("system", subtype="init", session_id="sess-2")
+            yield self._make_event("result", text=result_text)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "sess-2"
+
+        client = AsyncMock()
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {"channel": {"name": "general"}}
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {
+                "ts": "1001.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event, "hello", client, config, sessions)
+
+        final_update = client.chat_update.call_args_list[-1]
+        assert final_update.kwargs["text"] == result_text

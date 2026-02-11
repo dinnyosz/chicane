@@ -45,6 +45,9 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
         """Handle @mentions of the bot in channels."""
         if not _mark_processed(event["ts"], mention_processed_ts):
             return
+        # Cross-mark so handle_message skips this event too
+        _mark_processed(event["ts"], message_processed_ts)
+
         if _should_ignore(event, config):
             return
 
@@ -102,12 +105,18 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
             # a new session for this thread.
             return
 
-        # Channel messages with @mention from bots (app_mention doesn't fire for bots)
+        # Channel messages with @mention from bots (app_mention doesn't fire for bots).
+        # Skip if app_mention already handled this event.
+        if event["ts"] in mention_processed_ts:
+            return
+
         if not bot_user_id:
             auth = await client.auth_test()
             bot_user_id = auth["user_id"]
 
         if f"<@{bot_user_id}>" in text:
+            # Cross-mark so handle_mention skips this event too
+            _mark_processed(event["ts"], mention_processed_ts)
             if _should_ignore(event, config):
                 return
             clean_text = re.sub(r"<@[A-Z0-9]+>\s*", "", text).strip()
