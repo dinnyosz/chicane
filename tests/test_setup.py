@@ -477,21 +477,31 @@ class TestStepAllowedTools:
 
 
 class TestStepLogging:
-    def test_all_defaults(self):
-        with patch("goose.setup.Prompt.ask", side_effect=["", "INFO"]), \
+    def test_accepts_suggested_default(self):
+        """Accepting the platformdirs default by pressing Enter."""
+        from platformdirs import user_log_dir
+        expected = user_log_dir("goose", appauthor=False)
+        with patch("goose.setup.Prompt.ask", side_effect=[expected, "INFO"]), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
             log_dir, log_level = _step_logging({})
-            assert log_dir == ""
+            assert log_dir == expected
             assert log_level == "INFO"
 
-    def test_log_dir_set(self):
+    def test_log_dir_overridden(self):
         with patch("goose.setup.Prompt.ask", side_effect=["/var/log/goose", "INFO"]), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):
             log_dir, log_level = _step_logging({})
             assert log_dir == "/var/log/goose"
             assert log_level == "INFO"
+
+    def test_log_dir_cleared_with_dash(self):
+        with patch("goose.setup.Prompt.ask", side_effect=["-", "INFO"]), \
+             patch("goose.setup.console.print"), \
+             patch("goose.setup.console.rule"):
+            log_dir, _ = _step_logging({"LOG_DIR": "/old/path"})
+            assert log_dir == ""
 
     def test_debug_level(self):
         with patch("goose.setup.Prompt.ask", side_effect=["", "DEBUG"]), \

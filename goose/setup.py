@@ -401,12 +401,15 @@ def _step_allowed_tools(default: str = "") -> str:
 def _step_logging(defaults: dict[str, str]) -> tuple[str, str]:
     """Step 9: Configure log directory and log level. Returns (log_dir, log_level)."""
     console.rule("Step 9 of 10: Logging")
+    from platformdirs import user_log_dir
+
+    default_log_dir = defaults.get("LOG_DIR", "") or user_log_dir("goose", appauthor=False)
     console.print("\n  [bold]Log Directory[/bold]")
     console.print("  Directory for log files (a new file is created per day).")
     console.print("  Logs go to both console and file. Required for --detach mode.")
     log_dir = _prompt_with_default(
-        "Log directory (e.g. /var/log/goose)",
-        defaults.get("LOG_DIR", ""),
+        "Log directory",
+        default_log_dir,
     )
     valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR"}
     console.print("\n  [bold]Log Level[/bold]")
