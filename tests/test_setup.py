@@ -480,7 +480,7 @@ class TestStepLogging:
     def test_accepts_suggested_default(self):
         """Accepting the platformdirs default by pressing Enter."""
         from platformdirs import user_log_dir
-        expected = user_log_dir("goose", appauthor=False)
+        expected = user_log_dir("goose-code", appauthor=False)
         with patch("goose.setup.Prompt.ask", side_effect=[expected, "INFO"]), \
              patch("goose.setup.console.print"), \
              patch("goose.setup.console.rule"):

@@ -403,7 +403,7 @@ def _step_logging(defaults: dict[str, str]) -> tuple[str, str]:
     console.rule("Step 9 of 10: Logging")
     from platformdirs import user_log_dir
 
-    default_log_dir = defaults.get("LOG_DIR", "") or user_log_dir("goose", appauthor=False)
+    default_log_dir = defaults.get("LOG_DIR", "") or user_log_dir("goose-code", appauthor=False)
     console.print("\n  [bold]Log Directory[/bold]")
     console.print("  Directory for log files (a new file is created per day).")
     console.print("  Logs go to both console and file. Required for --detach mode.")

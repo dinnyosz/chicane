@@ -19,7 +19,7 @@ def config_dir() -> Path:
     override = os.environ.get("GOOSE_CONFIG_DIR")
     if override:
         return Path(override)
-    return Path(user_config_dir("goose", appauthor=False))
+    return Path(user_config_dir("goose-code", appauthor=False))
 
 
 def env_file() -> Path:

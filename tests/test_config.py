@@ -203,7 +203,7 @@ class TestConfigDir:
     def test_default_uses_platformdirs(self, monkeypatch):
         monkeypatch.delenv("GOOSE_CONFIG_DIR", raising=False)
         result = config_dir()
-        assert result.name == "goose"
+        assert result.name == "goose-code"
         assert result.is_absolute()
 
     def test_env_file_inside_config_dir(self, monkeypatch):
