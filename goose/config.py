@@ -30,6 +30,19 @@ def env_file() -> Path:
 load_dotenv(env_file())
 
 
+VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
+
+
+def _validate_log_level(value: str) -> str:
+    level = value.upper()
+    if level not in VALID_LOG_LEVELS:
+        raise ValueError(
+            f"Invalid LOG_LEVEL '{value}'. "
+            f"Must be one of: {', '.join(sorted(VALID_LOG_LEVELS))}"
+        )
+    return level
+
+
 @dataclass(frozen=True)
 class Config:
     slack_bot_token: str
@@ -95,7 +108,13 @@ class Config:
         allowed = os.environ.get("ALLOWED_USERS", "")
         log_dir = os.environ.get("LOG_DIR")
         model = os.environ.get("CLAUDE_MODEL")
+        valid_perm_modes = {"acceptEdits", "dontAsk", "bypassPermissions"}
         perm_mode = os.environ.get("CLAUDE_PERMISSION_MODE", "acceptEdits")
+        if perm_mode not in valid_perm_modes:
+            raise ValueError(
+                f"Invalid CLAUDE_PERMISSION_MODE '{perm_mode}'. "
+                f"Must be one of: {', '.join(sorted(valid_perm_modes))}"
+            )
         raw_tools = os.environ.get("CLAUDE_ALLOWED_TOOLS", "")
         # Parse CHANNEL_DIRS: "magaldi,slack-bot,frontend" or "magaldi=magaldi,web=frontend"
         channel_dirs: dict[str, str] = {}
@@ -117,7 +136,7 @@ class Config:
             base_directory=Path(base_dir) if base_dir else None,
             allowed_users=[u.strip() for u in allowed.split(",") if u.strip()],
             channel_dirs=channel_dirs,
-            log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+            log_level=_validate_log_level(os.environ.get("LOG_LEVEL", "INFO")),
             log_dir=Path(log_dir) if log_dir else None,
             claude_model=model,
             claude_permission_mode=perm_mode,

@@ -71,6 +71,22 @@ class TestConfig:
         monkeypatch.delenv("LOG_LEVEL", raising=False)
         assert Config.from_env().log_level == "INFO"
 
+    def test_invalid_log_level_rejected(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("LOG_LEVEL", "almafa")
+
+        with pytest.raises(ValueError, match="Invalid LOG_LEVEL"):
+            Config.from_env()
+
+    def test_invalid_permission_mode_rejected(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("CLAUDE_PERMISSION_MODE", "yolo")
+
+        with pytest.raises(ValueError, match="Invalid CLAUDE_PERMISSION_MODE"):
+            Config.from_env()
+
     def test_empty_allowed_users(self, monkeypatch):
         monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
         monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
