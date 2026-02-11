@@ -107,6 +107,7 @@ class ClaudeSession:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(self.cwd),
+            limit=1024 * 1024,  # 1 MiB – Claude stream-json lines can exceed the 64 KiB default
         )
 
         event_count = 0
