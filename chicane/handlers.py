@@ -227,7 +227,11 @@ async def _process_message(
                         last_update_len = len(full_text)
 
             elif event_data.type == "result":
-                full_text = event_data.text or full_text
+                # Only use the result text as a fallback — the streamed
+                # assistant chunks preserve formatting (newlines, paragraphs)
+                # while the result field may flatten them into one block.
+                if not full_text:
+                    full_text = event_data.text or ""
             else:
                 logger.debug(f"Event type={event_data.type} subtype={event_data.subtype}")
 
