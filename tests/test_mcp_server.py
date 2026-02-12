@@ -1,5 +1,6 @@
 """Tests for chicane.mcp_server — MCP tool functions."""
 
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
 
@@ -14,9 +15,11 @@ def _reset_singletons():
     """Reset module-level singletons between tests."""
     mcp_mod._config = None
     mcp_mod._client = None
+    mcp_mod._SKILL_TEMPLATE = None
     yield
     mcp_mod._config = None
     mcp_mod._client = None
+    mcp_mod._SKILL_TEMPLATE = None
 
 
 @pytest.fixture
@@ -225,6 +228,163 @@ class TestResolveChannel:
         ):
             with pytest.raises(ValueError, match="not found in Slack"):
                 await mcp_mod._resolve_channel("ghost-channel")
+
+
+class TestChicaneInit:
+    @pytest.mark.asyncio
+    async def test_global_scope(self, tmp_path):
+        with patch("chicane.mcp_server.Path") as MockPath:
+            MockPath.__truediv__ = Path.__truediv__
+            mcp_mod._SKILL_TEMPLATE = "skill content here"
+
+            home = tmp_path / "home"
+            MockPath.home.return_value = home
+
+            result = await mcp_mod.chicane_init(scope="global")
+
+        target = home / ".claude" / "skills" / "chicane" / "SKILL.md"
+        assert target.exists()
+        assert target.read_text() == "skill content here"
+        assert "Installed" in result
+
+    @pytest.mark.asyncio
+    async def test_project_scope(self, tmp_path):
+        mcp_mod._SKILL_TEMPLATE = "project skill"
+
+        result = await mcp_mod.chicane_init(
+            scope="project", project_root=str(tmp_path)
+        )
+
+        target = tmp_path / ".claude" / "skills" / "chicane" / "SKILL.md"
+        assert target.exists()
+        assert target.read_text() == "project skill"
+        assert "Installed" in result
+
+    @pytest.mark.asyncio
+    async def test_project_scope_requires_root(self):
+        result = await mcp_mod.chicane_init(scope="project")
+        assert "Error:" in result
+        assert "project_root" in result
+
+    @pytest.mark.asyncio
+    async def test_invalid_scope(self):
+        result = await mcp_mod.chicane_init(scope="banana")
+        assert "Error:" in result
+        assert "banana" in result
+
+    @pytest.mark.asyncio
+    async def test_reads_real_template(self):
+        """Ensure _get_skill_content reads the bundled skill.md."""
+        mcp_mod._SKILL_TEMPLATE = None
+        content = mcp_mod._get_skill_content()
+        assert "chicane_handoff" in content
+        assert "{{CHICANE_PATH}}" not in content
+
+    @pytest.mark.asyncio
+    async def test_add_allowed_tools_creates_settings(self, tmp_path):
+        mcp_mod._SKILL_TEMPLATE = "skill"
+
+        result = await mcp_mod.chicane_init(
+            scope="project",
+            project_root=str(tmp_path),
+            add_allowed_tools=True,
+            mcp_server_name="chicane-dev",
+        )
+
+        settings = tmp_path / ".claude" / "settings.local.json"
+        assert settings.exists()
+        data = json.loads(settings.read_text())
+        allow = data["permissions"]["allow"]
+        assert "mcp__chicane-dev__chicane_handoff" in allow
+        assert "mcp__chicane-dev__chicane_send_message" in allow
+        assert "mcp__chicane-dev__chicane_init" in allow
+        assert "Added 3 tool(s)" in result
+
+    @pytest.mark.asyncio
+    async def test_add_allowed_tools_merges_existing(self, tmp_path):
+        mcp_mod._SKILL_TEMPLATE = "skill"
+
+        # Pre-populate settings with one existing tool
+        settings = tmp_path / ".claude" / "settings.local.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(json.dumps({
+            "permissions": {
+                "allow": ["Bash(git *)", "mcp__chicane-dev__chicane_handoff"]
+            }
+        }))
+
+        result = await mcp_mod.chicane_init(
+            scope="project",
+            project_root=str(tmp_path),
+            add_allowed_tools=True,
+        )
+
+        data = json.loads(settings.read_text())
+        allow = data["permissions"]["allow"]
+        # Existing entries preserved
+        assert "Bash(git *)" in allow
+        # Duplicate not added
+        assert allow.count("mcp__chicane-dev__chicane_handoff") == 1
+        # New ones added
+        assert "mcp__chicane-dev__chicane_send_message" in allow
+        assert "Added 2 tool(s)" in result
+
+    @pytest.mark.asyncio
+    async def test_add_allowed_tools_all_exist(self, tmp_path):
+        mcp_mod._SKILL_TEMPLATE = "skill"
+
+        settings = tmp_path / ".claude" / "settings.local.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(json.dumps({
+            "permissions": {
+                "allow": [
+                    "mcp__chicane-dev__chicane_handoff",
+                    "mcp__chicane-dev__chicane_send_message",
+                    "mcp__chicane-dev__chicane_init",
+                ]
+            }
+        }))
+
+        result = await mcp_mod.chicane_init(
+            scope="project",
+            project_root=str(tmp_path),
+            add_allowed_tools=True,
+        )
+
+        assert "already in" in result
+
+    @pytest.mark.asyncio
+    async def test_add_allowed_tools_custom_server_name(self, tmp_path):
+        mcp_mod._SKILL_TEMPLATE = "skill"
+
+        result = await mcp_mod.chicane_init(
+            scope="project",
+            project_root=str(tmp_path),
+            add_allowed_tools=True,
+            mcp_server_name="my-chicane",
+        )
+
+        settings = tmp_path / ".claude" / "settings.local.json"
+        data = json.loads(settings.read_text())
+        allow = data["permissions"]["allow"]
+        assert "mcp__my-chicane__chicane_handoff" in allow
+
+    @pytest.mark.asyncio
+    async def test_allowed_tools_global_scope(self, tmp_path):
+        mcp_mod._SKILL_TEMPLATE = "skill"
+
+        with patch("chicane.mcp_server.Path") as MockPath:
+            MockPath.__truediv__ = Path.__truediv__
+            MockPath.home.return_value = tmp_path / "home"
+
+            result = await mcp_mod.chicane_init(
+                scope="global",
+                add_allowed_tools=True,
+            )
+
+        settings = tmp_path / "home" / ".claude" / "settings.local.json"
+        assert settings.exists()
+        assert "Added 3 tool(s)" in result
 
 
 class TestMainConfigValidation:

@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import signal
-import shutil
 import ssl
 import sys
 from pathlib import Path
@@ -225,37 +224,6 @@ def handoff(args: argparse.Namespace) -> None:
     asyncio.run(_handoff(args))
 
 
-# ---------------------------------------------------------------------------
-# CLI: chicane install-skill
-# ---------------------------------------------------------------------------
-
-
-def install_skill(args: argparse.Namespace) -> None:
-    """Install the chicane-handoff skill for Claude Code."""
-    # Resolve path to the chicane binary
-    chicane_path = shutil.which("chicane")
-    if not chicane_path:
-        # Fallback: use the repo checkout
-        chicane_path = str(Path(__file__).resolve().parent.parent / "chicane")
-
-    # Read the bundled template
-    template_path = Path(__file__).resolve().parent / "skill.md"
-    if not template_path.exists():
-        print(f"Error: skill template not found at {template_path}", file=sys.stderr)
-        sys.exit(1)
-    template = template_path.read_text()
-
-    # Replace placeholder
-    content = template.replace("{{CHICANE_PATH}}", chicane_path)
-
-    # Write to ~/.claude/skills/chicane-handoff/SKILL.md
-    target_dir = Path.home() / ".claude" / "skills" / "chicane-handoff"
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / "SKILL.md"
-    target.write_text(content)
-
-    print(f"Installed chicane-handoff skill to {target}")
-
 
 # ---------------------------------------------------------------------------
 # CLI entrypoint
@@ -292,9 +260,6 @@ def _build_parser() -> argparse.ArgumentParser:
     # chicane setup
     sub.add_parser("setup", help="Guided setup wizard")
 
-    # chicane install-skill
-    sub.add_parser("install-skill", help="Install the chicane-handoff skill for Claude Code")
-
     # chicane help
     sub.add_parser("help", help="Show this help message")
 
@@ -310,7 +275,6 @@ Commands:
   setup            Guided setup wizard
   run              Start the Slack bot
   handoff          Post a handoff message to Slack
-  install-skill    Install the chicane-handoff skill for Claude Code
   help             Show this help message
 
 Examples:
@@ -318,7 +282,6 @@ Examples:
   chicane run                                  Start the bot
   chicane run --detach                          Start in the background
   chicane handoff --summary "..."              Hand off a session to Slack
-  chicane install-skill                        Install the handoff skill
 
 Run 'chicane <command> --help' for details on a specific command.""")
 
@@ -363,8 +326,6 @@ def main() -> None:
         setup_command(args)
     elif args.command == "handoff":
         handoff(args)
-    elif args.command == "install-skill":
-        install_skill(args)
     else:
         # No command or 'help' — show help
         _print_help()

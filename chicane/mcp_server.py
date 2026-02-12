@@ -1,5 +1,6 @@
 """Chicane MCP server — exposes handoff and messaging tools for Claude Code."""
 
+import json
 import logging
 import sys
 from pathlib import Path
@@ -131,6 +132,102 @@ async def chicane_send_message(
     await client.chat_postMessage(channel=channel_id, text=text)
 
     return f"Message sent to #{channel_name}."
+
+
+_SKILL_TEMPLATE: str | None = None
+
+
+def _get_skill_content() -> str:
+    """Read and cache the bundled skill.md template."""
+    global _SKILL_TEMPLATE
+    if _SKILL_TEMPLATE is None:
+        template_path = Path(__file__).resolve().parent / "skill.md"
+        _SKILL_TEMPLATE = template_path.read_text()
+    return _SKILL_TEMPLATE
+
+
+_TOOL_NAMES = ["chicane_handoff", "chicane_send_message", "chicane_init"]
+
+
+def _add_allowed_tools(settings_path: Path, mcp_server_name: str) -> list[str]:
+    """Add chicane MCP tools to a settings.local.json file.
+
+    Returns the list of tool entries that were added (skips duplicates).
+    """
+    if settings_path.exists():
+        data = json.loads(settings_path.read_text())
+    else:
+        data = {}
+
+    allow = data.setdefault("permissions", {}).setdefault("allow", [])
+    added = []
+    for tool in _TOOL_NAMES:
+        entry = f"mcp__{mcp_server_name}__{tool}"
+        if entry not in allow:
+            allow.append(entry)
+            added.append(entry)
+
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps(data, indent=2) + "\n")
+    return added
+
+
+@mcp.tool()
+async def chicane_init(
+    scope: str = "global",
+    project_root: str = "",
+    add_allowed_tools: bool = False,
+    mcp_server_name: str = "chicane-dev",
+) -> str:
+    """Set up Chicane for Claude Code.
+
+    Installs the handoff skill (SKILL.md) and optionally adds chicane
+    tools to the allowed tools list in settings.local.json so they
+    run without permission prompts.
+
+    IMPORTANT: Ask the user for scope (project/global) and whether to
+    add allowed tools BEFORE calling this tool. Do not assume defaults.
+
+    Args:
+        scope: Where to install — "global" (~/.claude/skills/) or
+               "project" (<project_root>/.claude/skills/).
+        project_root: Project root directory. Required when scope is "project".
+                      Ignored for global scope.
+        add_allowed_tools: Also add chicane tools to the allowed tools list
+                           in settings.local.json at the same scope.
+        mcp_server_name: The MCP server name as configured in Claude Code
+                         (used to build tool permission entries like
+                         mcp__<name>__chicane_handoff). Defaults to "chicane-dev".
+    """
+    content = _get_skill_content()
+
+    if scope == "project":
+        if not project_root:
+            return "Error: project_root is required when scope is 'project'."
+        base = Path(project_root)
+    elif scope == "global":
+        base = Path.home()
+    else:
+        return f"Error: scope must be 'global' or 'project', got '{scope}'."
+
+    # Install skill
+    skill_dir = base / ".claude" / "skills" / "chicane"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_target = skill_dir / "SKILL.md"
+    skill_target.write_text(content)
+
+    parts = [f"Installed chicane skill to {skill_target}"]
+
+    # Optionally add allowed tools
+    if add_allowed_tools:
+        settings_path = base / ".claude" / "settings.local.json"
+        added = _add_allowed_tools(settings_path, mcp_server_name)
+        if added:
+            parts.append(f"Added {len(added)} tool(s) to {settings_path}: {', '.join(added)}")
+        else:
+            parts.append(f"All tools already in {settings_path}")
+
+    return "\n".join(parts)
 
 
 def main() -> None:
