@@ -235,8 +235,17 @@ async def _process_message(
         async for event_data in session.stream(prompt):
             event_count += 1
             if event_data.type == "assistant":
-                # Post tool activity
+                # Flush any accumulated text before posting tool activity
+                # so the message order matches Claude Code console.
                 activities = _format_tool_activity(event_data)
+                if activities and full_text:
+                    for chunk in _split_message(full_text):
+                        await client.chat_postMessage(
+                            channel=channel, thread_ts=thread_ts, text=chunk,
+                        )
+                    full_text = ""
+
+                # Post tool activity
                 for activity in activities:
                     if first_activity:
                         await client.chat_update(
@@ -248,7 +257,7 @@ async def _process_message(
                             channel=channel, thread_ts=thread_ts, text=activity,
                         )
 
-                # Accumulate text as before
+                # Accumulate text
                 chunk = event_data.text
                 if chunk:
                     full_text += chunk
@@ -263,7 +272,7 @@ async def _process_message(
             else:
                 logger.debug(f"Event type={event_data.type} subtype={event_data.subtype}")
 
-        # Final: send complete response
+        # Final: send remaining text
         if full_text:
             chunks = _split_message(full_text)
             if first_activity:
@@ -276,7 +285,7 @@ async def _process_message(
                         channel=channel, thread_ts=thread_ts, text=chunk,
                     )
             else:
-                # Tool activities were posted — send all text as thread replies
+                # Tool activities were posted — send text as thread replies
                 for chunk in chunks:
                     await client.chat_postMessage(
                         channel=channel, thread_ts=thread_ts, text=chunk,

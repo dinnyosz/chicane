@@ -1375,6 +1375,45 @@ class TestToolActivityStreaming:
         assert final_update.kwargs["text"] == "Quick answer."
 
     @pytest.mark.asyncio
+    async def test_text_flushed_before_next_tool_activity(self, config, sessions):
+        """Text between tool calls is posted before the next activity,
+        matching the order seen in Claude Code console."""
+
+        async def fake_stream(prompt):
+            yield self._make_tool_event(
+                self._tool_block("Read", file_path="/src/a.py")
+            )
+            yield self._make_event("assistant", text="Looks good, let me edit it.")
+            yield self._make_tool_event(
+                self._tool_block("Edit", file_path="/src/a.py")
+            )
+            yield self._make_event("assistant", text="Done editing.")
+            yield self._make_event("result", text="Done editing.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "fix it", client, config, sessions)
+
+        # First activity updates placeholder
+        assert client.chat_update.call_args_list[0].kwargs["text"] == ":mag: Reading `a.py`"
+
+        # Thread replies should be in order: text → activity → final text
+        post_calls = client.chat_postMessage.call_args_list
+        # post_calls[0] = "Working on it..." placeholder
+        # post_calls[1] = flushed text before 2nd tool
+        # post_calls[2] = 2nd tool activity
+        # post_calls[3] = final text
+        assert post_calls[1].kwargs["text"] == "Looks good, let me edit it."
+        assert post_calls[2].kwargs["text"] == ":pencil2: Editing `a.py`"
+        assert post_calls[3].kwargs["text"] == "Done editing."
+
+    @pytest.mark.asyncio
     async def test_long_text_with_activities_all_chunks_as_replies(
         self, config, sessions
     ):
