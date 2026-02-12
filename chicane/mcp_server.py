@@ -6,9 +6,24 @@ import sys
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from .app import resolve_channel_id, resolve_session_id
 from .config import Config
+
+# Shared annotation presets.
+_SLACK_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=True,
+)
+_LOCAL_IDEMPOTENT_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
 
 # MCP uses stdio for JSON-RPC — all logging must go to stderr.
 logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
@@ -62,7 +77,7 @@ async def _resolve_channel(channel: str | None, cwd: Path | None = None) -> tupl
     return channel_name, channel_id
 
 
-@mcp.tool()
+@mcp.tool(annotations=_SLACK_ANNOTATIONS)
 async def chicane_handoff(
     summary: str,
     questions: str = "",
@@ -75,12 +90,6 @@ async def chicane_handoff(
     Slack bot. The session ID is auto-detected from Claude Code history
     if not provided. The channel is resolved from the current working
     directory via CHANNEL_DIRS if not provided.
-
-    Args:
-        summary: A 2-sentence summary of the current work and state.
-        questions: Optional open questions to include in the message.
-        session_id: Claude session ID. Auto-detected from history if empty.
-        channel: Slack channel name. Auto-resolved from cwd if empty.
     """
     try:
         sid = resolve_session_id(session_id or None)
@@ -108,7 +117,7 @@ async def chicane_handoff(
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=_SLACK_ANNOTATIONS)
 async def chicane_send_message(
     text: str,
     channel: str = "",
@@ -118,10 +127,6 @@ async def chicane_send_message(
     The channel is resolved from the current working directory via
     CHANNEL_DIRS if not provided. Useful for status updates, notifications,
     or quick pings without a full session handoff.
-
-    Args:
-        text: The message content to send.
-        channel: Slack channel name. Auto-resolved from cwd if empty.
     """
     try:
         channel_name, channel_id = await _resolve_channel(channel or None)
@@ -172,7 +177,7 @@ def _add_allowed_tools(settings_path: Path, mcp_server_name: str) -> list[str]:
     return added
 
 
-@mcp.tool()
+@mcp.tool(annotations=_LOCAL_IDEMPOTENT_ANNOTATIONS)
 async def chicane_init(
     scope: str = "global",
     project_root: str = "",
@@ -184,20 +189,6 @@ async def chicane_init(
     Installs the handoff skill (SKILL.md) and optionally adds chicane
     tools to the allowed tools list in settings.local.json so they
     run without permission prompts.
-
-    IMPORTANT: Ask the user for scope (project/global) and whether to
-    add allowed tools BEFORE calling this tool. Do not assume defaults.
-
-    Args:
-        scope: Where to install — "global" (~/.claude/skills/) or
-               "project" (<project_root>/.claude/skills/).
-        project_root: Project root directory. Required when scope is "project".
-                      Ignored for global scope.
-        add_allowed_tools: Also add chicane tools to the allowed tools list
-                           in settings.local.json at the same scope.
-        mcp_server_name: The MCP server name as configured in Claude Code
-                         (used to build tool permission entries like
-                         mcp__<name>__chicane_handoff). Defaults to "chicane-dev".
     """
     content = _get_skill_content()
 

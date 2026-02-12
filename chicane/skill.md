@@ -42,6 +42,14 @@ Once the handoff is posted, tell the user:
 If the user confirms, exit the session. If they decline, remind them that
 Slack replies will fail until the session is closed.
 
+## Setup (`chicane_init`)
+
+Before calling `chicane_init`, ask the user for:
+1. **Scope** — `"global"` (~/.claude/skills/) or `"project"` (project-local)
+2. **Allowed tools** — whether to add chicane tools to settings.local.json
+
+Do not assume defaults. The user must confirm both choices.
+
 ## Important
 
 - Always include a meaningful summary so the user knows what was in progress.
