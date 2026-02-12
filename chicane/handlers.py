@@ -656,23 +656,11 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
 
 def _format_completion_summary(event: ClaudeEvent) -> str | None:
     """Format a completion footer from a result event."""
-    parts = []
-    if event.num_turns is not None:
-        parts.append(f"{event.num_turns} turn{'s' if event.num_turns != 1 else ''}")
-    if event.cost_usd is not None:
-        parts.append(f"${event.cost_usd:.2f}")
-    if event.duration_ms is not None:
-        secs = event.duration_ms / 1000
-        if secs >= 60:
-            mins = int(secs // 60)
-            remaining = int(secs % 60)
-            parts.append(f"{mins}m{remaining}s")
-        else:
-            parts.append(f"{int(secs)}s")
-    if not parts:
+    if event.num_turns is None:
         return None
+    turns = f"{event.num_turns} turn{'s' if event.num_turns != 1 else ''}"
     emoji = ":checkered_flag:" if not event.is_error else ":x:"
-    return f"{emoji} Done — {', '.join(parts)}"
+    return f"{emoji} Done — {turns}"
 
 
 def _split_message(text: str) -> list[str]:

@@ -2071,7 +2071,7 @@ class TestFileShareSubtype:
 class TestFormatCompletionSummary:
     """Test _format_completion_summary helper."""
 
-    def test_full_summary(self):
+    def test_full_summary_shows_only_turns(self):
         event = ClaudeEvent(
             type="result",
             raw={
@@ -2083,7 +2083,9 @@ class TestFormatCompletionSummary:
             },
         )
         result = _format_completion_summary(event)
-        assert result == ":checkered_flag: Done — 5 turns, $0.03, 12s"
+        assert result == ":checkered_flag: Done — 5 turns"
+        assert "$" not in result
+        assert "s" not in result.split("turns")[1]  # no duration after turns
 
     def test_single_turn(self):
         event = ClaudeEvent(
@@ -2096,7 +2098,7 @@ class TestFormatCompletionSummary:
             },
         )
         result = _format_completion_summary(event)
-        assert result == ":checkered_flag: Done — 1 turn, $0.01, 3s"
+        assert result == ":checkered_flag: Done — 1 turn"
 
     def test_error_result(self):
         event = ClaudeEvent(
@@ -2110,28 +2112,14 @@ class TestFormatCompletionSummary:
             },
         )
         result = _format_completion_summary(event)
-        assert result.startswith(":x:")
+        assert result == ":x: Done — 2 turns"
 
-    def test_long_duration_shows_minutes(self):
+    def test_no_turns_returns_none(self):
         event = ClaudeEvent(
             type="result",
-            raw={
-                "type": "result",
-                "num_turns": 10,
-                "total_cost_usd": 0.50,
-                "duration_ms": 125000,
-            },
+            raw={"type": "result", "total_cost_usd": 0.50, "duration_ms": 125000},
         )
-        result = _format_completion_summary(event)
-        assert "2m5s" in result
-
-    def test_partial_fields(self):
-        event = ClaudeEvent(
-            type="result",
-            raw={"type": "result", "num_turns": 3},
-        )
-        result = _format_completion_summary(event)
-        assert result == ":checkered_flag: Done — 3 turns"
+        assert _format_completion_summary(event) is None
 
     def test_no_fields_returns_none(self):
         event = ClaudeEvent(
@@ -2342,7 +2330,6 @@ class TestCompletionSummaryPosting:
         ]
         assert len(summary_calls) == 1
         assert "3 turns" in summary_calls[0].kwargs["text"]
-        assert "$0.02" in summary_calls[0].kwargs["text"]
 
     @pytest.mark.asyncio
     async def test_no_summary_when_no_result_event(self, config, sessions):
