@@ -1219,9 +1219,48 @@ class TestFormatToolActivity:
         event = self._make_tool_event(self._tool_block("AskUserQuestion"))
         assert _format_tool_activity(event) == [":question: Asking user a question"]
 
+    def test_todo_write_with_tasks(self):
+        event = self._make_tool_event(
+            self._tool_block(
+                "TodoWrite",
+                todos=[
+                    {"content": "Set up database", "status": "completed", "activeForm": "Setting up database"},
+                    {"content": "Write API endpoints", "status": "in_progress", "activeForm": "Writing API endpoints"},
+                    {"content": "Add tests", "status": "pending", "activeForm": "Adding tests"},
+                ],
+            )
+        )
+        result = _format_tool_activity(event)
+        assert len(result) == 1
+        assert ":clipboard: *Tasks*" in result[0]
+        assert ":white_check_mark: Set up database" in result[0]
+        assert ":arrows_counterclockwise: Write API endpoints" in result[0]
+        assert ":white_circle: Add tests" in result[0]
+
+    def test_todo_write_empty_todos(self):
+        event = self._make_tool_event(self._tool_block("TodoWrite", todos=[]))
+        assert _format_tool_activity(event) == [":clipboard: Updating tasks"]
+
+    def test_todo_write_no_todos_key(self):
+        event = self._make_tool_event(self._tool_block("TodoWrite"))
+        assert _format_tool_activity(event) == [":clipboard: Updating tasks"]
+
     def test_unknown_tool_fallback(self):
         event = self._make_tool_event(self._tool_block("CustomTool"))
-        assert _format_tool_activity(event) == [":wrench: Using CustomTool"]
+        assert _format_tool_activity(event) == [":wrench: Custom Tool"]
+
+    def test_unknown_tool_mcp_prefix_stripped(self):
+        event = self._make_tool_event(self._tool_block("mcp__magaldi__search_code"))
+        assert _format_tool_activity(event) == [":wrench: Search Code"]
+
+    def test_unknown_tool_mcp_deep_prefix(self):
+        """MCP name with 4+ parts still extracts the last segment."""
+        event = self._make_tool_event(self._tool_block("mcp__server__ns__find_files"))
+        assert _format_tool_activity(event) == [":wrench: Find Files"]
+
+    def test_unknown_tool_underscores_to_spaces(self):
+        event = self._make_tool_event(self._tool_block("my_custom_tool"))
+        assert _format_tool_activity(event) == [":wrench: My Custom Tool"]
 
     def test_multiple_tool_blocks(self):
         event = self._make_tool_event(

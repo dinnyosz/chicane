@@ -646,10 +646,36 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
             activities.append(f":notebook: Editing notebook `{basename}`")
         elif tool_name == "EnterPlanMode":
             activities.append(":clipboard: Entering plan mode")
+        elif tool_name == "TodoWrite":
+            todos = tool_input.get("todos", [])
+            if todos:
+                _STATUS_EMOJI = {
+                    "completed": ":white_check_mark:",
+                    "in_progress": ":arrows_counterclockwise:",
+                    "pending": ":white_circle:",
+                }
+                lines = [":clipboard: *Tasks*"]
+                for todo in todos:
+                    status = todo.get("status", "pending")
+                    emoji = _STATUS_EMOJI.get(status, ":white_circle:")
+                    label = todo.get("content", "?")
+                    lines.append(f"{emoji} {label}")
+                activities.append("\n".join(lines))
+            else:
+                activities.append(":clipboard: Updating tasks")
         elif tool_name == "AskUserQuestion":
             activities.append(":question: Asking user a question")
         else:
-            activities.append(f":wrench: Using {tool_name}")
+            # Clean up tool names for display: strip MCP prefixes
+            # (mcp__server__tool → Tool), split snake/camel case.
+            display = tool_name
+            if display.startswith("mcp__"):
+                parts = display.split("__")
+                display = parts[-1] if len(parts) >= 3 else display
+            # Split CamelCase then underscores, title-case each word
+            display = re.sub(r"([a-z])([A-Z])", r"\1 \2", display)
+            display = display.replace("_", " ").strip().title()
+            activities.append(f":wrench: {display}")
 
     return activities
 
