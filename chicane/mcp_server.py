@@ -224,6 +224,7 @@ async def chicane_init(
         added = _add_allowed_tools(settings_path, mcp_server_name)
         if added:
             parts.append(f"Added {len(added)} tool(s) to {settings_path}: {', '.join(added)}")
+            parts.append("NOTE: Restart Claude Code for allowed tools changes to take effect.")
         else:
             parts.append(f"All tools already in {settings_path}")
 

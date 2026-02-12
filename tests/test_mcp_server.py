@@ -299,6 +299,7 @@ class TestChicaneInit:
         assert "mcp__chicane-dev__chicane_send_message" in allow
         assert "mcp__chicane-dev__chicane_init" in allow
         assert "Added 3 tool(s)" in result
+        assert "Restart Claude Code" in result
 
     @pytest.mark.asyncio
     async def test_add_allowed_tools_merges_existing(self, tmp_path):
@@ -328,6 +329,7 @@ class TestChicaneInit:
         # New ones added
         assert "mcp__chicane-dev__chicane_send_message" in allow
         assert "Added 2 tool(s)" in result
+        assert "Restart Claude Code" in result
 
     @pytest.mark.asyncio
     async def test_add_allowed_tools_all_exist(self, tmp_path):
@@ -385,6 +387,7 @@ class TestChicaneInit:
         settings = tmp_path / "home" / ".claude" / "settings.local.json"
         assert settings.exists()
         assert "Added 3 tool(s)" in result
+        assert "Restart Claude Code" in result
 
 
 class TestMainConfigValidation:
