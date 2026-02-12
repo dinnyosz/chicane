@@ -12,6 +12,7 @@ from chicane.handlers import (
     _download_files,
     _fetch_thread_history,
     _find_session_id_in_thread,
+    _format_completion_summary,
     _format_tool_activity,
     _HANDOFF_RE,
     _process_message,
@@ -1158,17 +1159,65 @@ class TestFormatToolActivity:
         )
         assert _format_tool_activity(event) == [":mag: Finding files `**/*.py`"]
 
-    def test_webfetch_tool(self):
+    def test_webfetch_tool_with_url(self):
+        event = self._make_tool_event(
+            self._tool_block("WebFetch", url="https://example.com/api")
+        )
+        assert _format_tool_activity(event) == [":globe_with_meridians: Fetching `https://example.com/api`"]
+
+    def test_webfetch_tool_no_url(self):
         event = self._make_tool_event(self._tool_block("WebFetch"))
         assert _format_tool_activity(event) == [":globe_with_meridians: Fetching URL"]
 
-    def test_websearch_tool(self):
+    def test_websearch_tool_with_query(self):
+        event = self._make_tool_event(
+            self._tool_block("WebSearch", query="python asyncio tutorial")
+        )
+        assert _format_tool_activity(event) == [":globe_with_meridians: Searching web for `python asyncio tutorial`"]
+
+    def test_websearch_tool_no_query(self):
         event = self._make_tool_event(self._tool_block("WebSearch"))
         assert _format_tool_activity(event) == [":globe_with_meridians: Searching web"]
 
-    def test_task_tool(self):
+    def test_task_tool_with_details(self):
+        event = self._make_tool_event(
+            self._tool_block("Task", subagent_type="Explore", description="find auth code")
+        )
+        assert _format_tool_activity(event) == [":robot_face: Spawning Explore: find auth code"]
+
+    def test_task_tool_subagent_type_only(self):
+        event = self._make_tool_event(
+            self._tool_block("Task", subagent_type="Bash")
+        )
+        assert _format_tool_activity(event) == [":robot_face: Spawning Bash"]
+
+    def test_task_tool_no_details(self):
         event = self._make_tool_event(self._tool_block("Task"))
         assert _format_tool_activity(event) == [":robot_face: Spawning subagent"]
+
+    def test_skill_tool_with_name(self):
+        event = self._make_tool_event(
+            self._tool_block("Skill", skill="commit")
+        )
+        assert _format_tool_activity(event) == [":zap: Running skill `commit`"]
+
+    def test_skill_tool_no_name(self):
+        event = self._make_tool_event(self._tool_block("Skill"))
+        assert _format_tool_activity(event) == [":zap: Running skill"]
+
+    def test_notebook_edit_tool(self):
+        event = self._make_tool_event(
+            self._tool_block("NotebookEdit", notebook_path="/home/user/analysis.ipynb")
+        )
+        assert _format_tool_activity(event) == [":notebook: Editing notebook `analysis.ipynb`"]
+
+    def test_enter_plan_mode_tool(self):
+        event = self._make_tool_event(self._tool_block("EnterPlanMode"))
+        assert _format_tool_activity(event) == [":clipboard: Entering plan mode"]
+
+    def test_ask_user_question_tool(self):
+        event = self._make_tool_event(self._tool_block("AskUserQuestion"))
+        assert _format_tool_activity(event) == [":question: Asking user a question"]
 
     def test_unknown_tool_fallback(self):
         event = self._make_tool_event(self._tool_block("CustomTool"))
@@ -2017,3 +2066,328 @@ class TestFileShareSubtype:
             }
             await message_handler(event=event, client=AsyncMock())
             mock_process.assert_called_once()
+
+
+class TestFormatCompletionSummary:
+    """Test _format_completion_summary helper."""
+
+    def test_full_summary(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={
+                "type": "result",
+                "num_turns": 5,
+                "total_cost_usd": 0.03,
+                "duration_ms": 12000,
+                "is_error": False,
+            },
+        )
+        result = _format_completion_summary(event)
+        assert result == ":checkered_flag: Done — 5 turns, $0.03, 12s"
+
+    def test_single_turn(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={
+                "type": "result",
+                "num_turns": 1,
+                "total_cost_usd": 0.01,
+                "duration_ms": 3000,
+            },
+        )
+        result = _format_completion_summary(event)
+        assert result == ":checkered_flag: Done — 1 turn, $0.01, 3s"
+
+    def test_error_result(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={
+                "type": "result",
+                "num_turns": 2,
+                "total_cost_usd": 0.05,
+                "duration_ms": 8000,
+                "is_error": True,
+            },
+        )
+        result = _format_completion_summary(event)
+        assert result.startswith(":x:")
+
+    def test_long_duration_shows_minutes(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={
+                "type": "result",
+                "num_turns": 10,
+                "total_cost_usd": 0.50,
+                "duration_ms": 125000,
+            },
+        )
+        result = _format_completion_summary(event)
+        assert "2m5s" in result
+
+    def test_partial_fields(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={"type": "result", "num_turns": 3},
+        )
+        result = _format_completion_summary(event)
+        assert result == ":checkered_flag: Done — 3 turns"
+
+    def test_no_fields_returns_none(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={"type": "result"},
+        )
+        assert _format_completion_summary(event) is None
+
+
+class TestToolErrorHandling:
+    """Test that tool errors from user events are posted to Slack."""
+
+    @pytest.fixture
+    def config(self):
+        return Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+        )
+
+    @pytest.fixture
+    def sessions(self):
+        return SessionStore()
+
+    def _make_event(self, type: str, text: str = "", **kwargs) -> ClaudeEvent:
+        if type == "assistant":
+            raw = {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": text}]},
+                **kwargs,
+            }
+        elif type == "result":
+            raw = {"type": "result", "result": text, **kwargs}
+        elif type == "user":
+            raw = {"type": "user", **kwargs}
+        else:
+            raw = {"type": type, **kwargs}
+        return ClaudeEvent(type=type, raw=raw)
+
+    def _mock_client(self):
+        client = AsyncMock()
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {"channel": {"name": "general"}}
+        return client
+
+    @pytest.mark.asyncio
+    async def test_tool_error_posted_as_warning(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_event(
+                "user",
+                message={
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "is_error": True,
+                            "content": "Command failed: exit code 1",
+                        }
+                    ]
+                },
+            )
+            yield self._make_event("assistant", text="Got an error.")
+            yield self._make_event("result", text="Got an error.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "10000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "run tests", client, config, sessions)
+
+        # Find the warning message
+        warning_calls = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":warning:" in c.kwargs.get("text", "")
+        ]
+        assert len(warning_calls) == 1
+        assert "Command failed: exit code 1" in warning_calls[0].kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_long_tool_error_truncated(self, config, sessions):
+        long_error = "x" * 500
+
+        async def fake_stream(prompt):
+            yield self._make_event(
+                "user",
+                message={
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "is_error": True,
+                            "content": long_error,
+                        }
+                    ]
+                },
+            )
+            yield self._make_event("result", text="done")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "10001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "do it", client, config, sessions)
+
+        warning_calls = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":warning:" in c.kwargs.get("text", "")
+        ]
+        assert len(warning_calls) == 1
+        assert warning_calls[0].kwargs["text"].endswith("...")
+
+    @pytest.mark.asyncio
+    async def test_non_error_tool_result_ignored(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_event(
+                "user",
+                message={
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "is_error": False,
+                            "content": "success output",
+                        }
+                    ]
+                },
+            )
+            yield self._make_event("result", text="done")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "10002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "do it", client, config, sessions)
+
+        warning_calls = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":warning:" in c.kwargs.get("text", "")
+        ]
+        assert len(warning_calls) == 0
+
+
+class TestCompletionSummaryPosting:
+    """Test that completion summary is posted after streaming."""
+
+    @pytest.fixture
+    def config(self):
+        return Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+        )
+
+    @pytest.fixture
+    def sessions(self):
+        return SessionStore()
+
+    def _make_event(self, type: str, text: str = "", **kwargs) -> ClaudeEvent:
+        if type == "assistant":
+            raw = {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": text}]},
+                **kwargs,
+            }
+        elif type == "result":
+            raw = {"type": "result", "result": text, **kwargs}
+        else:
+            raw = {"type": type, **kwargs}
+        return ClaudeEvent(type=type, raw=raw)
+
+    def _mock_client(self):
+        client = AsyncMock()
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {"channel": {"name": "general"}}
+        return client
+
+    @pytest.mark.asyncio
+    async def test_summary_posted_after_response(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_event("assistant", text="Done!")
+            yield self._make_event(
+                "result", text="Done!",
+                num_turns=3, total_cost_usd=0.02, duration_ms=5000,
+            )
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "11000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions)
+
+        # Last chat_postMessage before reactions should be the summary
+        post_calls = client.chat_postMessage.call_args_list
+        summary_calls = [
+            c for c in post_calls
+            if ":checkered_flag:" in c.kwargs.get("text", "")
+        ]
+        assert len(summary_calls) == 1
+        assert "3 turns" in summary_calls[0].kwargs["text"]
+        assert "$0.02" in summary_calls[0].kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_no_summary_when_no_result_event(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_event("assistant", text="Partial response")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "11001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions)
+
+        summary_calls = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":checkered_flag:" in c.kwargs.get("text", "")
+        ]
+        assert len(summary_calls) == 0
+
+
+class TestSubagentPrefix:
+    """Test that subagent activities get the hook prefix."""
+
+    def _make_tool_event(self, *tool_blocks, parent_tool_use_id=None) -> ClaudeEvent:
+        content = list(tool_blocks)
+        raw = {"type": "assistant", "message": {"content": content}}
+        if parent_tool_use_id:
+            raw["parent_tool_use_id"] = parent_tool_use_id
+        return ClaudeEvent(type="assistant", raw=raw)
+
+    def _tool_block(self, name: str, **inputs) -> dict:
+        return {"type": "tool_use", "name": name, "input": inputs}
+
+    def test_parent_tool_use_id_detected(self):
+        event = self._make_tool_event(
+            self._tool_block("Read", file_path="/src/a.py"),
+            parent_tool_use_id="toolu_abc123",
+        )
+        assert event.parent_tool_use_id == "toolu_abc123"
+
+    def test_no_parent_tool_use_id(self):
+        event = self._make_tool_event(
+            self._tool_block("Read", file_path="/src/a.py"),
+        )
+        assert event.parent_tool_use_id is None

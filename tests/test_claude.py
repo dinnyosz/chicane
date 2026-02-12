@@ -91,6 +91,119 @@ class TestClaudeEvent:
         )
         assert event.text == ""
 
+    def test_num_turns(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={"type": "result", "num_turns": 5},
+        )
+        assert event.num_turns == 5
+
+    def test_num_turns_absent(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={"type": "result"},
+        )
+        assert event.num_turns is None
+
+    def test_duration_ms(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={"type": "result", "duration_ms": 12000},
+        )
+        assert event.duration_ms == 12000
+
+    def test_duration_ms_absent(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={"type": "result"},
+        )
+        assert event.duration_ms is None
+
+    def test_parent_tool_use_id(self):
+        event = ClaudeEvent(
+            type="assistant",
+            raw={
+                "type": "assistant",
+                "parent_tool_use_id": "toolu_abc123",
+                "message": {"content": []},
+            },
+        )
+        assert event.parent_tool_use_id == "toolu_abc123"
+
+    def test_parent_tool_use_id_absent(self):
+        event = ClaudeEvent(
+            type="assistant",
+            raw={"type": "assistant", "message": {"content": []}},
+        )
+        assert event.parent_tool_use_id is None
+
+    def test_tool_errors_from_user_event(self):
+        event = ClaudeEvent(
+            type="user",
+            raw={
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "is_error": True,
+                            "content": "Command failed",
+                        },
+                        {
+                            "type": "tool_result",
+                            "is_error": False,
+                            "content": "Success",
+                        },
+                    ]
+                },
+            },
+        )
+        errors = event.tool_errors
+        assert errors == ["Command failed"]
+
+    def test_tool_errors_with_list_content(self):
+        event = ClaudeEvent(
+            type="user",
+            raw={
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "is_error": True,
+                            "content": [{"type": "text", "text": "error part 1"}, {"type": "text", "text": " part 2"}],
+                        }
+                    ]
+                },
+            },
+        )
+        assert event.tool_errors == ["error part 1 part 2"]
+
+    def test_tool_errors_empty_for_non_user_event(self):
+        event = ClaudeEvent(
+            type="assistant",
+            raw={"type": "assistant", "message": {"content": []}},
+        )
+        assert event.tool_errors == []
+
+    def test_tool_errors_empty_when_no_errors(self):
+        event = ClaudeEvent(
+            type="user",
+            raw={
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "is_error": False,
+                            "content": "all good",
+                        }
+                    ]
+                },
+            },
+        )
+        assert event.tool_errors == []
+
 
 class TestClaudeSession:
     def test_build_command_basic(self):
