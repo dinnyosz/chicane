@@ -122,14 +122,6 @@ chicane handoff --summary "Refactoring the auth module, tests passing"
 
 The session ID is auto-detected from Claude Code's history. The channel is resolved from your current working directory via the `CHANNEL_DIRS` mapping. When someone replies to the handoff message in Slack, Chicane resumes that exact Claude Code session with all prior context.
 
-### Legacy: handoff skill
-
-```bash
-chicane install-skill
-```
-
-This installs a Claude Code skill at `~/.claude/skills/chicane-handoff/SKILL.md`. The MCP server approach above is preferred as it integrates more cleanly with Claude Code.
-
 ## CLI reference
 
 ```
@@ -141,7 +133,6 @@ chicane <command> [options]
 | `setup` | Guided setup wizard (creates/updates `.env`) |
 | `run` | Start the Slack bot |
 | `handoff` | Post a handoff message to Slack |
-| `install-skill` | Install the chicane-handoff skill for Claude Code |
 | `help` | Show help message |
 
 ### `chicane setup`
@@ -160,10 +151,6 @@ Starts the Slack bot. Connects via Socket Mode and listens for messages.
 | `--session-id` | No | Claude session ID (auto-detected from `~/.claude/history.jsonl` if omitted) |
 | `--channel` | No | Slack channel name (auto-resolved from cwd via `CHANNEL_DIRS` if omitted) |
 | `--cwd` | No | Working directory to resolve channel from (defaults to `$PWD`) |
-
-### `chicane install-skill`
-
-Installs the handoff skill to `~/.claude/skills/chicane-handoff/SKILL.md`. No flags.
 
 ## Configuration reference
 
