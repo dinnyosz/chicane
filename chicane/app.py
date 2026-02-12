@@ -19,11 +19,45 @@ os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_bolt.async_app import AsyncApp
 
-from .config import Config
+from .config import Config, config_dir
 from .handlers import register_handlers
 from .sessions import SessionStore
 
 logger = logging.getLogger(__name__)
+
+PID_FILE = config_dir() / "chicane.pid"
+
+
+def _acquire_pidfile() -> None:
+    """Write our PID to the pidfile, or exit if another instance is running."""
+    if PID_FILE.exists():
+        try:
+            other_pid = int(PID_FILE.read_text().strip())
+        except (ValueError, OSError):
+            logger.warning("Corrupt PID file, overwriting.")
+        else:
+            try:
+                os.kill(other_pid, 0)
+            except OSError:
+                logger.warning("Stale PID file (process %d is dead), overwriting.", other_pid)
+            else:
+                print(
+                    f"Error: Chicane is already running (PID {other_pid}). "
+                    f"Kill it first or remove {PID_FILE}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+    PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PID_FILE.write_text(str(os.getpid()))
+
+
+def _release_pidfile() -> None:
+    """Remove the PID file if it still contains our PID."""
+    try:
+        if PID_FILE.exists() and int(PID_FILE.read_text().strip()) == os.getpid():
+            PID_FILE.unlink()
+    except (ValueError, OSError):
+        pass
 
 
 def create_app(config: Config | None = None) -> AsyncApp:
@@ -45,48 +79,52 @@ def create_app(config: Config | None = None) -> AsyncApp:
 
 async def start(config: Config | None = None) -> None:
     """Start the bot."""
-    if config is None:
-        config = Config.from_env()
-
-    log_level = getattr(logging, config.log_level, logging.INFO)
-    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-
-    handlers: list[logging.Handler] = [logging.StreamHandler()]
-    if config.log_dir:
-        config.log_dir.mkdir(parents=True, exist_ok=True)
-        from datetime import datetime
-        log_file = config.log_dir / f"chicane-{datetime.now():%Y-%m-%d}.log"
-        handlers.append(logging.FileHandler(str(log_file)))
-
-    logging.basicConfig(level=log_level, format=log_format, handlers=handlers)
-
-    app = create_app(config)
-
-    handler = AsyncSocketModeHandler(app, config.slack_app_token)
-    logger.info("Starting Chicane...")
-
-    await handler.connect_async()
-    logger.info("Chicane is running. Press Ctrl+C to stop.")
-
-    loop = asyncio.get_running_loop()
-    stop = asyncio.Event()
-
-    def _handle_signal() -> None:
-        if stop.is_set():
-            print("\nForce quit.")
-            os._exit(0)
-        print("\nShutting down... (press Ctrl+C again to force quit)")
-        stop.set()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _handle_signal)
-
-    await stop.wait()
+    _acquire_pidfile()
     try:
-        await asyncio.wait_for(handler.close_async(), timeout=3.0)
-    except asyncio.TimeoutError:
-        logger.warning("Graceful shutdown timed out, exiting anyway.")
-    logger.info("Goodbye.")
+        if config is None:
+            config = Config.from_env()
+
+        log_level = getattr(logging, config.log_level, logging.INFO)
+        log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+        handlers: list[logging.Handler] = [logging.StreamHandler()]
+        if config.log_dir:
+            config.log_dir.mkdir(parents=True, exist_ok=True)
+            from datetime import datetime
+            log_file = config.log_dir / f"chicane-{datetime.now():%Y-%m-%d}.log"
+            handlers.append(logging.FileHandler(str(log_file)))
+
+        logging.basicConfig(level=log_level, format=log_format, handlers=handlers)
+
+        app = create_app(config)
+
+        handler = AsyncSocketModeHandler(app, config.slack_app_token)
+        logger.info("Starting Chicane...")
+
+        await handler.connect_async()
+        logger.info("Chicane is running. Press Ctrl+C to stop.")
+
+        loop = asyncio.get_running_loop()
+        stop = asyncio.Event()
+
+        def _handle_signal() -> None:
+            if stop.is_set():
+                print("\nForce quit.")
+                os._exit(0)
+            print("\nShutting down... (press Ctrl+C again to force quit)")
+            stop.set()
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, _handle_signal)
+
+        await stop.wait()
+        try:
+            await asyncio.wait_for(handler.close_async(), timeout=3.0)
+        except asyncio.TimeoutError:
+            logger.warning("Graceful shutdown timed out, exiting anyway.")
+        logger.info("Goodbye.")
+    finally:
+        _release_pidfile()
 
 
 # ---------------------------------------------------------------------------
