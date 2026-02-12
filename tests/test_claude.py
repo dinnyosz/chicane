@@ -257,12 +257,16 @@ class TestClaudeSessionStream:
             raise RuntimeError("boom")
 
         process = AsyncMock()
-        process.returncode = 0
+        process.returncode = None
         process.stdout = exploding_stdout()
         process.stderr = AsyncMock()
         process.stderr.read = AsyncMock(return_value=b"")
         process.wait = AsyncMock()
         process.kill = MagicMock()
+        # After kill(), returncode becomes set
+        def _set_returncode():
+            process.returncode = -9
+        process.kill.side_effect = _set_returncode
 
         session = ClaudeSession()
         with patch("asyncio.create_subprocess_exec", return_value=process):
@@ -310,8 +314,83 @@ class TestClaudeSessionStream:
             async for _ in session.stream("hello"):
                 pass
 
-        process.kill.assert_called()
         assert any("did not exit in time" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_stream_kills_subprocess_on_cancel(self):
+        """CancelledError (BaseException) must still kill the subprocess."""
+        cancel_after_first = True
+
+        async def cancelling_stdout():
+            yield json.dumps({"type": "system", "subtype": "init", "session_id": "s1"}).encode() + b"\n"
+            raise asyncio.CancelledError()
+
+        process = AsyncMock()
+        process.returncode = None
+        process.stdout = cancelling_stdout()
+        process.stderr = AsyncMock()
+        process.stderr.read = AsyncMock(return_value=b"")
+        process.wait = AsyncMock()
+        process.kill = MagicMock()
+        def _set_returncode():
+            process.returncode = -9
+        process.kill.side_effect = _set_returncode
+
+        session = ClaudeSession()
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            with pytest.raises(asyncio.CancelledError):
+                async for _ in session.stream("hello"):
+                    pass
+
+        process.kill.assert_called()
+        assert session._process is None
+
+    @pytest.mark.asyncio
+    async def test_stream_sets_and_clears_process(self):
+        """_process is set during streaming and cleared after."""
+        lines = [
+            json.dumps({"type": "result", "result": "ok"}).encode() + b"\n",
+        ]
+        process = _make_process_mock(lines)
+
+        session = ClaudeSession()
+        assert session._process is None
+
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            async for _ in session.stream("hello"):
+                assert session._process is process
+
+        assert session._process is None
+
+
+class TestClaudeSessionKill:
+    """Tests for the kill() method."""
+
+    def test_kill_terminates_active_process(self):
+        process = MagicMock()
+        process.returncode = None
+        process.kill = MagicMock()
+
+        session = ClaudeSession()
+        session._process = process
+        session.kill()
+
+        process.kill.assert_called_once()
+
+    def test_kill_noop_when_no_process(self):
+        session = ClaudeSession()
+        session.kill()  # Should not raise
+
+    def test_kill_noop_when_process_already_exited(self):
+        process = MagicMock()
+        process.returncode = 0
+        process.kill = MagicMock()
+
+        session = ClaudeSession()
+        session._process = process
+        session.kill()
+
+        process.kill.assert_not_called()
 
 
 class TestClaudeSessionRun:

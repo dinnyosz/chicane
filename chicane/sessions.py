@@ -170,6 +170,12 @@ class SessionStore:
         """Remove a session."""
         self._sessions.pop(thread_ts, None)
 
+    def shutdown(self) -> None:
+        """Kill all active Claude subprocesses."""
+        for info in self._sessions.values():
+            info.session.kill()
+        self._sessions.clear()
+
     def cleanup(self, max_age_hours: int = 24) -> int:
         """Remove sessions older than max_age_hours. Returns count removed."""
         now = datetime.now()

@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -111,3 +112,24 @@ class TestSessionStore:
         )
         assert session.session_id == "sess-42"
         assert session.cwd == Path("/tmp/work")
+
+    def test_shutdown_kills_all_sessions(self, store, config):
+        s1 = store.get_or_create("thread-1", config, cwd=Path("/tmp/a"))
+        s2 = store.get_or_create("thread-2", config, cwd=Path("/tmp/b"))
+        s1.kill = MagicMock()
+        s2.kill = MagicMock()
+
+        store.shutdown()
+
+        s1.kill.assert_called_once()
+        s2.kill.assert_called_once()
+
+    def test_shutdown_clears_sessions(self, store, config):
+        store.get_or_create("thread-1", config, cwd=Path("/tmp/a"))
+        store.get_or_create("thread-2", config, cwd=Path("/tmp/b"))
+
+        store.shutdown()
+
+        assert len(store._sessions) == 0
+        assert not store.has("thread-1")
+        assert not store.has("thread-2")

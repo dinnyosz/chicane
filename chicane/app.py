@@ -97,6 +97,7 @@ async def start(config: Config | None = None) -> None:
         logging.basicConfig(level=log_level, format=log_format, handlers=handlers)
 
         app = create_app(config)
+        sessions: SessionStore = app._chicane_sessions  # type: ignore[attr-defined]
 
         handler = AsyncSocketModeHandler(app, config.slack_app_token)
         logger.info("Starting Chicane...")
@@ -118,6 +119,7 @@ async def start(config: Config | None = None) -> None:
             loop.add_signal_handler(sig, _handle_signal)
 
         await stop.wait()
+        sessions.shutdown()
         try:
             await asyncio.wait_for(handler.close_async(), timeout=3.0)
         except asyncio.TimeoutError:

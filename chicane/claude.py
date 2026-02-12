@@ -65,6 +65,12 @@ class ClaudeSession:
         self.permission_mode = permission_mode
         self.system_prompt = system_prompt
         self.allowed_tools = allowed_tools or []
+        self._process: asyncio.subprocess.Process | None = None
+
+    def kill(self) -> None:
+        """Kill the active subprocess if any."""
+        if self._process and self._process.returncode is None:
+            self._process.kill()
 
     def _build_command(self, prompt: str) -> list[str]:
         cmd = [
@@ -109,6 +115,7 @@ class ClaudeSession:
             cwd=str(self.cwd),
             limit=1024 * 1024,  # 1 MiB – Claude stream-json lines can exceed the 64 KiB default
         )
+        self._process = process
 
         event_count = 0
         try:
@@ -133,15 +140,14 @@ class ClaudeSession:
 
                 yield event
 
-        except Exception:
-            process.kill()
-            raise
         finally:
+            if process.returncode is None:
+                process.kill()
             try:
                 await asyncio.wait_for(process.wait(), timeout=5.0)
             except asyncio.TimeoutError:
-                process.kill()
-                logger.warning("Claude subprocess did not exit in time, killed.")
+                logger.warning("Claude subprocess did not exit in time.")
+            self._process = None
 
             stderr = ""
             if process.stderr:
