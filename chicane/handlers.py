@@ -27,26 +27,23 @@ _HANDOFF_RE = re.compile(r"_?\(session_id:\s*([a-f0-9\-]+)\)_?\s*$")
 def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> None:
     """Register all Slack event handlers on the app."""
     bot_user_id: str | None = None
-    mention_processed_ts: set[str] = set()
-    message_processed_ts: set[str] = set()
+    processed_ts: set[str] = set()
 
-    def _mark_processed(ts: str, source: set[str]) -> bool:
+    def _mark_processed(ts: str) -> bool:
         """Mark a message as processed. Returns False if already seen."""
-        if ts in source:
+        if ts in processed_ts:
             return False
-        source.add(ts)
+        processed_ts.add(ts)
         # Keep the set bounded
-        if len(source) > 500:
-            source.clear()
+        if len(processed_ts) > 500:
+            processed_ts.clear()
         return True
 
     @app.event("app_mention")
     async def handle_mention(event: dict, client: AsyncWebClient) -> None:
         """Handle @mentions of the bot in channels."""
-        if not _mark_processed(event["ts"], mention_processed_ts):
+        if not _mark_processed(event["ts"]):
             return
-        # Cross-mark so handle_message skips this event too
-        _mark_processed(event["ts"], message_processed_ts)
 
         if _should_ignore(event, config):
             return
@@ -65,7 +62,8 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
         # Skip message subtypes (edits, deletes, etc.)
         if event.get("subtype"):
             return
-        if not _mark_processed(event["ts"], message_processed_ts):
+        # Fast reject if already handled by app_mention or a prior delivery
+        if event["ts"] in processed_ts:
             return
 
         channel_type = event.get("channel_type", "")
@@ -75,6 +73,8 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
 
         # DMs: process everything
         if channel_type == "im":
+            if not _mark_processed(event["ts"]):
+                return
             if _should_ignore(event, config):
                 return
             await _process_message(event, text, client, config, sessions)
@@ -93,30 +93,24 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
                 )
                 logger.debug(f"Bot in thread {thread_ts}: {is_chicane_thread}")
             if is_chicane_thread:
+                if not _mark_processed(event["ts"]):
+                    return
                 if _should_ignore(event, config):
                     return
-                # Mark in mention set too to prevent app_mention from
-                # double-processing when bot is already in the thread
-                _mark_processed(event["ts"], mention_processed_ts)
                 await _process_message(event, text, client, config, sessions)
                 return
-            # Not a Chicane thread — don't handle here. If the user @mentioned
-            # the bot, the app_mention handler will pick it up and start
-            # a new session for this thread.
+            # Not a Chicane thread — don't claim the ts so app_mention
+            # can still handle @mentions in unknown threads.
             return
 
         # Channel messages with @mention from bots (app_mention doesn't fire for bots).
-        # Skip if app_mention already handled this event.
-        if event["ts"] in mention_processed_ts:
-            return
-
         if not bot_user_id:
             auth = await client.auth_test()
             bot_user_id = auth["user_id"]
 
         if f"<@{bot_user_id}>" in text:
-            # Cross-mark so handle_mention skips this event too
-            _mark_processed(event["ts"], mention_processed_ts)
+            if not _mark_processed(event["ts"]):
+                return
             if _should_ignore(event, config):
                 return
             clean_text = re.sub(r"<@[A-Z0-9]+>\s*", "", text).strip()
