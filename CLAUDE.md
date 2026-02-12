@@ -34,12 +34,13 @@ pytest -k "test_from_env"           # pattern match
 Slack (Socket Mode) → app.py → handlers.py → sessions.py → claude.py → Claude Code CLI subprocess
 ```
 
-**Six modules, each with a single responsibility:**
+**Seven modules, each with a single responsibility:**
 
-- **`app.py`** — CLI entrypoints (`run`, `setup`, `handoff`, `install-skill`), AsyncApp creation, signal handling, logging setup. Stores config and sessions as private attrs on the AsyncApp (`_chicane_config`, `_chicane_sessions`).
+- **`app.py`** — CLI entrypoints (`run`, `setup`, `handoff`, `install-skill`), AsyncApp creation, signal handling, logging setup. Exports `resolve_session_id()` and `resolve_channel_id()` as shared helpers. Stores config and sessions as private attrs on the AsyncApp (`_chicane_config`, `_chicane_sessions`).
 - **`config.py`** — Frozen dataclass loaded from env vars. Config file lives at `platformdirs.user_config_dir("chicane")/.env`. Validates tokens, permission modes, log levels. `resolve_channel_dir()` maps Slack channels to working directories.
 - **`claude.py`** — `ClaudeSession` wraps a `claude` CLI subprocess with `--print --output-format stream-json --verbose`. `ClaudeEvent` dataclass parses streaming JSON events, extracting text (skipping tool_use blocks), session_id, errors, and cost. System prompt only sent on first call, not on resumes.
 - **`handlers.py`** — Registers `app_mention` and `message` event handlers. Core flow in `_process_message()`: dedup → resolve cwd → get/create session → stream response → split into Slack-safe chunks (3900 char limit). Handles reconnection by scanning thread history for handoff session IDs. Adds emoji reactions for visual feedback (eyes → checkmark/x).
+- **`mcp_server.py`** — FastMCP server exposing `chicane_handoff` and `chicane_send_message` tools for Claude Code. Uses stdio transport. Entry point: `chicane-mcp = "chicane.mcp_server:main"`.
 - **`sessions.py`** — `SessionStore` maps `thread_ts → SessionInfo`. One Claude session per Slack thread. Includes `SLACK_SYSTEM_PROMPT` that tells Claude it's operating via Slack with formatting constraints. Auto-cleanup of idle sessions (24h default).
 - **`setup.py`** — 10-step interactive wizard using Rich. Saves config progressively after each step.
 
@@ -53,7 +54,8 @@ Slack (Socket Mode) → app.py → handlers.py → sessions.py → claude.py →
 - Python 3.11+, async throughout (asyncio, AsyncApp, AsyncWebClient)
 - `slack-bolt[async]` for Slack Socket Mode
 - `pytest` + `pytest-asyncio` for tests
-- `hatchling` build backend, entry point: `chicane = "chicane.app:main"`
+- `mcp` (Model Context Protocol) for the MCP server (`chicane-mcp` entry point)
+- `hatchling` build backend, entry points: `chicane = "chicane.app:main"`, `chicane-mcp = "chicane.mcp_server:main"`
 - `platformdirs` for OS-specific config paths
 - `rich` for terminal UI in setup wizard
 

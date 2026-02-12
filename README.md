@@ -81,11 +81,52 @@ chicane run
 - **Thread follow-ups** &mdash; reply in the thread to continue the conversation with full context
 - **Reconnect after restart** &mdash; Chicane automatically picks up existing threads when it restarts
 
-## Handoff
+## Handoff & MCP
 
-Chicane supports handing off sessions between Claude Code on your desktop and Slack.
+Chicane supports handing off sessions between Claude Code on your desktop and Slack, and sending messages to Slack channels directly from Claude Code.
 
-**Desktop to Slack:** From a Claude Code session on your terminal, hand the session off to Slack so you (or your team) can continue it from any device.
+### MCP server (recommended)
+
+Chicane ships with an MCP server that exposes `chicane_handoff` and `chicane_send_message` as tools Claude Code can call natively — no shell scripts or skills needed.
+
+**If you installed from PyPI:**
+
+```bash
+claude mcp add chicane -- chicane-mcp
+```
+
+**If you installed from source (`pip install -e .`):**
+
+```bash
+claude mcp add -s local chicane -- /full/path/to/chicane-mcp
+```
+
+Find the path with `which chicane-mcp`.
+
+**For development (not yet installed):**
+
+```bash
+claude mcp add -s local chicane-dev -- /full/path/to/repo/.venv/bin/chicane-mcp
+```
+
+Or using `uv`/`python -m`:
+
+```bash
+claude mcp add -s local chicane-dev -- python -m chicane.mcp_server
+```
+
+Once added, Claude Code discovers the tools automatically. You can say "hand this off to Slack" or "send a message to the team" and Claude will use the MCP tools.
+
+**Tools:**
+
+| Tool | Description |
+|---|---|
+| `chicane_handoff` | Hand off the current session to Slack. Auto-detects session ID and channel from cwd. |
+| `chicane_send_message` | Send a message to a Slack channel. Channel auto-resolved from cwd via `CHANNEL_DIRS`. |
+
+### CLI handoff
+
+You can also hand off sessions via the CLI directly:
 
 ```bash
 chicane handoff --summary "Refactoring the auth module, tests passing"
@@ -93,13 +134,13 @@ chicane handoff --summary "Refactoring the auth module, tests passing"
 
 The session ID is auto-detected from Claude Code's history. The channel is resolved from your current working directory via the `CHANNEL_DIRS` mapping. When someone replies to the handoff message in Slack, Chicane resumes that exact Claude Code session with all prior context.
 
-**Install the handoff skill** to let Claude Code itself trigger handoffs:
+### Legacy: handoff skill
 
 ```bash
 chicane install-skill
 ```
 
-This installs a Claude Code skill at `~/.claude/skills/chicane-handoff/SKILL.md`. After installing, you can tell Claude Code "hand this off to Slack" and it will do it automatically.
+This installs a Claude Code skill at `~/.claude/skills/chicane-handoff/SKILL.md`. The MCP server approach above is preferred as it integrates more cleanly with Claude Code.
 
 ## CLI reference
 
