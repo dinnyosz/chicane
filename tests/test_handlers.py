@@ -13,6 +13,7 @@ from chicane.handlers import (
     _find_session_id_in_thread,
     _HANDOFF_RE,
     _process_message,
+    _resolve_channel_cwd,
     _should_ignore,
     _split_message,
     register_handlers,
@@ -715,3 +716,438 @@ class TestProcessMessageFormatting:
 
         final_update = client.chat_update.call_args_list[-1]
         assert final_update.kwargs["text"] == result_text
+
+
+class TestHandlerRoutingEdgeCases:
+    """Test handler routing edge cases: blocked users, empty text, subtypes, DMs."""
+
+    @pytest.fixture
+    def app(self):
+        mock_app = MagicMock()
+        self._handlers: dict[str, AsyncMock] = {}
+
+        def capture_event(event_type):
+            def decorator(fn):
+                self._handlers[event_type] = fn
+                return fn
+            return decorator
+
+        mock_app.event = capture_event
+        return mock_app
+
+    @pytest.fixture
+    def sessions(self):
+        return SessionStore()
+
+    @pytest.mark.asyncio
+    async def test_mention_ignored_for_blocked_user(self, app, config_restricted, sessions):
+        register_handlers(app, config_restricted, sessions)
+        mention_handler = self._handlers["app_mention"]
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            event = {
+                "ts": "2000.0",
+                "channel": "C_CHAN",
+                "user": "U_BLOCKED",
+                "text": "<@UBOT123> help me",
+            }
+            await mention_handler(event=event, client=AsyncMock())
+            mock_process.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mention_with_empty_text_ignored(self, app, config, sessions):
+        register_handlers(app, config, sessions)
+        mention_handler = self._handlers["app_mention"]
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            event = {
+                "ts": "2001.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+                "text": "<@UBOT123>",
+            }
+            await mention_handler(event=event, client=AsyncMock())
+            mock_process.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_message_subtype_ignored(self, app, config, sessions):
+        register_handlers(app, config, sessions)
+        message_handler = self._handlers["message"]
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            event = {
+                "ts": "2002.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+                "text": "edited text",
+                "subtype": "message_changed",
+            }
+            await message_handler(event=event, client=AsyncMock())
+            mock_process.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_message_empty_text_ignored(self, app, config, sessions):
+        register_handlers(app, config, sessions)
+        message_handler = self._handlers["message"]
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            event = {
+                "ts": "2003.0",
+                "channel": "C_CHAN",
+                "channel_type": "channel",
+                "user": "UHUMAN1",
+                "text": "",
+            }
+            await message_handler(event=event, client=AsyncMock())
+            mock_process.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dm_processed(self, app, config, sessions):
+        register_handlers(app, config, sessions)
+        message_handler = self._handlers["message"]
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            event = {
+                "ts": "2004.0",
+                "channel": "D_DM",
+                "channel_type": "im",
+                "user": "UHUMAN1",
+                "text": "hello in DM",
+            }
+            await message_handler(event=event, client=AsyncMock())
+            mock_process.assert_called_once()
+            assert mock_process.call_args[0][1] == "hello in DM"
+
+    @pytest.mark.asyncio
+    async def test_dm_blocked_user_ignored(self, app, config_restricted, sessions):
+        register_handlers(app, config_restricted, sessions)
+        message_handler = self._handlers["message"]
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            event = {
+                "ts": "2005.0",
+                "channel": "D_DM",
+                "channel_type": "im",
+                "user": "U_BLOCKED",
+                "text": "hello in DM",
+            }
+            await message_handler(event=event, client=AsyncMock())
+            mock_process.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dedup_set_bounded(self, app, config, sessions):
+        register_handlers(app, config, sessions)
+        mention_handler = self._handlers["app_mention"]
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock):
+            # Process 501 unique events to trigger the set clearing
+            for i in range(501):
+                event = {
+                    "ts": f"{3000 + i}.0",
+                    "channel": "C_CHAN",
+                    "user": "UHUMAN1",
+                    "text": f"<@UBOT123> msg {i}",
+                }
+                await mention_handler(event=event, client=AsyncMock())
+
+        # After clearing, a previously-seen ts should be processable again
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            event = {
+                "ts": "3000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+                "text": "<@UBOT123> msg 0",
+            }
+            await mention_handler(event=event, client=AsyncMock())
+            mock_process.assert_called_once()
+
+
+class TestProcessMessageEdgeCases:
+    """Test _process_message error paths and edge cases."""
+
+    @pytest.fixture
+    def config(self):
+        return Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+        )
+
+    @pytest.fixture
+    def sessions(self):
+        return SessionStore()
+
+    def _make_event(self, type: str, text: str = "", **kwargs) -> ClaudeEvent:
+        if type == "assistant":
+            raw = {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": text}]},
+                **kwargs,
+            }
+        elif type == "result":
+            raw = {"type": "result", "result": text, **kwargs}
+        else:
+            raw = {"type": type, **kwargs}
+        return ClaudeEvent(type=type, raw=raw)
+
+    def _mock_client(self):
+        client = AsyncMock()
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {"channel": {"name": "general"}}
+        return client
+
+    @pytest.mark.asyncio
+    async def test_handoff_session_id_extracted(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_event("result", text="done")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "abc-123"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session) as mock_create:
+            event = {"ts": "5000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(
+                event,
+                "do stuff (session_id: abc-123)",
+                client, config, sessions,
+            )
+            # Session should be created with the handoff session_id
+            assert mock_create.call_args.kwargs["session_id"] == "abc-123"
+
+    @pytest.mark.asyncio
+    async def test_reaction_add_failure_doesnt_block(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_event("result", text="ok")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+        client.reactions_add.side_effect = Exception("permission denied")
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "5001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions)
+
+        # Should still have updated the message despite reaction failure
+        client.chat_update.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_response_posts_warning(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_event("system", subtype="init", session_id="s1")
+            # No assistant or result text
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "5002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions)
+
+        final_update = client.chat_update.call_args_list[-1]
+        assert "empty response" in final_update.kwargs["text"].lower()
+
+    @pytest.mark.asyncio
+    async def test_stream_exception_posts_error(self, config, sessions):
+        async def exploding_stream(prompt):
+            yield self._make_event("system", subtype="init", session_id="s1")
+            raise RuntimeError("stream exploded")
+
+        mock_session = MagicMock()
+        mock_session.stream = exploding_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "5003.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions)
+
+        # Error message should be posted
+        error_update = client.chat_update.call_args_list[-1]
+        assert ":x: Error:" in error_update.kwargs["text"]
+        assert "stream exploded" in error_update.kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_long_response_split_into_chunks(self, config, sessions):
+        long_text = "a" * 8000
+
+        async def fake_stream(prompt):
+            yield self._make_event("result", text=long_text)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "5004.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions)
+
+        # First chunk via chat_update, remaining via chat_postMessage
+        assert client.chat_update.called
+        assert client.chat_postMessage.call_count >= 2  # initial "working" + at least 1 extra chunk
+
+    @pytest.mark.asyncio
+    async def test_periodic_update_during_streaming(self, config, sessions):
+        # Generate enough text to trigger a periodic update (>100 chars)
+        chunk_text = "x" * 150
+
+        async def fake_stream(prompt):
+            yield self._make_event("assistant", text=chunk_text)
+            yield self._make_event("result", text=chunk_text)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "5005.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions)
+
+        # chat_update should have been called at least twice:
+        # 1. periodic update during streaming (>100 chars)
+        # 2. final update with complete text
+        assert client.chat_update.call_count >= 2
+
+    @pytest.mark.asyncio
+    async def test_reconnect_rebuilds_context(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_event("result", text="ok")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+        # _bot_in_thread returns False, _find_session_id_in_thread returns None
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+        client.conversations_replies.return_value = {
+            "messages": [
+                {"user": "UHUMAN1", "ts": "6000.0", "text": "original question"},
+                {"user": "UBOT123", "ts": "6001.0", "text": "original answer"},
+            ]
+        }
+        # For _find_session_id_in_thread fallback
+        client.conversations_history.return_value = {"messages": []}
+
+        captured_prompt = None
+
+        async def capturing_stream(prompt):
+            nonlocal captured_prompt
+            captured_prompt = prompt
+            yield self._make_event("result", text="ok")
+
+        mock_session.stream = capturing_stream
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            # thread_ts != ts → this is a thread reply (reconnect scenario)
+            event = {
+                "ts": "6002.0",
+                "thread_ts": "6000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event, "follow up", client, config, sessions)
+
+        # The prompt should contain thread history
+        assert captured_prompt is not None
+        assert "conversation history" in captured_prompt
+        assert "follow up" in captured_prompt
+
+    @pytest.mark.asyncio
+    async def test_reconnect_finds_session_id(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_event("result", text="ok")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "abc-123-def"
+
+        client = self._mock_client()
+        client.conversations_replies.return_value = {
+            "messages": [
+                {
+                    "user": "UBOT123",
+                    "ts": "7000.0",
+                    "text": "Handoff _(session_id: abc-123-def)_",
+                },
+            ]
+        }
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session) as mock_create:
+            event = {
+                "ts": "7001.0",
+                "thread_ts": "7000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event, "continue", client, config, sessions)
+
+            # Should have passed the found session_id
+            assert mock_create.call_args.kwargs["session_id"] == "abc-123-def"
+
+
+class TestResolveChannelCwd:
+    """Test _resolve_channel_cwd function."""
+
+    @pytest.mark.asyncio
+    async def test_returns_none_without_channel_dirs(self):
+        config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+        )
+        client = AsyncMock()
+        result = await _resolve_channel_cwd("C_CHAN", client, config)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_resolves_channel_to_directory(self):
+        config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            base_directory=Path("/projects"),
+            channel_dirs={"dev-team": "myproject"},
+        )
+        client = AsyncMock()
+        client.conversations_info.return_value = {
+            "channel": {"name": "dev-team"}
+        }
+        result = await _resolve_channel_cwd("C_CHAN", client, config)
+        assert result == Path("/projects/myproject")
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_api_error(self):
+        config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            channel_dirs={"dev-team": "myproject"},
+        )
+        client = AsyncMock()
+        client.conversations_info.side_effect = Exception("API error")
+        result = await _resolve_channel_cwd("C_CHAN", client, config)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_for_unknown_channel(self):
+        config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            channel_dirs={"dev-team": "myproject"},
+        )
+        client = AsyncMock()
+        client.conversations_info.return_value = {
+            "channel": {"name": "random-channel"}
+        }
+        result = await _resolve_channel_cwd("C_CHAN", client, config)
+        assert result is None

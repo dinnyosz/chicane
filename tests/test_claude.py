@@ -1,5 +1,9 @@
 """Tests for chicane.claude."""
 
+import asyncio
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 from chicane.claude import ClaudeEvent, ClaudeSession
@@ -156,3 +160,186 @@ class TestClaudeSession:
         session = ClaudeSession()
         cmd = session._build_command("do stuff")
         assert "--allowedTools" not in cmd
+
+
+def _make_process_mock(stdout_lines: list[bytes], returncode: int = 0):
+    """Create a mock subprocess with the given stdout lines."""
+    process = AsyncMock()
+    process.returncode = returncode
+
+    async def stdout_iter():
+        for line in stdout_lines:
+            yield line
+
+    process.stdout = stdout_iter()
+    process.stderr = AsyncMock()
+    process.stderr.read = AsyncMock(return_value=b"")
+    process.wait = AsyncMock()
+    process.kill = MagicMock()
+    return process
+
+
+class TestClaudeSessionStream:
+    """Tests for the stream() async generator."""
+
+    @pytest.mark.asyncio
+    async def test_stream_yields_parsed_events(self):
+        lines = [
+            json.dumps({"type": "system", "subtype": "init", "session_id": "s1"}).encode() + b"\n",
+            json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}}).encode() + b"\n",
+            json.dumps({"type": "result", "result": "done"}).encode() + b"\n",
+        ]
+        process = _make_process_mock(lines)
+
+        session = ClaudeSession()
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            events = [e async for e in session.stream("hello")]
+
+        assert len(events) == 3
+        assert events[0].type == "system"
+        assert events[1].type == "assistant"
+        assert events[1].text == "hi"
+        assert events[2].type == "result"
+        assert events[2].text == "done"
+
+    @pytest.mark.asyncio
+    async def test_stream_captures_session_id(self):
+        lines = [
+            json.dumps({"type": "system", "subtype": "init", "session_id": "captured-id"}).encode() + b"\n",
+        ]
+        process = _make_process_mock(lines)
+
+        session = ClaudeSession()
+        assert session.session_id is None
+
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            async for _ in session.stream("hello"):
+                pass
+
+        assert session.session_id == "captured-id"
+
+    @pytest.mark.asyncio
+    async def test_stream_skips_empty_lines(self):
+        lines = [
+            b"\n",
+            b"   \n",
+            json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "only"}]}}).encode() + b"\n",
+            b"\n",
+        ]
+        process = _make_process_mock(lines)
+
+        session = ClaudeSession()
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            events = [e async for e in session.stream("hello")]
+
+        assert len(events) == 1
+        assert events[0].text == "only"
+
+    @pytest.mark.asyncio
+    async def test_stream_skips_invalid_json(self):
+        lines = [
+            b"not json at all\n",
+            json.dumps({"type": "result", "result": "ok"}).encode() + b"\n",
+        ]
+        process = _make_process_mock(lines)
+
+        session = ClaudeSession()
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            events = [e async for e in session.stream("hello")]
+
+        assert len(events) == 1
+        assert events[0].type == "result"
+
+    @pytest.mark.asyncio
+    async def test_stream_kills_process_on_exception(self):
+        async def exploding_stdout():
+            yield json.dumps({"type": "system", "subtype": "init", "session_id": "s1"}).encode() + b"\n"
+            raise RuntimeError("boom")
+
+        process = AsyncMock()
+        process.returncode = 0
+        process.stdout = exploding_stdout()
+        process.stderr = AsyncMock()
+        process.stderr.read = AsyncMock(return_value=b"")
+        process.wait = AsyncMock()
+        process.kill = MagicMock()
+
+        session = ClaudeSession()
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            with pytest.raises(RuntimeError, match="boom"):
+                async for _ in session.stream("hello"):
+                    pass
+
+        process.kill.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_stream_logs_nonzero_exit_code(self, caplog):
+        lines = [
+            json.dumps({"type": "result", "result": "partial"}).encode() + b"\n",
+        ]
+        process = _make_process_mock(lines, returncode=1)
+
+        session = ClaudeSession()
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            async for _ in session.stream("hello"):
+                pass
+
+        assert any("exited with code 1" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_stream_warns_on_no_events(self, caplog):
+        process = _make_process_mock([], returncode=0)
+
+        session = ClaudeSession()
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            events = [e async for e in session.stream("hello")]
+
+        assert len(events) == 0
+        assert any("no events" in r.message.lower() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_stream_timeout_on_process_wait(self, caplog):
+        lines = [
+            json.dumps({"type": "result", "result": "ok"}).encode() + b"\n",
+        ]
+        process = _make_process_mock(lines, returncode=0)
+        process.wait = AsyncMock(side_effect=asyncio.TimeoutError)
+
+        session = ClaudeSession()
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            async for _ in session.stream("hello"):
+                pass
+
+        process.kill.assert_called()
+        assert any("did not exit in time" in r.message for r in caplog.records)
+
+
+class TestClaudeSessionRun:
+    """Tests for the run() convenience method."""
+
+    @pytest.mark.asyncio
+    async def test_run_returns_result_text(self):
+        lines = [
+            json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "thinking"}]}}).encode() + b"\n",
+            json.dumps({"type": "result", "result": "final answer"}).encode() + b"\n",
+        ]
+        process = _make_process_mock(lines)
+
+        session = ClaudeSession()
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            result = await session.run("hello")
+
+        assert result == "final answer"
+
+    @pytest.mark.asyncio
+    async def test_run_returns_empty_when_no_result(self):
+        lines = [
+            json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "just chatting"}]}}).encode() + b"\n",
+        ]
+        process = _make_process_mock(lines)
+
+        session = ClaudeSession()
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            result = await session.run("hello")
+
+        assert result == ""
