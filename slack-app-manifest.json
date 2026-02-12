@@ -23,6 +23,7 @@
         "channels:read",
         "chat:write",
         "chat:write.public",
+        "files:read",
         "groups:history",
         "groups:read",
         "im:history",

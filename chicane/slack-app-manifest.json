@@ -25,6 +25,7 @@
         "groups:read",
         "chat:write",
         "chat:write.public",
+        "files:read",
         "im:history",
         "im:read",
         "im:write",

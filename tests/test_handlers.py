@@ -1162,9 +1162,9 @@ class TestDownloadFiles:
     def _mock_http_session(responses):
         """Build a mock aiohttp.ClientSession that yields *responses* in order.
 
-        Each *response* is a ``(status, data)`` tuple where *data* is the
-        bytes returned by ``resp.read()``.  For error scenarios pass only a
-        status code and the data will be ignored.
+        Each *response* is a ``(status, data)`` or ``(status, data, content_type)``
+        tuple where *data* is the bytes returned by ``resp.read()``.  For error
+        scenarios pass only a status code and the data will be ignored.
 
         Usage::
 
@@ -1175,9 +1175,10 @@ class TestDownloadFiles:
         resp_iter = iter(responses)
 
         class _FakeResp:
-            def __init__(self, status, data):
+            def __init__(self, status, data, content_type=None):
                 self.status = status
                 self._data = data
+                self.content_type = content_type or "application/octet-stream"
 
             async def read(self):
                 return self._data
@@ -1190,8 +1191,10 @@ class TestDownloadFiles:
 
         class _FakeSession:
             def get(self, url, **kw):
-                status, data = next(resp_iter)
-                return _FakeResp(status, data)
+                entry = next(resp_iter)
+                status, data = entry[0], entry[1]
+                ct = entry[2] if len(entry) > 2 else None
+                return _FakeResp(status, data, ct)
 
             async def __aenter__(self):
                 return self
@@ -1289,6 +1292,29 @@ class TestDownloadFiles:
             result = await _download_files(event, "xoxb-token", tmp_path)
 
         assert result == []
+
+    @pytest.mark.asyncio
+    async def test_skips_file_when_response_is_html(self, tmp_path):
+        """Slack returns HTML instead of file data when files:read scope is missing."""
+        event = {
+            "ts": "1.0",
+            "files": [
+                {
+                    "name": "photo.png",
+                    "mimetype": "image/png",
+                    "url_private_download": "https://files.slack.com/photo.png",
+                    "size": 5000,
+                }
+            ],
+        }
+        html_page = b"<!DOCTYPE html><html>login page</html>"
+        mock_sess = self._mock_http_session([(200, html_page, "text/html")])
+
+        with patch("chicane.handlers.aiohttp.ClientSession", return_value=mock_sess):
+            result = await _download_files(event, "xoxb-token", tmp_path)
+
+        assert result == []
+        assert not (tmp_path / "photo.png").exists()
 
     @pytest.mark.asyncio
     async def test_duplicate_filenames_get_suffixed(self, tmp_path):

@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 import aiohttp
+from platformdirs import user_cache_dir
 from slack_bolt.async_app import AsyncApp
 from slack_sdk.web.async_client import AsyncWebClient
 
@@ -204,8 +205,9 @@ async def _process_message(
                 f"Now respond to the latest message:\n{prompt}"
             )
 
-    # Download any file attachments into the session's working directory
-    downloaded_files = await _download_files(event, config.slack_bot_token, session.cwd)
+    # Download file attachments to a cache directory outside the git worktree
+    attachments_dir = Path(user_cache_dir("chicane", appauthor=False)) / "attachments" / thread_ts
+    downloaded_files = await _download_files(event, config.slack_bot_token, attachments_dir)
     if downloaded_files:
         refs = []
         for name, path, mime in downloaded_files:
@@ -513,6 +515,13 @@ async def _download_files(
                     if resp.status != 200:
                         logger.warning(
                             f"Failed to download {name}: HTTP {resp.status}"
+                        )
+                        continue
+                    content_type = resp.content_type or ""
+                    if content_type.startswith("text/html"):
+                        logger.warning(
+                            f"File {name} returned HTML instead of file data "
+                            f"(missing files:read scope?), skipping"
                         )
                         continue
                     data = await resp.read()
