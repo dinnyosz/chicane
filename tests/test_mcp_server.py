@@ -227,6 +227,26 @@ class TestResolveChannel:
                 await mcp_mod._resolve_channel("ghost-channel")
 
 
+class TestMainConfigValidation:
+    def test_exits_when_config_missing(self):
+        with (
+            patch(
+                "chicane.mcp_server.Config.from_env",
+                side_effect=ValueError("SLACK_BOT_TOKEN and SLACK_APP_TOKEN must be set."),
+            ),
+            pytest.raises(SystemExit, match="1"),
+        ):
+            mcp_mod.main()
+
+    def test_starts_when_config_valid(self, config):
+        with (
+            patch("chicane.mcp_server.Config.from_env", return_value=config),
+            patch.object(mcp_mod.mcp, "run") as mock_run,
+        ):
+            mcp_mod.main()
+        mock_run.assert_called_once_with(transport="stdio")
+
+
 class TestLazyInit:
     def test_get_config_caches(self, config):
         with patch("chicane.mcp_server.Config.from_env", return_value=config) as mock:

@@ -135,6 +135,12 @@ async def chicane_send_message(
 
 def main() -> None:
     """Entry point for the chicane-mcp console script."""
+    try:
+        _get_config()
+    except ValueError as exc:
+        logger.error("Chicane MCP server cannot start: %s", exc)
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
     mcp.run(transport="stdio")
 
 
