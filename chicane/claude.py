@@ -46,6 +46,38 @@ class ClaudeEvent:
     def cost_usd(self) -> float | None:
         return self.raw.get("total_cost_usd")
 
+    @property
+    def num_turns(self) -> int | None:
+        return self.raw.get("num_turns")
+
+    @property
+    def duration_ms(self) -> int | None:
+        return self.raw.get("duration_ms")
+
+    @property
+    def parent_tool_use_id(self) -> str | None:
+        """Non-null when this event originates from a subagent."""
+        return self.raw.get("parent_tool_use_id")
+
+    @property
+    def tool_errors(self) -> list[str]:
+        """Extract error messages from tool_result blocks in user events."""
+        if self.type != "user":
+            return []
+        message = self.raw.get("message", {})
+        content = message.get("content", [])
+        errors = []
+        for block in content:
+            if block.get("type") == "tool_result" and block.get("is_error"):
+                text = block.get("content", "")
+                if isinstance(text, list):
+                    text = "".join(
+                        p.get("text", "") for p in text if isinstance(p, dict)
+                    )
+                if text:
+                    errors.append(text)
+        return errors
+
 
 class ClaudeSession:
     """Manages a Claude Code CLI subprocess for a single conversation."""

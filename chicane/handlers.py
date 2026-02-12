@@ -230,6 +230,7 @@ async def _process_message(
     full_text = ""
     event_count = 0
     first_activity = True  # track whether to update placeholder or post new
+    result_event = None  # capture result event for completion summary
 
     try:
         async for event_data in session.stream(prompt):
@@ -238,6 +239,11 @@ async def _process_message(
                 # Flush any accumulated text before posting tool activity
                 # so the message order matches Claude Code console.
                 activities = _format_tool_activity(event_data)
+
+                # Prefix subagent activities
+                if event_data.parent_tool_use_id:
+                    activities = [f":arrow_right_hook: {a}" for a in activities]
+
                 if activities and full_text:
                     for chunk in _split_message(full_text):
                         await client.chat_postMessage(
@@ -263,12 +269,24 @@ async def _process_message(
                     full_text += chunk
 
             elif event_data.type == "result":
+                result_event = event_data
                 # Prefer whichever is longer — streamed text preserves
                 # formatting but could miss chunks; result blob is
                 # complete but may flatten newlines.
                 result_text = event_data.text or ""
                 if len(result_text) > len(full_text):
                     full_text = result_text
+
+            elif event_data.type == "user":
+                # Check for tool errors in user events (tool results)
+                for error_msg in event_data.tool_errors:
+                    truncated = (error_msg[:200] + "...") if len(error_msg) > 200 else error_msg
+                    await client.chat_postMessage(
+                        channel=channel,
+                        thread_ts=thread_ts,
+                        text=f":warning: Tool error: {truncated}",
+                    )
+
             else:
                 logger.debug(f"Event type={event_data.type} subtype={event_data.subtype}")
 
@@ -307,6 +325,14 @@ async def _process_message(
                 ts=message_ts,
                 text=msg,
             )
+
+        # Post completion summary from result event
+        if result_event:
+            summary = _format_completion_summary(result_event)
+            if summary:
+                await client.chat_postMessage(
+                    channel=channel, thread_ts=thread_ts, text=summary,
+                )
 
         # Swap eyes for checkmark
         try:
@@ -589,15 +615,64 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
             pattern = tool_input.get("pattern", "")
             activities.append(f":mag: Finding files `{pattern}`")
         elif tool_name == "WebFetch":
-            activities.append(":globe_with_meridians: Fetching URL")
+            url = tool_input.get("url", "")
+            if url:
+                activities.append(f":globe_with_meridians: Fetching `{url}`")
+            else:
+                activities.append(":globe_with_meridians: Fetching URL")
         elif tool_name == "WebSearch":
-            activities.append(":globe_with_meridians: Searching web")
+            query = tool_input.get("query", "")
+            if query:
+                activities.append(f":globe_with_meridians: Searching web for `{query}`")
+            else:
+                activities.append(":globe_with_meridians: Searching web")
         elif tool_name == "Task":
-            activities.append(":robot_face: Spawning subagent")
+            subagent_type = tool_input.get("subagent_type", "")
+            description = tool_input.get("description", "")
+            if subagent_type or description:
+                parts = [p for p in [subagent_type, description] if p]
+                activities.append(f":robot_face: Spawning {': '.join(parts)}")
+            else:
+                activities.append(":robot_face: Spawning subagent")
+        elif tool_name == "Skill":
+            skill = tool_input.get("skill", "")
+            if skill:
+                activities.append(f":zap: Running skill `{skill}`")
+            else:
+                activities.append(":zap: Running skill")
+        elif tool_name == "NotebookEdit":
+            notebook_path = tool_input.get("notebook_path", "")
+            basename = Path(notebook_path).name if notebook_path else "notebook"
+            activities.append(f":notebook: Editing notebook `{basename}`")
+        elif tool_name == "EnterPlanMode":
+            activities.append(":clipboard: Entering plan mode")
+        elif tool_name == "AskUserQuestion":
+            activities.append(":question: Asking user a question")
         else:
             activities.append(f":wrench: Using {tool_name}")
 
     return activities
+
+
+def _format_completion_summary(event: ClaudeEvent) -> str | None:
+    """Format a completion footer from a result event."""
+    parts = []
+    if event.num_turns is not None:
+        parts.append(f"{event.num_turns} turn{'s' if event.num_turns != 1 else ''}")
+    if event.cost_usd is not None:
+        parts.append(f"${event.cost_usd:.2f}")
+    if event.duration_ms is not None:
+        secs = event.duration_ms / 1000
+        if secs >= 60:
+            mins = int(secs // 60)
+            remaining = int(secs % 60)
+            parts.append(f"{mins}m{remaining}s")
+        else:
+            parts.append(f"{int(secs)}s")
+    if not parts:
+        return None
+    emoji = ":checkered_flag:" if not event.is_error else ":x:"
+    return f"{emoji} Done — {', '.join(parts)}"
 
 
 def _split_message(text: str) -> list[str]:
