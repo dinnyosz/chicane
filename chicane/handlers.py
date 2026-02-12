@@ -4,6 +4,7 @@ import logging
 import re
 from pathlib import Path
 
+import aiohttp
 from slack_bolt.async_app import AsyncApp
 from slack_sdk.web.async_client import AsyncWebClient
 
@@ -18,6 +19,9 @@ STREAM_UPDATE_INTERVAL = 1.5
 
 # Max message length for Slack
 SLACK_MAX_LENGTH = 3900
+
+# Max file size to download from Slack (10 MB)
+MAX_FILE_SIZE = 10 * 1024 * 1024
 
 # Regex to detect a handoff session_id at the end of a prompt.
 # Matches both plain  (session_id: uuid)  and Slack-italicised  _(session_id: uuid)_
@@ -49,18 +53,20 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
             return
 
         text = re.sub(r"<@[A-Z0-9]+>\s*", "", event.get("text", "")).strip()
-        if not text:
+        if not text and not event.get("files"):
             return
 
-        await _process_message(event, text, client, config, sessions)
+        await _process_message(event, text or "", client, config, sessions)
 
     @app.event("message")
     async def handle_message(event: dict, client: AsyncWebClient) -> None:
         """Handle DMs and thread follow-ups."""
         nonlocal bot_user_id
 
-        # Skip message subtypes (edits, deletes, etc.)
-        if event.get("subtype"):
+        # Skip message subtypes (edits, deletes, etc.) but allow file_share
+        # so users can send files with accompanying text.
+        subtype = event.get("subtype")
+        if subtype and subtype != "file_share":
             return
         # Fast reject if already handled by app_mention or a prior delivery
         if event["ts"] in processed_ts:
@@ -68,7 +74,8 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
 
         channel_type = event.get("channel_type", "")
         text = event.get("text", "").strip()
-        if not text:
+        has_files = bool(event.get("files"))
+        if not text and not has_files:
             return
 
         # DMs: process everything
@@ -196,6 +203,21 @@ async def _process_message(
                 "---\n"
                 f"Now respond to the latest message:\n{prompt}"
             )
+
+    # Download any file attachments into the session's working directory
+    downloaded_files = await _download_files(event, config.slack_bot_token, session.cwd)
+    if downloaded_files:
+        refs = []
+        for name, path, mime in downloaded_files:
+            if mime.startswith("image/"):
+                refs.append(f"- Image: {path} (original name: {name})")
+            else:
+                refs.append(f"- File: {path} (original name: {name})")
+        file_note = (
+            "\n\nThe user attached files. "
+            "Use the Read tool to inspect them:\n" + "\n".join(refs)
+        )
+        prompt = (prompt + file_note) if prompt else file_note.lstrip()
 
     # Post initial "thinking" message
     result = await client.chat_postMessage(
@@ -448,6 +470,68 @@ async def _resolve_channel_cwd(
     if resolved:
         logger.debug(f"Channel #{channel_name} → cwd {resolved}")
     return resolved
+
+
+async def _download_files(
+    event: dict,
+    token: str,
+    target_dir: Path,
+) -> list[tuple[str, Path, str]]:
+    """Download Slack file attachments to *target_dir*.
+
+    Returns a list of ``(original_name, local_path, mimetype)`` tuples for
+    every file successfully downloaded.  Skips files that are too large,
+    lack a download URL, or fail to download.
+    """
+    files = event.get("files", [])
+    if not files:
+        return []
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    downloaded: list[tuple[str, Path, str]] = []
+
+    async with aiohttp.ClientSession() as http:
+        for f in files:
+            name = f.get("name", "attachment")
+            mimetype = f.get("mimetype", "application/octet-stream")
+            url = f.get("url_private_download")
+            size = f.get("size", 0)
+
+            if not url:
+                logger.warning(f"File {name} has no download URL, skipping")
+                continue
+            if size > MAX_FILE_SIZE:
+                logger.warning(
+                    f"File {name} too large ({size} bytes > {MAX_FILE_SIZE}), skipping"
+                )
+                continue
+
+            try:
+                async with http.get(
+                    url, headers={"Authorization": f"Bearer {token}"}
+                ) as resp:
+                    if resp.status != 200:
+                        logger.warning(
+                            f"Failed to download {name}: HTTP {resp.status}"
+                        )
+                        continue
+                    data = await resp.read()
+
+                local_path = target_dir / name
+                counter = 1
+                while local_path.exists():
+                    stem = Path(name).stem
+                    suffix = Path(name).suffix
+                    local_path = target_dir / f"{stem}_{counter}{suffix}"
+                    counter += 1
+
+                local_path.write_bytes(data)
+                downloaded.append((name, local_path, mimetype))
+                logger.info(f"Downloaded {name} ({len(data)} bytes) → {local_path}")
+            except Exception:
+                logger.exception(f"Failed to download file {name}")
+
+    return downloaded
 
 
 def _split_message(text: str) -> list[str]:
