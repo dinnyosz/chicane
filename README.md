@@ -95,24 +95,12 @@ Chicane ships with an MCP server that exposes `chicane_handoff` and `chicane_sen
 claude mcp add chicane -- chicane-mcp
 ```
 
-**If you installed from source (`pip install -e .`):**
+**For development (`pip install -e .`):**
+
+A separate `chicane-mcp-dev` binary is provided so it can coexist with a PyPI-installed `chicane-mcp`:
 
 ```bash
-claude mcp add -s local chicane -- /full/path/to/chicane-mcp
-```
-
-Find the path with `which chicane-mcp`.
-
-**For development (not yet installed):**
-
-```bash
-claude mcp add -s local chicane-dev -- /full/path/to/repo/.venv/bin/chicane-mcp
-```
-
-Or using `uv`/`python -m`:
-
-```bash
-claude mcp add -s local chicane-dev -- python -m chicane.mcp_server
+claude mcp add chicane-dev -- chicane-mcp-dev
 ```
 
 Once added, Claude Code discovers the tools automatically. You can say "hand this off to Slack" or "send a message to the team" and Claude will use the MCP tools.

@@ -36,6 +36,7 @@ Repository = "https://github.com/dinnyosz/chicane"
 [project.scripts]
 chicane = "chicane.app:main"
 chicane-mcp = "chicane.mcp_server:main"
+chicane-mcp-dev = "chicane.mcp_server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["chicane"]

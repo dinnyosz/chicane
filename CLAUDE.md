@@ -55,7 +55,7 @@ Slack (Socket Mode) → app.py → handlers.py → sessions.py → claude.py →
 - `slack-bolt[async]` for Slack Socket Mode
 - `pytest` + `pytest-asyncio` for tests
 - `mcp` (Model Context Protocol) for the MCP server (`chicane-mcp` entry point)
-- `hatchling` build backend, entry points: `chicane = "chicane.app:main"`, `chicane-mcp = "chicane.mcp_server:main"`
+- `hatchling` build backend, entry points: `chicane = "chicane.app:main"`, `chicane-mcp = "chicane.mcp_server:main"`, `chicane-mcp-dev = "chicane.mcp_server:main"` (dev alias)
 - `platformdirs` for OS-specific config paths
 - `rich` for terminal UI in setup wizard
 
