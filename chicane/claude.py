@@ -99,8 +99,8 @@ class ClaudeSession:
         """Run a prompt through Claude and yield streaming events."""
         cmd = self._build_command(prompt)
 
-        logger.info(f"Running: {' '.join(cmd[:6])}...")
-        logger.info(f"Full command: {' '.join(cmd)}")
+        logger.debug(f"Running: {' '.join(cmd[:6])}...")
+        logger.debug(f"Full command: {' '.join(cmd)}")
 
         process = await asyncio.create_subprocess_exec(
             *cmd,

@@ -87,11 +87,11 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
         if thread_ts:
             is_chicane_thread = sessions.has(thread_ts)
             if not is_chicane_thread:
-                logger.info(f"No session for thread {thread_ts}, checking Slack history")
+                logger.debug(f"No session for thread {thread_ts}, checking Slack history")
                 is_chicane_thread = await _bot_in_thread(
                     thread_ts, event["channel"], client
                 )
-                logger.info(f"Bot in thread {thread_ts}: {is_chicane_thread}")
+                logger.debug(f"Bot in thread {thread_ts}: {is_chicane_thread}")
             if is_chicane_thread:
                 if _should_ignore(event, config):
                     return
@@ -153,7 +153,7 @@ async def _process_message(
         prompt = prompt[: handoff_match.start()].rstrip()
         logger.info(f"Handoff detected — resuming session {handoff_session_id}")
 
-    logger.info(f"Processing message from {user} in {channel}: {prompt[:80]}")
+    logger.debug(f"Processing message from {user} in {channel}: {prompt[:80]}")
 
     # Add eyes reaction to show we're working on it
     try:
@@ -349,7 +349,7 @@ async def _fetch_thread_history(
         if not lines:
             return None
 
-        logger.info(
+        logger.debug(
             f"Rebuilt {len(lines)} messages of thread history for {thread_ts}"
         )
         return "\n".join(lines)
@@ -379,7 +379,7 @@ async def _find_session_id_in_thread(
             text = msg.get("text", "")
             m = _HANDOFF_RE.search(text)
             if m:
-                logger.info(f"Found session_id in thread reply: {m.group(1)}")
+                logger.debug(f"Found session_id in thread reply: {m.group(1)}")
                 return m.group(1)
     except Exception:
         logger.warning(
@@ -397,7 +397,7 @@ async def _find_session_id_in_thread(
             text = msg.get("text", "")
             m = _HANDOFF_RE.search(text)
             if m:
-                logger.info(
+                logger.debug(
                     f"Found session_id in thread starter message: {m.group(1)}"
                 )
                 return m.group(1)
@@ -407,7 +407,7 @@ async def _find_session_id_in_thread(
             exc_info=True,
         )
 
-    logger.info(f"No session_id found in thread {thread_ts}")
+    logger.debug(f"No session_id found in thread {thread_ts}")
     return None
 
 
@@ -452,7 +452,7 @@ async def _resolve_channel_cwd(
 
     resolved = config.resolve_channel_dir(channel_name)
     if resolved:
-        logger.info(f"Channel #{channel_name} → cwd {resolved}")
+        logger.debug(f"Channel #{channel_name} → cwd {resolved}")
     return resolved
 
 
