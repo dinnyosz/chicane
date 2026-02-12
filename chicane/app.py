@@ -96,6 +96,11 @@ async def start(config: Config | None = None) -> None:
 
         logging.basicConfig(level=log_level, format=log_format, handlers=handlers)
 
+        # Quiet noisy third-party loggers — their DEBUG output (PING/PONG
+        # heartbeats, websocket frames) drowns out useful chicane logs.
+        for noisy in ("slack_bolt", "slack_sdk", "aiohttp", "websocket"):
+            logging.getLogger(noisy).setLevel(max(log_level, logging.INFO))
+
         app = create_app(config)
         sessions: SessionStore = app._chicane_sessions  # type: ignore[attr-defined]
 
@@ -109,11 +114,13 @@ async def start(config: Config | None = None) -> None:
         stop = asyncio.Event()
 
         def _handle_signal() -> None:
-            if stop.is_set():
-                print("\nForce quit.")
-                os._exit(0)
             print("\nShutting down... (press Ctrl+C again to force quit)")
             stop.set()
+            # Install raw signal handlers for force-quit that bypass the
+            # event loop — if the loop is blocked (e.g. closing the
+            # websocket), loop-based handlers never fire.
+            signal.signal(signal.SIGINT, lambda *_: os._exit(1))
+            signal.signal(signal.SIGTERM, lambda *_: os._exit(1))
 
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, _handle_signal)
