@@ -12,6 +12,7 @@ from chicane.handlers import (
     _download_files,
     _fetch_thread_history,
     _find_session_id_in_thread,
+    _format_tool_activity,
     _HANDOFF_RE,
     _process_message,
     _resolve_channel_cwd,
@@ -999,8 +1000,8 @@ class TestProcessMessageEdgeCases:
         assert client.chat_postMessage.call_count >= 2  # initial "working" + at least 1 extra chunk
 
     @pytest.mark.asyncio
-    async def test_periodic_update_during_streaming(self, config, sessions):
-        # Generate enough text to trigger a periodic update (>100 chars)
+    async def test_text_only_response_updates_placeholder(self, config, sessions):
+        """When there are no tool calls, the final text updates the placeholder."""
         chunk_text = "x" * 150
 
         async def fake_stream(prompt):
@@ -1017,10 +1018,9 @@ class TestProcessMessageEdgeCases:
             event = {"ts": "5005.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
-        # chat_update should have been called at least twice:
-        # 1. periodic update during streaming (>100 chars)
-        # 2. final update with complete text
-        assert client.chat_update.call_count >= 2
+        # Only one chat_update: the final text replacing the placeholder
+        assert client.chat_update.call_count == 1
+        assert client.chat_update.call_args.kwargs["text"] == chunk_text
 
     @pytest.mark.asyncio
     async def test_reconnect_rebuilds_context(self, config, sessions):
@@ -1098,6 +1098,314 @@ class TestProcessMessageEdgeCases:
 
             # Should have passed the found session_id
             assert mock_create.call_args.kwargs["session_id"] == "abc-123-def"
+
+
+class TestFormatToolActivity:
+    """Test _format_tool_activity helper for each tool type."""
+
+    def _make_tool_event(self, *tool_blocks) -> ClaudeEvent:
+        """Create an assistant event with tool_use content blocks."""
+        content = list(tool_blocks)
+        raw = {"type": "assistant", "message": {"content": content}}
+        return ClaudeEvent(type="assistant", raw=raw)
+
+    def _tool_block(self, name: str, **inputs) -> dict:
+        return {"type": "tool_use", "name": name, "input": inputs}
+
+    def test_read_tool(self):
+        event = self._make_tool_event(
+            self._tool_block("Read", file_path="/home/user/project/config.py")
+        )
+        assert _format_tool_activity(event) == [":mag: Reading `config.py`"]
+
+    def test_bash_tool(self):
+        event = self._make_tool_event(
+            self._tool_block("Bash", command="pytest tests/")
+        )
+        assert _format_tool_activity(event) == [":computer: Running `pytest tests/`"]
+
+    def test_bash_tool_long_command_truncated(self):
+        long_cmd = "a" * 100
+        event = self._make_tool_event(
+            self._tool_block("Bash", command=long_cmd)
+        )
+        result = _format_tool_activity(event)
+        assert len(result) == 1
+        assert result[0].endswith("...`")
+        assert len(result[0]) < len(long_cmd) + 30
+
+    def test_edit_tool(self):
+        event = self._make_tool_event(
+            self._tool_block("Edit", file_path="/src/handlers.py")
+        )
+        assert _format_tool_activity(event) == [":pencil2: Editing `handlers.py`"]
+
+    def test_write_tool(self):
+        event = self._make_tool_event(
+            self._tool_block("Write", file_path="/src/new_file.py")
+        )
+        assert _format_tool_activity(event) == [":pencil2: Writing `new_file.py`"]
+
+    def test_grep_tool(self):
+        event = self._make_tool_event(
+            self._tool_block("Grep", pattern="download_files")
+        )
+        assert _format_tool_activity(event) == [":mag: Searching for `download_files`"]
+
+    def test_glob_tool(self):
+        event = self._make_tool_event(
+            self._tool_block("Glob", pattern="**/*.py")
+        )
+        assert _format_tool_activity(event) == [":mag: Finding files `**/*.py`"]
+
+    def test_webfetch_tool(self):
+        event = self._make_tool_event(self._tool_block("WebFetch"))
+        assert _format_tool_activity(event) == [":globe_with_meridians: Fetching URL"]
+
+    def test_websearch_tool(self):
+        event = self._make_tool_event(self._tool_block("WebSearch"))
+        assert _format_tool_activity(event) == [":globe_with_meridians: Searching web"]
+
+    def test_task_tool(self):
+        event = self._make_tool_event(self._tool_block("Task"))
+        assert _format_tool_activity(event) == [":robot_face: Spawning subagent"]
+
+    def test_unknown_tool_fallback(self):
+        event = self._make_tool_event(self._tool_block("CustomTool"))
+        assert _format_tool_activity(event) == [":wrench: Using CustomTool"]
+
+    def test_multiple_tool_blocks(self):
+        event = self._make_tool_event(
+            self._tool_block("Read", file_path="/src/a.py"),
+            self._tool_block("Read", file_path="/src/b.py"),
+        )
+        result = _format_tool_activity(event)
+        assert len(result) == 2
+        assert result[0] == ":mag: Reading `a.py`"
+        assert result[1] == ":mag: Reading `b.py`"
+
+    def test_mixed_text_and_tool_blocks(self):
+        """Only tool_use blocks should produce activities; text blocks are ignored."""
+        event = ClaudeEvent(
+            type="assistant",
+            raw={
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "Let me check that."},
+                        {"type": "tool_use", "name": "Read", "input": {"file_path": "/x.py"}},
+                    ]
+                },
+            },
+        )
+        result = _format_tool_activity(event)
+        assert result == [":mag: Reading `x.py`"]
+
+    def test_no_tool_blocks_returns_empty(self):
+        event = ClaudeEvent(
+            type="assistant",
+            raw={
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "hello"}]},
+            },
+        )
+        assert _format_tool_activity(event) == []
+
+    def test_empty_content_returns_empty(self):
+        event = ClaudeEvent(
+            type="assistant",
+            raw={"type": "assistant", "message": {"content": []}},
+        )
+        assert _format_tool_activity(event) == []
+
+
+class TestToolActivityStreaming:
+    """Test that tool activities are posted correctly during streaming."""
+
+    @pytest.fixture
+    def config(self):
+        return Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+        )
+
+    @pytest.fixture
+    def sessions(self):
+        return SessionStore()
+
+    def _make_event(self, type: str, text: str = "", **kwargs) -> ClaudeEvent:
+        if type == "assistant":
+            raw = {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": text}]},
+                **kwargs,
+            }
+        elif type == "result":
+            raw = {"type": "result", "result": text, **kwargs}
+        else:
+            raw = {"type": type, **kwargs}
+        return ClaudeEvent(type=type, raw=raw)
+
+    def _make_tool_event(self, *tool_blocks, text: str = "") -> ClaudeEvent:
+        content = []
+        if text:
+            content.append({"type": "text", "text": text})
+        content.extend(tool_blocks)
+        raw = {"type": "assistant", "message": {"content": content}}
+        return ClaudeEvent(type="assistant", raw=raw)
+
+    def _tool_block(self, name: str, **inputs) -> dict:
+        return {"type": "tool_use", "name": name, "input": inputs}
+
+    def _mock_client(self):
+        client = AsyncMock()
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {"channel": {"name": "general"}}
+        return client
+
+    @pytest.mark.asyncio
+    async def test_first_tool_activity_updates_placeholder(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_tool_event(
+                self._tool_block("Read", file_path="/src/config.py")
+            )
+            yield self._make_event("assistant", text="Here's the file content.")
+            yield self._make_event("result", text="Here's the file content.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "show config", client, config, sessions)
+
+        # First activity should update the placeholder
+        first_update = client.chat_update.call_args_list[0]
+        assert first_update.kwargs["text"] == ":mag: Reading `config.py`"
+        assert first_update.kwargs["ts"] == "9999.0"
+
+    @pytest.mark.asyncio
+    async def test_subsequent_activities_posted_as_replies(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_tool_event(
+                self._tool_block("Read", file_path="/src/a.py")
+            )
+            yield self._make_tool_event(
+                self._tool_block("Edit", file_path="/src/a.py")
+            )
+            yield self._make_tool_event(
+                self._tool_block("Bash", command="pytest")
+            )
+            yield self._make_event("assistant", text="Done.")
+            yield self._make_event("result", text="Done.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "fix tests", client, config, sessions)
+
+        # First activity updates placeholder (chat_update)
+        assert client.chat_update.call_args_list[0].kwargs["text"] == ":mag: Reading `a.py`"
+
+        # Subsequent activities + final text as thread replies (chat_postMessage)
+        post_calls = client.chat_postMessage.call_args_list
+        # post_calls[0] is the initial "Working on it..." placeholder
+        # post_calls[1] is 2nd activity
+        # post_calls[2] is 3rd activity
+        # post_calls[3] is final text
+        assert post_calls[1].kwargs["text"] == ":pencil2: Editing `a.py`"
+        assert post_calls[2].kwargs["text"] == ":computer: Running `pytest`"
+        assert post_calls[3].kwargs["text"] == "Done."
+
+    @pytest.mark.asyncio
+    async def test_final_text_as_thread_replies_when_activities_exist(
+        self, config, sessions
+    ):
+        async def fake_stream(prompt):
+            yield self._make_tool_event(
+                self._tool_block("Read", file_path="/src/x.py")
+            )
+            yield self._make_event("assistant", text="The answer.")
+            yield self._make_event("result", text="The answer.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions)
+
+        # Final text posted as thread reply (not chat_update)
+        post_calls = client.chat_postMessage.call_args_list
+        final_post = post_calls[-1]
+        assert final_post.kwargs["text"] == "The answer."
+        assert final_post.kwargs["thread_ts"] == "1000.0"
+
+    @pytest.mark.asyncio
+    async def test_no_activities_updates_placeholder_with_text(self, config, sessions):
+        """When there are no tool calls, the response replaces the placeholder."""
+
+        async def fake_stream(prompt):
+            yield self._make_event("assistant", text="Quick answer.")
+            yield self._make_event("result", text="Quick answer.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions)
+
+        # Should use chat_update (not a new message) for the final text
+        final_update = client.chat_update.call_args_list[-1]
+        assert final_update.kwargs["text"] == "Quick answer."
+
+    @pytest.mark.asyncio
+    async def test_long_text_with_activities_all_chunks_as_replies(
+        self, config, sessions
+    ):
+        long_text = "a" * 8000
+
+        async def fake_stream(prompt):
+            yield self._make_tool_event(
+                self._tool_block("Read", file_path="/src/big.py")
+            )
+            yield self._make_event("result", text=long_text)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions)
+
+        # All text chunks should be thread replies (not chat_update)
+        post_calls = client.chat_postMessage.call_args_list
+        # post_calls[0] is "Working on it...", rest are activity replies + text chunks
+        text_replies = [
+            c for c in post_calls[1:]
+            if not c.kwargs["text"].startswith(":")
+        ]
+        assert len(text_replies) >= 2
+        reassembled = "".join(c.kwargs["text"] for c in text_replies)
+        assert reassembled == long_text
 
 
 class TestResolveChannelCwd:

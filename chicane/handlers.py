@@ -15,9 +15,6 @@ from .sessions import SessionStore
 
 logger = logging.getLogger(__name__)
 
-# How often to update the Slack message while streaming (seconds)
-STREAM_UPDATE_INTERVAL = 1.5
-
 # Max message length for Slack
 SLACK_MAX_LENGTH = 3900
 
@@ -231,27 +228,30 @@ async def _process_message(
 
     # Stream Claude's response
     full_text = ""
-    last_update_len = 0
     event_count = 0
+    first_activity = True  # track whether to update placeholder or post new
 
     try:
         async for event_data in session.stream(prompt):
             event_count += 1
             if event_data.type == "assistant":
+                # Post tool activity
+                activities = _format_tool_activity(event_data)
+                for activity in activities:
+                    if first_activity:
+                        await client.chat_update(
+                            channel=channel, ts=message_ts, text=activity,
+                        )
+                        first_activity = False
+                    else:
+                        await client.chat_postMessage(
+                            channel=channel, thread_ts=thread_ts, text=activity,
+                        )
+
+                # Accumulate text as before
                 chunk = event_data.text
                 if chunk:
                     full_text += chunk
-
-                    # Update the Slack message periodically (not on every chunk)
-                    # Only show preview of first chunk in the initial message
-                    if len(full_text) - last_update_len > 100:
-                        preview = full_text[:SLACK_MAX_LENGTH]
-                        await client.chat_update(
-                            channel=channel,
-                            ts=message_ts,
-                            text=preview,
-                        )
-                        last_update_len = len(full_text)
 
             elif event_data.type == "result":
                 # Prefer whichever is longer — streamed text preserves
@@ -263,22 +263,24 @@ async def _process_message(
             else:
                 logger.debug(f"Event type={event_data.type} subtype={event_data.subtype}")
 
-        # Final: send complete response as chunked messages
+        # Final: send complete response
         if full_text:
             chunks = _split_message(full_text)
-            # Update the first message with the first chunk
-            await client.chat_update(
-                channel=channel,
-                ts=message_ts,
-                text=chunks[0],
-            )
-            # Send remaining chunks as new messages in the thread
-            for chunk in chunks[1:]:
-                await client.chat_postMessage(
-                    channel=channel,
-                    thread_ts=thread_ts,
-                    text=chunk,
+            if first_activity:
+                # No tool activities were posted — update the placeholder
+                await client.chat_update(
+                    channel=channel, ts=message_ts, text=chunks[0],
                 )
+                for chunk in chunks[1:]:
+                    await client.chat_postMessage(
+                        channel=channel, thread_ts=thread_ts, text=chunk,
+                    )
+            else:
+                # Tool activities were posted — send all text as thread replies
+                for chunk in chunks:
+                    await client.chat_postMessage(
+                        channel=channel, thread_ts=thread_ts, text=chunk,
+                    )
         else:
             logger.warning(
                 f"Empty response from Claude: {event_count} events received, "
@@ -541,6 +543,52 @@ async def _download_files(
                 logger.exception(f"Failed to download file {name}")
 
     return downloaded
+
+
+def _format_tool_activity(event: ClaudeEvent) -> list[str]:
+    """Extract tool_use blocks from an assistant event and return human-readable one-liners."""
+    message = event.raw.get("message", {})
+    content = message.get("content", [])
+
+    activities = []
+    for block in content:
+        if block.get("type") != "tool_use":
+            continue
+        tool_name = block.get("name", "unknown")
+        tool_input = block.get("input", {})
+
+        if tool_name == "Read":
+            file_path = tool_input.get("file_path", "")
+            basename = Path(file_path).name if file_path else "file"
+            activities.append(f":mag: Reading `{basename}`")
+        elif tool_name == "Bash":
+            cmd = tool_input.get("command", "")
+            short_cmd = (cmd[:60] + "...") if len(cmd) > 60 else cmd
+            activities.append(f":computer: Running `{short_cmd}`")
+        elif tool_name == "Edit":
+            file_path = tool_input.get("file_path", "")
+            basename = Path(file_path).name if file_path else "file"
+            activities.append(f":pencil2: Editing `{basename}`")
+        elif tool_name == "Write":
+            file_path = tool_input.get("file_path", "")
+            basename = Path(file_path).name if file_path else "file"
+            activities.append(f":pencil2: Writing `{basename}`")
+        elif tool_name == "Grep":
+            pattern = tool_input.get("pattern", "")
+            activities.append(f":mag: Searching for `{pattern}`")
+        elif tool_name == "Glob":
+            pattern = tool_input.get("pattern", "")
+            activities.append(f":mag: Finding files `{pattern}`")
+        elif tool_name == "WebFetch":
+            activities.append(":globe_with_meridians: Fetching URL")
+        elif tool_name == "WebSearch":
+            activities.append(":globe_with_meridians: Searching web")
+        elif tool_name == "Task":
+            activities.append(":robot_face: Spawning subagent")
+        else:
+            activities.append(f":wrench: Using {tool_name}")
+
+    return activities
 
 
 def _split_message(text: str) -> list[str]:
