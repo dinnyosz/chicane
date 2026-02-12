@@ -298,7 +298,10 @@ def main() -> None:
         if getattr(args, "detach", False):
             _run_detached()
         else:
-            asyncio.run(start())
+            try:
+                asyncio.run(start())
+            except KeyboardInterrupt:
+                pass
     elif args.command == "setup":
         from .setup import setup_command
         setup_command(args)

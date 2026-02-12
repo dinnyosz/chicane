@@ -137,7 +137,11 @@ class ClaudeSession:
             process.kill()
             raise
         finally:
-            await process.wait()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                process.kill()
+                logger.warning("Claude subprocess did not exit in time, killed.")
 
             stderr = ""
             if process.stderr:
