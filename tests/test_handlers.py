@@ -2071,7 +2071,7 @@ class TestFileShareSubtype:
 class TestFormatCompletionSummary:
     """Test _format_completion_summary helper."""
 
-    def test_full_summary_shows_only_turns(self):
+    def test_turns_with_duration(self):
         event = ClaudeEvent(
             type="result",
             raw={
@@ -2083,11 +2083,10 @@ class TestFormatCompletionSummary:
             },
         )
         result = _format_completion_summary(event)
-        assert result == ":checkered_flag: Done — 5 turns"
+        assert result == ":checkered_flag: 5 turns took 12s"
         assert "$" not in result
-        assert "s" not in result.split("turns")[1]  # no duration after turns
 
-    def test_single_turn(self):
+    def test_single_turn_with_duration(self):
         event = ClaudeEvent(
             type="result",
             raw={
@@ -2098,7 +2097,19 @@ class TestFormatCompletionSummary:
             },
         )
         result = _format_completion_summary(event)
-        assert result == ":checkered_flag: Done — 1 turn"
+        assert result == ":checkered_flag: 1 turn took 3s"
+
+    def test_long_duration_shows_minutes(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={
+                "type": "result",
+                "num_turns": 27,
+                "duration_ms": 125000,
+            },
+        )
+        result = _format_completion_summary(event)
+        assert result == ":checkered_flag: 27 turns took 2m5s"
 
     def test_error_result(self):
         event = ClaudeEvent(
@@ -2112,7 +2123,15 @@ class TestFormatCompletionSummary:
             },
         )
         result = _format_completion_summary(event)
-        assert result == ":x: Done — 2 turns"
+        assert result == ":x: 2 turns took 8s"
+
+    def test_turns_without_duration_fallback(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={"type": "result", "num_turns": 3},
+        )
+        result = _format_completion_summary(event)
+        assert result == ":checkered_flag: Done — 3 turns"
 
     def test_no_turns_returns_none(self):
         event = ClaudeEvent(

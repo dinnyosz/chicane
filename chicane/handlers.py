@@ -660,6 +660,15 @@ def _format_completion_summary(event: ClaudeEvent) -> str | None:
         return None
     turns = f"{event.num_turns} turn{'s' if event.num_turns != 1 else ''}"
     emoji = ":checkered_flag:" if not event.is_error else ":x:"
+    if event.duration_ms is not None:
+        secs = event.duration_ms / 1000
+        if secs >= 60:
+            mins = int(secs // 60)
+            remaining = int(secs % 60)
+            duration = f"{mins}m{remaining}s"
+        else:
+            duration = f"{int(secs)}s"
+        return f"{emoji} {turns} took {duration}"
     return f"{emoji} Done — {turns}"
 
 
