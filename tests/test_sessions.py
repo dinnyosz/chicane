@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from chicane.config import Config
-from chicane.sessions import SessionStore
+from chicane.sessions import SLACK_SYSTEM_PROMPT, SessionStore
 
 
 @pytest.fixture
@@ -123,6 +123,21 @@ class TestSessionStore:
 
         s1.kill.assert_called_once()
         s2.kill.assert_called_once()
+
+    def test_system_prompt_forbids_terminal_suggestions(self, store, config):
+        """System prompt must tell Claude to never suggest local actions."""
+        session = store.get_or_create("thread-1", config)
+        prompt = session.system_prompt
+        assert "open a terminal" in prompt.lower()
+        assert "start a new Claude Code session" in prompt
+        assert "ONLY interact through Slack" in prompt
+
+    def test_system_prompt_forbids_local_workarounds(self, store, config):
+        """System prompt must forbid suggesting shell commands for the user."""
+        session = store.get_or_create("thread-1", config)
+        prompt = session.system_prompt
+        assert "running shell commands" in prompt.lower()
+        assert "host system directly" in prompt.lower()
 
     def test_shutdown_clears_sessions(self, store, config):
         store.get_or_create("thread-1", config, cwd=Path("/tmp/a"))
