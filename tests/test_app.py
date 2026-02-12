@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from chicane.app import _acquire_pidfile, _release_pidfile, _resolve_session_id
+from chicane.app import _acquire_pidfile, _release_pidfile, resolve_session_id
 import chicane.app as app_module
 
 
 class TestResolveSessionId:
     def test_explicit_id_returned_as_is(self):
-        assert _resolve_session_id("abc-123") == "abc-123"
+        assert resolve_session_id("abc-123") == "abc-123"
 
     def test_reads_from_history(self, tmp_path, monkeypatch):
         history = tmp_path / ".claude" / "history.jsonl"
@@ -22,27 +22,27 @@ class TestResolveSessionId:
             + json.dumps({"sessionId": "latest-session", "display": "bye"}) + "\n"
         )
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        assert _resolve_session_id(None) == "latest-session"
+        assert resolve_session_id(None) == "latest-session"
 
-    def test_exits_when_no_history_file(self, tmp_path, monkeypatch):
+    def test_raises_when_no_history_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        with pytest.raises(SystemExit):
-            _resolve_session_id(None)
+        with pytest.raises(ValueError, match="No Claude history found"):
+            resolve_session_id(None)
 
-    def test_exits_when_no_session_id_in_history(self, tmp_path, monkeypatch):
+    def test_raises_when_no_session_id_in_history(self, tmp_path, monkeypatch):
         history = tmp_path / ".claude" / "history.jsonl"
         history.parent.mkdir(parents=True)
         history.write_text(json.dumps({"display": "no session"}) + "\n")
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        with pytest.raises(SystemExit):
-            _resolve_session_id(None)
+        with pytest.raises(ValueError, match="Could not extract session ID"):
+            resolve_session_id(None)
 
     def test_single_entry_history(self, tmp_path, monkeypatch):
         history = tmp_path / ".claude" / "history.jsonl"
         history.parent.mkdir(parents=True)
         history.write_text(json.dumps({"sessionId": "only-one", "display": "x"}) + "\n")
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        assert _resolve_session_id(None) == "only-one"
+        assert resolve_session_id(None) == "only-one"
 
 
 class TestPidFile:

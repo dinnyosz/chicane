@@ -134,20 +134,41 @@ async def start(config: Config | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_session_id(explicit: str | None) -> str:
-    """Return the session ID — use explicit value or auto-detect from history."""
+def resolve_session_id(explicit: str | None = None) -> str:
+    """Return the session ID — use explicit value or auto-detect from history.
+
+    Raises ValueError if auto-detection fails.
+    """
     if explicit:
         return explicit
     history = Path.home() / ".claude" / "history.jsonl"
     if not history.exists():
-        print("Error: no Claude history found. Pass --session-id explicitly.", file=sys.stderr)
-        sys.exit(1)
+        raise ValueError("No Claude history found. Pass session_id explicitly.")
     last_line = history.read_text().strip().rsplit("\n", 1)[-1]
     session_id = json.loads(last_line).get("sessionId")
     if not session_id:
-        print("Error: could not extract session ID from history. Pass --session-id explicitly.", file=sys.stderr)
-        sys.exit(1)
+        raise ValueError(
+            "Could not extract session ID from history. Pass session_id explicitly."
+        )
     return session_id
+
+
+async def resolve_channel_id(
+    client: "AsyncWebClient", channel_name: str
+) -> str | None:
+    """Look up a Slack channel ID by name. Returns None if not found."""
+    cursor: str | None = None
+    while True:
+        kwargs: dict = {"limit": 200}
+        if cursor:
+            kwargs["cursor"] = cursor
+        resp = await client.conversations_list(**kwargs)
+        for ch in resp.get("channels", []):
+            if ch["name"] == channel_name:
+                return ch["id"]
+        cursor = resp.get("response_metadata", {}).get("next_cursor")
+        if not cursor:
+            return None
 
 
 async def _handoff(args: argparse.Namespace) -> None:
@@ -155,7 +176,11 @@ async def _handoff(args: argparse.Namespace) -> None:
     from slack_sdk.web.async_client import AsyncWebClient
 
     config = Config.from_env()
-    args.session_id = _resolve_session_id(args.session_id)
+    try:
+        args.session_id = resolve_session_id(args.session_id)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     # Resolve channel name
     channel_name: str | None = args.channel
@@ -172,23 +197,7 @@ async def _handoff(args: argparse.Namespace) -> None:
 
     # Look up channel ID via Slack API
     client = AsyncWebClient(token=config.slack_bot_token)
-    channel_id: str | None = None
-    cursor: str | None = None
-    while True:
-        kwargs: dict = {"limit": 200}
-        if cursor:
-            kwargs["cursor"] = cursor
-        resp = await client.conversations_list(**kwargs)
-        for ch in resp.get("channels", []):
-            if ch["name"] == channel_name:
-                channel_id = ch["id"]
-                break
-        if channel_id:
-            break
-        cursor = resp.get("response_metadata", {}).get("next_cursor")
-        if not cursor:
-            break
-
+    channel_id = await resolve_channel_id(client, channel_name)
     if not channel_id:
         print(f"Error: channel #{channel_name} not found.", file=sys.stderr)
         sys.exit(1)
