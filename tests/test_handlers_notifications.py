@@ -441,6 +441,68 @@ class TestVerbosityFiltering:
         assert not any(":clipboard: Tool output:" in t for t in all_texts)
 
     @pytest.mark.asyncio
+    async def test_verbose_long_tool_output_uploaded_as_snippet(self):
+        """Long tool output in verbose mode is uploaded as a snippet instead of inline."""
+        config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="verbose")
+        sessions = SessionStore()
+
+        long_output = "x" * 5000
+
+        async def fake_stream(prompt):
+            yield make_tool_event(tool_block("Bash", id="tu_bash_2", command="cat big.log"))
+            yield make_user_event_with_results([
+                {"type": "tool_result", "tool_use_id": "tu_bash_2", "is_error": False, "content": long_output},
+            ])
+            yield make_event("assistant", text="Done.")
+            yield make_event("result", text="Done.", num_turns=1, duration_ms=1000)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "20008.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "show log", client, config, sessions)
+
+        # Should upload as snippet, not post inline
+        client.files_upload_v2.assert_called_once()
+        upload_kwargs = client.files_upload_v2.call_args.kwargs
+        assert upload_kwargs["content"] == long_output
+        assert "snippet" in upload_kwargs.get("initial_comment", "").lower()
+
+        # No inline tool output messages
+        all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        assert not any(":clipboard: Tool output:\n```" in t for t in all_texts)
+
+    @pytest.mark.asyncio
+    async def test_verbose_short_tool_output_posted_inline(self):
+        """Short tool output in verbose mode is still posted as a regular message."""
+        config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="verbose")
+        sessions = SessionStore()
+
+        async def fake_stream(prompt):
+            yield make_tool_event(tool_block("Bash", id="tu_bash_3", command="echo hi"))
+            yield make_user_event_with_results([
+                {"type": "tool_result", "tool_use_id": "tu_bash_3", "is_error": False, "content": "hi"},
+            ])
+            yield make_event("assistant", text="Done.")
+            yield make_event("result", text="Done.", num_turns=1, duration_ms=1000)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "20009.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "say hi", client, config, sessions)
+
+        all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        assert any(":clipboard: Tool output:\n```\nhi\n```" in t for t in all_texts)
+        client.files_upload_v2.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_verbose_shows_compact_boundary(self):
         config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="verbose")
         sessions = SessionStore()

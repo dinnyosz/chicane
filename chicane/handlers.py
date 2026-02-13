@@ -339,12 +339,20 @@ async def _process_message(
                             tool_name = tool_id_to_name.get(tool_use_id, "")
                             if tool_name in _QUIET_TOOLS:
                                 continue
-                            truncated = (result_text[:500] + "...") if len(result_text) > 500 else result_text
-                            await client.chat_postMessage(
-                                channel=channel,
-                                thread_ts=thread_ts,
-                                text=f":clipboard: Tool output:\n```\n{truncated}\n```",
-                            )
+                            # Upload long tool output as a snippet
+                            wrapped = f":clipboard: Tool output:\n```\n{result_text}\n```"
+                            if len(wrapped) > SNIPPET_THRESHOLD:
+                                await _send_snippet(
+                                    client, channel, thread_ts,
+                                    result_text,
+                                    initial_comment=":clipboard: Tool output (uploaded as snippet):",
+                                )
+                            else:
+                                await client.chat_postMessage(
+                                    channel=channel,
+                                    thread_ts=thread_ts,
+                                    text=wrapped,
+                                )
 
                 elif event_data.type == "system" and event_data.subtype == "compact_boundary":
                     if _should_show("compact_boundary", config.verbosity):
