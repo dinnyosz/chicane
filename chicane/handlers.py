@@ -292,12 +292,13 @@ async def _process_message(
                 # Detect git commits from Bash tool use
                 if not git_committed and _has_git_commit(event_data):
                     git_committed = True
-                    try:
-                        await client.reactions_add(
-                            channel=channel, name="package", timestamp=event["ts"],
-                        )
-                    except Exception:
-                        pass
+                    for ts in dict.fromkeys([thread_ts, event["ts"]]):
+                        try:
+                            await client.reactions_add(
+                                channel=channel, name="package", timestamp=ts,
+                            )
+                        except Exception:
+                            pass
 
                 # Accumulate text
                 chunk = event_data.text
@@ -663,10 +664,14 @@ def _has_git_commit(event: ClaudeEvent) -> bool:
     """Check if an assistant event contains a Bash tool_use running git commit."""
     message = event.raw.get("message", {})
     for block in message.get("content", []):
-        if block.get("type") != "tool_use" or block.get("name") != "Bash":
+        if block.get("type") != "tool_use":
+            continue
+        logger.debug("_has_git_commit checking tool_use block: name=%s input=%s", block.get("name"), block.get("input"))
+        if block.get("name") != "Bash":
             continue
         cmd = block.get("input", {}).get("command", "")
-        if re.search(r"\bgit\s+commit\b", cmd):
+        if re.search(r"\bgit\b.*\bcommit\b", cmd):
+            logger.debug("_has_git_commit matched git commit in: %s", cmd)
             return True
     return False
 
