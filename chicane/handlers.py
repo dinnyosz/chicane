@@ -26,6 +26,20 @@ MAX_FILE_SIZE = 10 * 1024 * 1024
 _HANDOFF_RE = re.compile(r"_?\(session_id:\s*([a-f0-9\-]+)\)_?\s*$")
 
 
+def _should_show(event_type: str, verbosity: str) -> bool:
+    """Check whether an event type should be displayed at the given verbosity level.
+
+    Event types: tool_activity, tool_error, tool_result, compact_boundary.
+    Text, completion summary, permission denials, and empty warnings are always shown.
+    """
+    if verbosity == "verbose":
+        return True
+    if verbosity == "normal":
+        return event_type in ("tool_activity", "tool_error")
+    # minimal
+    return False
+
+
 def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> None:
     """Register all Slack event handlers on the app."""
     bot_user_id: str | None = None
@@ -244,7 +258,9 @@ async def _process_message(
                 if event_data.parent_tool_use_id:
                     activities = [f":arrow_right_hook: {a}" for a in activities]
 
-                if activities and full_text:
+                show_activities = _should_show("tool_activity", config.verbosity)
+
+                if show_activities and activities and full_text:
                     for chunk in _split_message(full_text):
                         await client.chat_postMessage(
                             channel=channel, thread_ts=thread_ts, text=chunk,
@@ -252,16 +268,17 @@ async def _process_message(
                     full_text = ""
 
                 # Post tool activity
-                for activity in activities:
-                    if first_activity:
-                        await client.chat_update(
-                            channel=channel, ts=message_ts, text=activity,
-                        )
-                        first_activity = False
-                    else:
-                        await client.chat_postMessage(
-                            channel=channel, thread_ts=thread_ts, text=activity,
-                        )
+                if show_activities:
+                    for activity in activities:
+                        if first_activity:
+                            await client.chat_update(
+                                channel=channel, ts=message_ts, text=activity,
+                            )
+                            first_activity = False
+                        else:
+                            await client.chat_postMessage(
+                                channel=channel, thread_ts=thread_ts, text=activity,
+                            )
 
                 # Accumulate text
                 chunk = event_data.text
@@ -279,28 +296,40 @@ async def _process_message(
 
             elif event_data.type == "user":
                 # Check for tool errors in user events (tool results)
-                for error_msg in event_data.tool_errors:
-                    truncated = (error_msg[:200] + "...") if len(error_msg) > 200 else error_msg
-                    await client.chat_postMessage(
-                        channel=channel,
-                        thread_ts=thread_ts,
-                        text=f":warning: Tool error: {truncated}",
-                    )
+                if _should_show("tool_error", config.verbosity):
+                    for error_msg in event_data.tool_errors:
+                        truncated = (error_msg[:200] + "...") if len(error_msg) > 200 else error_msg
+                        await client.chat_postMessage(
+                            channel=channel,
+                            thread_ts=thread_ts,
+                            text=f":warning: Tool error: {truncated}",
+                        )
+
+                # Show tool outputs in verbose mode
+                if _should_show("tool_result", config.verbosity):
+                    for result_text in event_data.tool_results:
+                        truncated = (result_text[:500] + "...") if len(result_text) > 500 else result_text
+                        await client.chat_postMessage(
+                            channel=channel,
+                            thread_ts=thread_ts,
+                            text=f":clipboard: Tool output:\n```\n{truncated}\n```",
+                        )
 
             elif event_data.type == "system" and event_data.subtype == "compact_boundary":
-                meta = event_data.compact_metadata or {}
-                trigger = meta.get("trigger", "auto")
-                pre_tokens = meta.get("pre_tokens")
-                if trigger == "auto":
-                    note = ":brain: Context was automatically compacted"
-                else:
-                    note = ":brain: Context was manually compacted"
-                if pre_tokens:
-                    note += f" ({pre_tokens:,} tokens before)"
-                note += " — earlier messages may be summarized"
-                await client.chat_postMessage(
-                    channel=channel, thread_ts=thread_ts, text=note,
-                )
+                if _should_show("compact_boundary", config.verbosity):
+                    meta = event_data.compact_metadata or {}
+                    trigger = meta.get("trigger", "auto")
+                    pre_tokens = meta.get("pre_tokens")
+                    if trigger == "auto":
+                        note = ":brain: Context was automatically compacted"
+                    else:
+                        note = ":brain: Context was manually compacted"
+                    if pre_tokens:
+                        note += f" ({pre_tokens:,} tokens before)"
+                    note += " — earlier messages may be summarized"
+                    await client.chat_postMessage(
+                        channel=channel, thread_ts=thread_ts, text=note,
+                    )
 
             else:
                 logger.debug(f"Event type={event_data.type} subtype={event_data.subtype}")
