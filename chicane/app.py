@@ -112,6 +112,35 @@ async def start(config: Config | None = None) -> None:
         loop = asyncio.get_running_loop()
         stop = asyncio.Event()
 
+        # Save and enforce terminal settings so Ctrl+C always generates
+        # SIGINT.  Some terminal emulators (iTerm2 text selection) can
+        # leave the tty with isig disabled, making ^C echo literally
+        # instead of raising the signal.
+        _saved_termios = None
+        if sys.stdin.isatty():
+            try:
+                import termios
+                fd = sys.stdin.fileno()
+                _saved_termios = termios.tcgetattr(fd)
+                # Periodically re-enable ISIG in case something clears it.
+                def _ensure_isig() -> None:
+                    try:
+                        attrs = termios.tcgetattr(fd)
+                        if not (attrs[3] & termios.ISIG):
+                            attrs[3] |= termios.ISIG
+                            termios.tcsetattr(fd, termios.TCSANOW, attrs)
+                    except (termios.error, OSError):
+                        pass
+                _ensure_isig()  # Enforce immediately on startup.
+
+                async def _isig_watchdog() -> None:
+                    while not stop.is_set():
+                        _ensure_isig()
+                        await asyncio.sleep(2)
+                isig_task = asyncio.ensure_future(_isig_watchdog())
+            except (ImportError, OSError):
+                _saved_termios = None
+
         def _handle_signal() -> None:
             print("\nShutting down... (press Ctrl+C again to force quit)")
             stop.set()
@@ -125,6 +154,15 @@ async def start(config: Config | None = None) -> None:
             loop.add_signal_handler(sig, _handle_signal)
 
         await stop.wait()
+
+        # Cancel the watchdog and restore original terminal settings.
+        if _saved_termios is not None:
+            isig_task.cancel()
+            try:
+                import termios
+                termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, _saved_termios)
+            except (ImportError, OSError):
+                pass
         sessions.shutdown()
         try:
             await asyncio.wait_for(handler.close_async(), timeout=3.0)

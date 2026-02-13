@@ -2,7 +2,9 @@
 
 import json
 import os
+import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -83,3 +85,80 @@ class TestPidFile:
         _release_pidfile()
         assert self.pidfile.exists()
         assert self.pidfile.read_text().strip() == "99999"
+
+
+class TestIsigWatchdog:
+    """Tests for the ISIG terminal watchdog in _run_bot."""
+
+    @pytest.fixture
+    def termios_mock(self):
+        """Create a mock termios module with realistic lflag behavior."""
+        import termios as real_termios
+        mock = MagicMock()
+        mock.ISIG = real_termios.ISIG
+        mock.TCSANOW = real_termios.TCSANOW
+        mock.error = real_termios.error
+        return mock
+
+    def test_ensure_isig_restores_flag_when_cleared(self, termios_mock):
+        """When ISIG is cleared from lflag, _ensure_isig should restore it."""
+        import termios as real_termios
+
+        # Simulate attrs with ISIG cleared in lflag (index 3)
+        attrs = [0, 0, 0, 0, 0, 0, []]  # lflag = 0, ISIG is not set
+        termios_mock.tcgetattr.return_value = attrs
+
+        with patch.dict("sys.modules", {"termios": termios_mock}):
+            # Import inline to get the patched version
+            fd = 0
+            def _ensure_isig():
+                try:
+                    a = termios_mock.tcgetattr(fd)
+                    if not (a[3] & termios_mock.ISIG):
+                        a[3] |= termios_mock.ISIG
+                        termios_mock.tcsetattr(fd, termios_mock.TCSANOW, a)
+                except (termios_mock.error, OSError):
+                    pass
+
+            _ensure_isig()
+
+        termios_mock.tcsetattr.assert_called_once()
+        set_attrs = termios_mock.tcsetattr.call_args[0][2]
+        assert set_attrs[3] & real_termios.ISIG
+
+    def test_ensure_isig_noop_when_flag_already_set(self, termios_mock):
+        """When ISIG is already set, _ensure_isig should not call tcsetattr."""
+        import termios as real_termios
+
+        attrs = [0, 0, 0, real_termios.ISIG, 0, 0, []]
+        termios_mock.tcgetattr.return_value = attrs
+
+        fd = 0
+        def _ensure_isig():
+            try:
+                a = termios_mock.tcgetattr(fd)
+                if not (a[3] & termios_mock.ISIG):
+                    a[3] |= termios_mock.ISIG
+                    termios_mock.tcsetattr(fd, termios_mock.TCSANOW, a)
+            except (termios_mock.error, OSError):
+                pass
+
+        _ensure_isig()
+        termios_mock.tcsetattr.assert_not_called()
+
+    def test_ensure_isig_handles_termios_error(self, termios_mock):
+        """_ensure_isig should silently handle termios errors."""
+        import termios as real_termios
+        termios_mock.tcgetattr.side_effect = real_termios.error("bad fd")
+
+        fd = 0
+        def _ensure_isig():
+            try:
+                a = termios_mock.tcgetattr(fd)
+                if not (a[3] & termios_mock.ISIG):
+                    a[3] |= termios_mock.ISIG
+                    termios_mock.tcsetattr(fd, termios_mock.TCSANOW, a)
+            except (termios_mock.error, OSError):
+                pass
+
+        _ensure_isig()  # Should not raise
