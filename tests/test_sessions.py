@@ -139,6 +139,14 @@ class TestSessionStore:
         assert "running shell commands" in prompt.lower()
         assert "host system directly" in prompt.lower()
 
+    def test_system_prompt_forbids_interactive_tools(self, store, config):
+        """System prompt must tell Claude not to use blocking interactive tools."""
+        session = store.get_or_create("thread-1", config)
+        prompt = session.system_prompt
+        assert "AskUserQuestion" in prompt
+        assert "streamed output mode" in prompt.lower()
+        assert "will NOT work" in prompt
+
     def test_shutdown_clears_sessions(self, store, config):
         store.get_or_create("thread-1", config, cwd=Path("/tmp/a"))
         store.get_or_create("thread-2", config, cwd=Path("/tmp/b"))
