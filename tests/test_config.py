@@ -242,7 +242,7 @@ class TestVerbosityConfig:
         monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
         monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
         monkeypatch.delenv("VERBOSITY", raising=False)
-        assert Config.from_env().verbosity == "normal"
+        assert Config.from_env().verbosity == "verbose"
 
     def test_verbosity_from_env(self, monkeypatch):
         monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")

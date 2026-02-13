@@ -70,7 +70,7 @@ class Config:
     claude_allowed_tools: list[str] = field(default_factory=list)
     claude_max_turns: int | None = None
     claude_max_budget_usd: float | None = None
-    verbosity: str = "normal"
+    verbosity: str = "verbose"
 
 
     def resolve_dir_channel(self, cwd: Path) -> str | None:
@@ -156,7 +156,7 @@ class Config:
                 # channel name = directory name (relative to BASE_DIRECTORY)
                 channel_dirs[entry] = entry
 
-        verbosity = _validate_verbosity(os.environ.get("VERBOSITY", "normal"))
+        verbosity = _validate_verbosity(os.environ.get("VERBOSITY", "verbose"))
 
         return cls(
             slack_bot_token=bot_token,

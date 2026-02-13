@@ -641,11 +641,11 @@ class TestStepVerbosity:
              patch("chicane.setup.console.rule"):
             assert _step_verbosity() == "verbose"
 
-    def test_empty_returns_normal(self):
+    def test_empty_returns_verbose(self):
         with patch("chicane.setup.Prompt.ask", return_value=""), \
              patch("chicane.setup.console.print"), \
              patch("chicane.setup.console.rule"):
-            assert _step_verbosity() == "normal"
+            assert _step_verbosity() == "verbose"
 
     def test_keeps_default(self):
         with patch("chicane.setup.Prompt.ask", return_value="verbose"), \

@@ -428,18 +428,18 @@ def _step_logging(defaults: dict[str, str]) -> tuple[str, str]:
     return log_dir, log_level
 
 
-def _step_verbosity(default: str = "normal") -> str:
+def _step_verbosity(default: str = "verbose") -> str:
     """Step 10: Configure verbosity level."""
     console.rule("Step 10 of 11: Verbosity")
     console.print("\n  Controls how much detail is shown in Slack during Claude sessions.")
     console.print("  [dim]minimal[/dim]  — Only final text responses and completion summaries")
-    console.print("  [dim]normal[/dim]   — Text + tool call summaries and errors (default)")
-    console.print("  [dim]verbose[/dim]  — Text + tool calls + tool outputs/results")
+    console.print("  [dim]normal[/dim]   — Text + tool call summaries and errors")
+    console.print("  [dim]verbose[/dim]  — Text + tool calls + tool outputs/results (default)")
     valid_levels = {"minimal", "normal", "verbose"}
     while True:
         val = _prompt_with_default("Verbosity", default).lower()
         if not val:
-            return "normal"
+            return default
         if val in valid_levels:
             return val
         console.print(f"  [red]Invalid level '{val}'. Choose from: {', '.join(sorted(valid_levels))}[/red]\n")
