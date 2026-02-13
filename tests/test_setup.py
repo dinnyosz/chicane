@@ -8,6 +8,7 @@ import pytest
 
 from chicane.setup import (
     _copy_to_clipboard,
+    _ensure_isig,
     _load_existing_env,
     _load_manifest,
     _parse_allowed_tools,
@@ -28,6 +29,54 @@ from chicane.setup import (
     _write_env,
     setup_command,
 )
+
+
+class TestEnsureIsig:
+    def test_enables_isig_when_disabled(self):
+        """_ensure_isig re-enables ISIG if it was cleared."""
+        import termios
+
+        mock_attrs = [0, 0, 0, 0, 0, 0, []]  # lflag (index 3) = 0, ISIG not set
+        with patch("sys.stdin") as mock_stdin, \
+             patch("termios.tcgetattr", return_value=mock_attrs) as mock_get, \
+             patch("termios.tcsetattr") as mock_set:
+            mock_stdin.isatty.return_value = True
+            mock_stdin.fileno.return_value = 0
+            _ensure_isig()
+            mock_get.assert_called_once_with(0)
+            mock_set.assert_called_once()
+            # Verify ISIG was enabled in the attrs passed to tcsetattr
+            set_attrs = mock_set.call_args[0][2]
+            assert set_attrs[3] & termios.ISIG
+
+    def test_skips_when_isig_already_set(self):
+        """_ensure_isig does nothing if ISIG is already enabled."""
+        import termios
+
+        mock_attrs = [0, 0, 0, termios.ISIG, 0, 0, []]
+        with patch("sys.stdin") as mock_stdin, \
+             patch("termios.tcgetattr", return_value=mock_attrs), \
+             patch("termios.tcsetattr") as mock_set:
+            mock_stdin.isatty.return_value = True
+            mock_stdin.fileno.return_value = 0
+            _ensure_isig()
+            mock_set.assert_not_called()
+
+    def test_skips_when_not_a_tty(self):
+        """_ensure_isig is a no-op when stdin is not a tty."""
+        with patch("sys.stdin") as mock_stdin, \
+             patch("termios.tcgetattr") as mock_get:
+            mock_stdin.isatty.return_value = False
+            _ensure_isig()
+            mock_get.assert_not_called()
+
+    def test_handles_oserror_gracefully(self):
+        """_ensure_isig doesn't raise on OSError."""
+        with patch("sys.stdin") as mock_stdin, \
+             patch("termios.tcgetattr", side_effect=OSError):
+            mock_stdin.isatty.return_value = True
+            mock_stdin.fileno.return_value = 0
+            _ensure_isig()  # Should not raise
 
 
 class TestLoadManifest:
