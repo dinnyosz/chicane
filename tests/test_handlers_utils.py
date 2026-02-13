@@ -516,6 +516,23 @@ class TestHasGitCommit:
         event = ClaudeEvent(type="assistant", raw=raw)
         assert _has_git_commit(event) is False
 
+    def test_git_with_flags_between(self):
+        """git -C /path commit should match (flags between git and commit)."""
+        event = make_tool_event(
+            tool_block("Bash", command='git -C /Users/me/project commit -m "fix"')
+        )
+        assert _has_git_commit(event) is True
+
+    def test_chained_add_and_git_c_commit(self):
+        """echo ... && git -C /path add file && git -C /path commit should match."""
+        event = make_tool_event(
+            tool_block(
+                "Bash",
+                command='echo "test" > file.txt && git -C /tmp/project add file.txt && git -C /tmp/project commit -m "test: verification"',
+            )
+        )
+        assert _has_git_commit(event) is True
+
     def test_multiple_blocks_one_is_commit(self):
         event = make_tool_event(
             tool_block("Bash", command="git add ."),
