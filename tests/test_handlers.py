@@ -1219,6 +1219,54 @@ class TestFormatToolActivity:
         event = self._make_tool_event(self._tool_block("AskUserQuestion"))
         assert _format_tool_activity(event) == [":question: Asking user a question"]
 
+    def test_ask_user_question_with_content(self):
+        event = self._make_tool_event(
+            self._tool_block(
+                "AskUserQuestion",
+                questions=[
+                    {
+                        "question": "Which database should we use?",
+                        "header": "Database",
+                        "options": [
+                            {"label": "PostgreSQL", "description": "Relational, battle-tested"},
+                            {"label": "SQLite", "description": "Embedded, zero config"},
+                        ],
+                        "multiSelect": False,
+                    }
+                ],
+            )
+        )
+        result = _format_tool_activity(event)
+        assert len(result) == 1
+        text = result[0]
+        assert ":question: *Claude is asking:*" in text
+        assert "Which database should we use?" in text
+        assert "*PostgreSQL*" in text
+        assert "Relational, battle-tested" in text
+        assert "*SQLite*" in text
+
+    def test_ask_user_question_label_only_option(self):
+        event = self._make_tool_event(
+            self._tool_block(
+                "AskUserQuestion",
+                questions=[
+                    {
+                        "question": "Continue?",
+                        "header": "Confirm",
+                        "options": [
+                            {"label": "Yes"},
+                            {"label": "No"},
+                        ],
+                        "multiSelect": False,
+                    }
+                ],
+            )
+        )
+        result = _format_tool_activity(event)
+        text = result[0]
+        assert "*Yes*" in text
+        assert "*No*" in text
+
     def test_todo_write_with_tasks(self):
         event = self._make_tool_event(
             self._tool_block(
@@ -2164,6 +2212,63 @@ class TestFormatCompletionSummary:
         result = _format_completion_summary(event)
         assert result == ":x: 2 turns took 8s"
 
+    def test_error_max_turns_subtype(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={
+                "type": "result",
+                "subtype": "error_max_turns",
+                "num_turns": 10,
+                "duration_ms": 30000,
+                "is_error": True,
+            },
+        )
+        result = _format_completion_summary(event)
+        assert result == ":x: 10 turns took 30s (hit max turns limit)"
+
+    def test_error_max_budget_subtype(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={
+                "type": "result",
+                "subtype": "error_max_budget_usd",
+                "num_turns": 5,
+                "duration_ms": 60000,
+                "is_error": True,
+            },
+        )
+        result = _format_completion_summary(event)
+        assert result == ":x: 5 turns took 1m0s (hit budget limit)"
+
+    def test_error_during_execution_subtype(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={
+                "type": "result",
+                "subtype": "error_during_execution",
+                "num_turns": 2,
+                "is_error": True,
+            },
+        )
+        result = _format_completion_summary(event)
+        assert result == ":x: Done — 2 turns (error during execution)"
+
+    def test_success_subtype_no_reason(self):
+        """Success results should not include a reason suffix."""
+        event = ClaudeEvent(
+            type="result",
+            raw={
+                "type": "result",
+                "subtype": "success",
+                "num_turns": 3,
+                "duration_ms": 5000,
+                "is_error": False,
+            },
+        )
+        result = _format_completion_summary(event)
+        assert result == ":checkered_flag: 3 turns took 5s"
+        assert "(" not in result
+
     def test_turns_without_duration_fallback(self):
         event = ClaudeEvent(
             type="result",
@@ -2559,6 +2664,127 @@ class TestCompactBoundaryNotification:
         ]
         assert len(brain_calls) == 1
         assert "automatically compacted" in brain_calls[0].kwargs["text"]
+
+
+class TestPermissionDenialNotification:
+    """Test that permission denials from result events are surfaced."""
+
+    @pytest.fixture
+    def config(self):
+        return Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+        )
+
+    @pytest.fixture
+    def sessions(self):
+        return SessionStore()
+
+    def _make_event(self, type: str, text: str = "", **kwargs) -> ClaudeEvent:
+        if type == "assistant":
+            raw = {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": text}]},
+                **kwargs,
+            }
+        elif type == "result":
+            raw = {"type": "result", "result": text, **kwargs}
+        else:
+            raw = {"type": type, **kwargs}
+        return ClaudeEvent(type=type, raw=raw)
+
+    def _mock_client(self):
+        client = AsyncMock()
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {"channel": {"name": "general"}}
+        return client
+
+    @pytest.mark.asyncio
+    async def test_denials_posted(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_event("assistant", text="I tried but couldn't.")
+            yield self._make_event(
+                "result", text="I tried but couldn't.",
+                num_turns=2, duration_ms=3000,
+                permission_denials=[
+                    {"tool_name": "Bash", "tool_use_id": "t1", "tool_input": {"command": "rm -rf /"}},
+                    {"tool_name": "Bash", "tool_use_id": "t2", "tool_input": {"command": "sudo reboot"}},
+                    {"tool_name": "Write", "tool_use_id": "t3", "tool_input": {"file_path": "/etc/passwd"}},
+                ],
+            )
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "13000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "do it", client, config, sessions)
+
+        denial_calls = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":no_entry_sign:" in c.kwargs.get("text", "")
+        ]
+        assert len(denial_calls) == 1
+        msg = denial_calls[0].kwargs["text"]
+        assert "3 tool permissions denied" in msg
+        assert "`Bash`" in msg
+        assert "`Write`" in msg
+
+    @pytest.mark.asyncio
+    async def test_single_denial_singular(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_event(
+                "result", text="blocked",
+                num_turns=1, duration_ms=1000,
+                permission_denials=[
+                    {"tool_name": "Edit", "tool_use_id": "t1", "tool_input": {}},
+                ],
+            )
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "13001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "edit it", client, config, sessions)
+
+        denial_calls = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":no_entry_sign:" in c.kwargs.get("text", "")
+        ]
+        assert len(denial_calls) == 1
+        assert "1 tool permission denied" in denial_calls[0].kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_no_denials_no_message(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_event(
+                "result", text="all good",
+                num_turns=1, duration_ms=1000,
+                permission_denials=[],
+            )
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "13002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hi", client, config, sessions)
+
+        denial_calls = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":no_entry_sign:" in c.kwargs.get("text", "")
+        ]
+        assert len(denial_calls) == 0
 
 
 class TestSubagentPrefix:

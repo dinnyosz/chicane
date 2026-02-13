@@ -57,6 +57,8 @@ class Config:
     claude_model: str | None = None
     claude_permission_mode: str = "acceptEdits"
     claude_allowed_tools: list[str] = field(default_factory=list)
+    claude_max_turns: int | None = None
+    claude_max_budget_usd: float | None = None
 
 
     def resolve_dir_channel(self, cwd: Path) -> str | None:
@@ -116,6 +118,18 @@ class Config:
                 f"Must be one of: {', '.join(sorted(valid_perm_modes))}"
             )
         raw_tools = os.environ.get("CLAUDE_ALLOWED_TOOLS", "")
+        raw_max_turns = os.environ.get("CLAUDE_MAX_TURNS")
+        raw_max_budget = os.environ.get("CLAUDE_MAX_BUDGET_USD")
+        max_turns: int | None = None
+        max_budget: float | None = None
+        if raw_max_turns:
+            max_turns = int(raw_max_turns)
+            if max_turns < 1:
+                raise ValueError("CLAUDE_MAX_TURNS must be a positive integer")
+        if raw_max_budget:
+            max_budget = float(raw_max_budget)
+            if max_budget <= 0:
+                raise ValueError("CLAUDE_MAX_BUDGET_USD must be a positive number")
         # Parse CHANNEL_DIRS: "magaldi,slack-bot,frontend" or "magaldi=magaldi,web=frontend"
         channel_dirs: dict[str, str] = {}
         raw_dirs = os.environ.get("CHANNEL_DIRS", "")
@@ -141,4 +155,6 @@ class Config:
             claude_model=model,
             claude_permission_mode=perm_mode,
             claude_allowed_tools=[t.strip() for t in raw_tools.split(",") if t.strip()],
+            claude_max_turns=max_turns,
+            claude_max_budget_usd=max_budget,
         )

@@ -349,6 +349,19 @@ async def _process_message(
                     channel=channel, thread_ts=thread_ts, text=summary,
                 )
 
+            # Surface permission denials so users know why tools were blocked
+            denials = result_event.permission_denials
+            if denials:
+                names = sorted({d.get("tool_name", "unknown") for d in denials})
+                note = (
+                    f":no_entry_sign: {len(denials)} tool permission"
+                    f"{'s' if len(denials) != 1 else ''}"
+                    f" denied: {', '.join(f'`{n}`' for n in names)}"
+                )
+                await client.chat_postMessage(
+                    channel=channel, thread_ts=thread_ts, text=note,
+                )
+
         # Swap eyes for checkmark
         try:
             await client.reactions_remove(
@@ -679,7 +692,24 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
             else:
                 activities.append(":clipboard: Updating tasks")
         elif tool_name == "AskUserQuestion":
-            activities.append(":question: Asking user a question")
+            questions = tool_input.get("questions", [])
+            if questions:
+                lines = [":question: *Claude is asking:*"]
+                for q in questions:
+                    text = q.get("question", "")
+                    if text:
+                        lines.append(f"  {text}")
+                    options = q.get("options", [])
+                    for opt in options:
+                        label = opt.get("label", "")
+                        desc = opt.get("description", "")
+                        if label and desc:
+                            lines.append(f"    • *{label}* — {desc}")
+                        elif label:
+                            lines.append(f"    • *{label}*")
+                activities.append("\n".join(lines))
+            else:
+                activities.append(":question: Asking user a question")
         else:
             # Clean up tool names for display: strip MCP prefixes
             # (mcp__server__tool → Tool), split snake/camel case.
@@ -695,12 +725,28 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
     return activities
 
 
+_ERROR_SUBTYPE_LABELS = {
+    "error_max_turns": "hit max turns limit",
+    "error_during_execution": "error during execution",
+    "error_max_budget_usd": "hit budget limit",
+    "error_max_structured_output_retries": "structured output validation failed",
+}
+
+
 def _format_completion_summary(event: ClaudeEvent) -> str | None:
     """Format a completion footer from a result event."""
     if event.num_turns is None:
         return None
     turns = f"{event.num_turns} turn{'s' if event.num_turns != 1 else ''}"
     emoji = ":checkered_flag:" if not event.is_error else ":x:"
+
+    # Build error reason suffix for non-success results
+    reason = ""
+    if event.is_error and event.subtype:
+        label = _ERROR_SUBTYPE_LABELS.get(event.subtype)
+        if label:
+            reason = f" ({label})"
+
     if event.duration_ms is not None:
         secs = event.duration_ms / 1000
         if secs >= 60:
@@ -709,8 +755,8 @@ def _format_completion_summary(event: ClaudeEvent) -> str | None:
             duration = f"{mins}m{remaining}s"
         else:
             duration = f"{int(secs)}s"
-        return f"{emoji} {turns} took {duration}"
-    return f"{emoji} Done — {turns}"
+        return f"{emoji} {turns} took {duration}{reason}"
+    return f"{emoji} Done — {turns}{reason}"
 
 
 def _split_message(text: str) -> list[str]:

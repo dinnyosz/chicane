@@ -55,6 +55,16 @@ class ClaudeEvent:
         return self.raw.get("duration_ms")
 
     @property
+    def permission_denials(self) -> list[dict]:
+        """Permission denials from a result event."""
+        return self.raw.get("permission_denials", [])
+
+    @property
+    def errors(self) -> list[str]:
+        """Error messages from error result events."""
+        return self.raw.get("errors", [])
+
+    @property
     def compact_metadata(self) -> dict | None:
         """Compaction info when subtype is 'compact_boundary'."""
         return self.raw.get("compact_metadata")
@@ -95,6 +105,8 @@ class ClaudeSession:
         permission_mode: str = "default",
         system_prompt: str | None = None,
         allowed_tools: list[str] | None = None,
+        max_turns: int | None = None,
+        max_budget_usd: float | None = None,
     ):
         self.cwd = cwd or Path.cwd()
         self.session_id = session_id
@@ -102,6 +114,8 @@ class ClaudeSession:
         self.permission_mode = permission_mode
         self.system_prompt = system_prompt
         self.allowed_tools = allowed_tools or []
+        self.max_turns = max_turns
+        self.max_budget_usd = max_budget_usd
         self._process: asyncio.subprocess.Process | None = None
 
     def kill(self) -> None:
@@ -129,6 +143,12 @@ class ClaudeSession:
         if self.allowed_tools:
             cmd.append("--allowedTools")
             cmd.extend(self.allowed_tools)
+
+        if self.max_turns is not None:
+            cmd.extend(["--max-turns", str(self.max_turns)])
+
+        if self.max_budget_usd is not None:
+            cmd.extend(["--max-budget-usd", str(self.max_budget_usd)])
 
         # Only send system prompt on the first invocation — resumed sessions
         # already have it, so resending wastes tokens.

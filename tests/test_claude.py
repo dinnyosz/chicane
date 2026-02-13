@@ -208,6 +208,44 @@ class TestClaudeEvent:
         )
         assert event.compact_metadata is None
 
+    def test_permission_denials(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={
+                "type": "result",
+                "permission_denials": [
+                    {"tool_name": "Bash", "tool_use_id": "t1", "tool_input": {}},
+                ],
+            },
+        )
+        assert len(event.permission_denials) == 1
+        assert event.permission_denials[0]["tool_name"] == "Bash"
+
+    def test_permission_denials_absent(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={"type": "result"},
+        )
+        assert event.permission_denials == []
+
+    def test_errors_from_error_result(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={
+                "type": "result",
+                "subtype": "error_during_execution",
+                "errors": ["Something broke", "Another issue"],
+            },
+        )
+        assert event.errors == ["Something broke", "Another issue"]
+
+    def test_errors_absent(self):
+        event = ClaudeEvent(
+            type="result",
+            raw={"type": "result", "subtype": "success"},
+        )
+        assert event.errors == []
+
     def test_tool_errors_empty_when_no_errors(self):
         event = ClaudeEvent(
             type="user",
@@ -295,6 +333,30 @@ class TestClaudeSession:
         session = ClaudeSession()
         cmd = session._build_command("do stuff")
         assert "--allowedTools" not in cmd
+
+    def test_build_command_with_max_turns(self):
+        session = ClaudeSession(max_turns=25)
+        cmd = session._build_command("hello")
+        assert "--max-turns" in cmd
+        idx = cmd.index("--max-turns")
+        assert cmd[idx + 1] == "25"
+
+    def test_build_command_no_max_turns_by_default(self):
+        session = ClaudeSession()
+        cmd = session._build_command("hello")
+        assert "--max-turns" not in cmd
+
+    def test_build_command_with_max_budget(self):
+        session = ClaudeSession(max_budget_usd=5.50)
+        cmd = session._build_command("hello")
+        assert "--max-budget-usd" in cmd
+        idx = cmd.index("--max-budget-usd")
+        assert cmd[idx + 1] == "5.5"
+
+    def test_build_command_no_max_budget_by_default(self):
+        session = ClaudeSession()
+        cmd = session._build_command("hello")
+        assert "--max-budget-usd" not in cmd
 
 
 def _make_process_mock(stdout_lines: list[bytes], returncode: int = 0):

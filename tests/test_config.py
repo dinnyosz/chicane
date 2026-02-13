@@ -95,6 +95,48 @@ class TestConfig:
         config = Config.from_env()
         assert config.allowed_users == []
 
+    def test_max_turns_from_env(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("CLAUDE_MAX_TURNS", "25")
+
+        config = Config.from_env()
+        assert config.claude_max_turns == 25
+
+    def test_max_budget_from_env(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("CLAUDE_MAX_BUDGET_USD", "5.50")
+
+        config = Config.from_env()
+        assert config.claude_max_budget_usd == 5.50
+
+    def test_max_turns_and_budget_default_none(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.delenv("CLAUDE_MAX_TURNS", raising=False)
+        monkeypatch.delenv("CLAUDE_MAX_BUDGET_USD", raising=False)
+
+        config = Config.from_env()
+        assert config.claude_max_turns is None
+        assert config.claude_max_budget_usd is None
+
+    def test_invalid_max_turns_rejected(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("CLAUDE_MAX_TURNS", "0")
+
+        with pytest.raises(ValueError, match="CLAUDE_MAX_TURNS must be a positive"):
+            Config.from_env()
+
+    def test_invalid_max_budget_rejected(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("CLAUDE_MAX_BUDGET_USD", "-1.0")
+
+        with pytest.raises(ValueError, match="CLAUDE_MAX_BUDGET_USD must be a positive"):
+            Config.from_env()
+
 
 class TestChannelDirs:
     def test_simple_channel_dirs(self, monkeypatch):
