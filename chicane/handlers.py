@@ -1,10 +1,12 @@
 """Slack event handlers — routes messages to Claude and streams responses back."""
 
+import asyncio
 import logging
 import re
 from pathlib import Path
 
 import aiohttp
+from slack_sdk.errors import SlackApiError
 from platformdirs import user_cache_dir
 from slack_bolt.async_app import AsyncApp
 from slack_sdk.web.async_client import AsyncWebClient
@@ -144,6 +146,40 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
             if clean_text:
                 await _process_message(event, clean_text, client, config, sessions)
 
+    @app.event("reaction_added")
+    async def handle_reaction(event: dict, client: AsyncWebClient) -> None:
+        """Handle :octagonal_sign: reactions to interrupt active streams."""
+        if event.get("reaction") != "octagonal_sign":
+            return
+
+        item = event.get("item", {})
+        if item.get("type") != "message":
+            return
+
+        item_ts = item.get("ts", "")
+        item_channel = item.get("channel", "")
+
+        # Find the thread this message belongs to
+        thread_ts = sessions.thread_for_message(item_ts)
+        if not thread_ts and sessions.has(item_ts):
+            # The reacted message IS the thread starter
+            thread_ts = item_ts
+
+        if not thread_ts:
+            return
+
+        session_info = sessions.get(thread_ts)
+        if not session_info:
+            return
+
+        if session_info.session.is_streaming:
+            await session_info.session.interrupt()
+            await client.chat_postMessage(
+                channel=item_channel,
+                thread_ts=thread_ts,
+                text=":stop_sign: _Interrupted by user_",
+            )
+
 
 def _should_ignore(event: dict, config: Config) -> bool:
     """Check if this event should be ignored."""
@@ -248,6 +284,13 @@ async def _process_message(
         text=":hourglass_flowing_sand: Working on it...",
     )
     message_ts = result["ts"]
+    sessions.register_bot_message(message_ts, thread_ts)
+
+    # If another stream is active for this thread, interrupt it so we
+    # can acquire the lock quickly instead of waiting minutes.
+    if session_info.session.is_streaming:
+        logger.info(f"New message in {thread_ts} — interrupting active stream")
+        await session_info.session.interrupt()
 
     # Stream Claude's response — hold the session lock so only one
     # _process_message streams at a time per thread.
@@ -278,9 +321,10 @@ async def _process_message(
 
                     if show_activities and activities and full_text:
                         for chunk in _split_message(_markdown_to_mrkdwn(full_text)):
-                            await client.chat_postMessage(
+                            r = await client.chat_postMessage(
                                 channel=channel, thread_ts=thread_ts, text=chunk,
                             )
+                            sessions.register_bot_message(r["ts"], thread_ts)
                         full_text = ""
 
                     # Post tool activity
@@ -292,9 +336,10 @@ async def _process_message(
                                 )
                                 first_activity = False
                             else:
-                                await client.chat_postMessage(
+                                r = await client.chat_postMessage(
                                     channel=channel, thread_ts=thread_ts, text=activity,
                                 )
+                                sessions.register_bot_message(r["ts"], thread_ts)
 
                     # Detect git commits from Bash tool use
                     if not git_committed and _has_git_commit(event_data):
@@ -371,6 +416,41 @@ async def _process_message(
 
                 else:
                     logger.debug(f"Event type={event_data.type} subtype={event_data.subtype}")
+
+            # Handle interrupted stream — show partial text + indicator, skip completion
+            if session.was_interrupted:
+                if full_text:
+                    mrkdwn = _markdown_to_mrkdwn(full_text)
+                    if first_activity:
+                        await client.chat_update(
+                            channel=channel, ts=message_ts,
+                            text=mrkdwn[:SLACK_MAX_LENGTH] + "\n\n:stop_sign: _Interrupted_",
+                        )
+                    else:
+                        for chunk in _split_message(mrkdwn):
+                            await client.chat_postMessage(
+                                channel=channel, thread_ts=thread_ts, text=chunk,
+                            )
+                        await client.chat_postMessage(
+                            channel=channel, thread_ts=thread_ts,
+                            text=":stop_sign: _Interrupted_",
+                        )
+                else:
+                    await client.chat_update(
+                        channel=channel, ts=message_ts,
+                        text=":stop_sign: _Interrupted_",
+                    )
+                # Swap eyes → stop sign reaction
+                try:
+                    await client.reactions_remove(
+                        channel=channel, name="eyes", timestamp=event["ts"]
+                    )
+                    await client.reactions_add(
+                        channel=channel, name="octagonal_sign", timestamp=event["ts"]
+                    )
+                except Exception:
+                    pass
+                return
 
             # Final: send remaining text
             if full_text:
@@ -965,21 +1045,75 @@ async def _send_snippet(
     thread_ts: str,
     text: str,
     initial_comment: str = "",
+    *,
+    _max_attempts: int = 2,
+    _retry_delay: float = 2.0,
+    _step_delay: float = 0.5,
 ) -> None:
     """Upload *text* as a Slack snippet file in the thread.
 
-    Uses ``files_upload_v2`` so the full content is viewable in Slack
-    without spamming multiple messages.
+    Uses the three-step Slack upload flow (``getUploadURLExternal`` →
+    PUT content → ``completeUploadExternal``).  A short delay is inserted
+    between each step to avoid racing Slack's backend, and the whole
+    sequence is retried once on failure before falling back to split
+    messages.
     """
-    await client.files_upload_v2(
-        content=text,
-        filename="response.md",
-        snippet_type="markdown",
-        title="Full response",
-        channel=channel,
-        thread_ts=thread_ts,
-        initial_comment=initial_comment or None,
+    last_exc: BaseException | None = None
+    for attempt in range(1, _max_attempts + 1):
+        try:
+            # Step 1 – obtain an upload URL and file id.
+            size = len(text.encode("utf-8"))
+            url_resp = await client.files_getUploadURLExternal(
+                filename="response.md",
+                length=size,
+            )
+            upload_url: str = url_resp["upload_url"]
+            file_id: str = url_resp["file_id"]
+
+            await asyncio.sleep(_step_delay)
+
+            # Step 2 – upload the content to the URL Slack gave us.
+            async with aiohttp.ClientSession() as http:
+                put_resp = await http.put(
+                    upload_url,
+                    data=text.encode("utf-8"),
+                    headers={"Content-Type": "text/markdown"},
+                )
+                put_resp.raise_for_status()
+
+            await asyncio.sleep(_step_delay)
+
+            # Step 3 – finalise the upload and share it in the thread.
+            await client.files_completeUploadExternal(
+                files=[{"id": file_id, "title": "Full response"}],
+                channel_id=channel,
+                thread_ts=thread_ts,
+                initial_comment=initial_comment or None,
+            )
+            return  # success
+        except (SlackApiError, aiohttp.ClientError, KeyError) as exc:
+            last_exc = exc
+            if attempt < _max_attempts:
+                logger.info(
+                    "Snippet upload attempt %d/%d failed (%s), retrying in %.1fs",
+                    attempt, _max_attempts, exc, _retry_delay,
+                )
+                await asyncio.sleep(_retry_delay)
+
+    # All attempts exhausted – fall back to split messages.
+    logger.warning(
+        "Snippet upload failed after %d attempts, falling back to split messages",
+        _max_attempts,
+        exc_info=last_exc,
     )
+    if initial_comment:
+        await client.chat_postMessage(
+            channel=channel, thread_ts=thread_ts, text=initial_comment,
+        )
+    for chunk in _split_message(text):
+        await client.chat_postMessage(
+            channel=channel, thread_ts=thread_ts, text=chunk,
+        )
 
 
 def _split_message(text: str) -> list[str]:

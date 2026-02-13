@@ -128,6 +128,7 @@ class SessionStore:
 
     def __init__(self) -> None:
         self._sessions: dict[str, SessionInfo] = {}
+        self._message_to_thread: dict[str, str] = {}
 
     def get_or_create(
         self,
@@ -178,9 +179,21 @@ class SessionStore:
         logger.info(f"New session for thread {thread_ts} (cwd={work_dir})")
         return info
 
+    def get(self, thread_ts: str) -> SessionInfo | None:
+        """Get session for a thread, or None if not found."""
+        return self._sessions.get(thread_ts)
+
     def has(self, thread_ts: str) -> bool:
         """Check if a session exists for this thread."""
         return thread_ts in self._sessions
+
+    def register_bot_message(self, message_ts: str, thread_ts: str) -> None:
+        """Register a bot message timestamp so reactions can map back to the thread."""
+        self._message_to_thread[message_ts] = thread_ts
+
+    def thread_for_message(self, message_ts: str) -> str | None:
+        """Look up which thread a bot message belongs to."""
+        return self._message_to_thread.get(message_ts)
 
     def set_cwd(self, thread_ts: str, cwd: Path) -> bool:
         """Update the working directory for a thread's session."""
@@ -194,12 +207,21 @@ class SessionStore:
     def remove(self, thread_ts: str) -> None:
         """Remove a session."""
         self._sessions.pop(thread_ts, None)
+        # Remove associated message-to-thread entries
+        orphaned = [
+            msg_ts
+            for msg_ts, thr_ts in self._message_to_thread.items()
+            if thr_ts == thread_ts
+        ]
+        for msg_ts in orphaned:
+            del self._message_to_thread[msg_ts]
 
     async def shutdown(self) -> None:
         """Disconnect all active Claude SDK sessions."""
         for info in self._sessions.values():
             await info.session.disconnect()
         self._sessions.clear()
+        self._message_to_thread.clear()
 
     def cleanup(self, max_age_hours: int = 24) -> int:
         """Remove sessions older than max_age_hours. Returns count removed."""
@@ -212,5 +234,14 @@ class SessionStore:
         for ts in expired:
             del self._sessions[ts]
         if expired:
+            # Remove orphaned message-to-thread entries
+            active_threads = set(self._sessions.keys())
+            orphaned = [
+                msg_ts
+                for msg_ts, thr_ts in self._message_to_thread.items()
+                if thr_ts not in active_threads
+            ]
+            for msg_ts in orphaned:
+                del self._message_to_thread[msg_ts]
             logger.info(f"Cleaned up {len(expired)} expired sessions")
         return len(expired)

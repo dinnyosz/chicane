@@ -26,6 +26,7 @@
         "chat:write",
         "chat:write.public",
         "files:read",
+        "files:write",
         "im:history",
         "im:read",
         "im:write",
@@ -41,7 +42,8 @@
         "app_mention",
         "message.channels",
         "message.groups",
-        "message.im"
+        "message.im",
+        "reaction_added"
       ]
     },
     "interactivity": {
