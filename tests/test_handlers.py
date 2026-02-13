@@ -1297,14 +1297,14 @@ class TestFormatToolActivity:
         event = self._make_tool_event(self._tool_block("CustomTool"))
         assert _format_tool_activity(event) == [":wrench: Custom Tool"]
 
-    def test_unknown_tool_mcp_prefix_stripped(self):
+    def test_unknown_tool_mcp_prefix_stripped_with_server(self):
         event = self._make_tool_event(self._tool_block("mcp__magaldi__search_code"))
-        assert _format_tool_activity(event) == [":wrench: Search Code"]
+        assert _format_tool_activity(event) == [":wrench: magaldi: Search Code"]
 
     def test_unknown_tool_mcp_deep_prefix(self):
-        """MCP name with 4+ parts still extracts the last segment."""
+        """MCP name with 4+ parts still extracts the last segment, shows server."""
         event = self._make_tool_event(self._tool_block("mcp__server__ns__find_files"))
-        assert _format_tool_activity(event) == [":wrench: Find Files"]
+        assert _format_tool_activity(event) == [":wrench: server: Find Files"]
 
     def test_unknown_tool_underscores_to_spaces(self):
         event = self._make_tool_event(self._tool_block("my_custom_tool"))
@@ -2922,7 +2922,7 @@ class TestCatchAllToolDisplay:
         )
         activities = _format_tool_activity(event)
         assert len(activities) == 1
-        assert "Pattern Search" in activities[0]
+        assert "magaldi: Pattern Search" in activities[0]
         assert "`def main`" in activities[0]
 
     def test_unknown_tool_no_args(self):

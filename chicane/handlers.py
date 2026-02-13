@@ -741,19 +741,23 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
             # Clean up tool names for display: strip MCP prefixes
             # (mcp__server__tool → Tool), split snake/camel case.
             display = tool_name
+            server_prefix = ""
             if display.startswith("mcp__"):
                 parts = display.split("__")
-                display = parts[-1] if len(parts) >= 3 else display
+                if len(parts) >= 3:
+                    server_prefix = parts[1]
+                    display = parts[-1]
             # Split CamelCase then underscores, title-case each word
             display = re.sub(r"([a-z])([A-Z])", r"\1 \2", display)
             display = display.replace("_", " ").strip().title()
 
             # Summarize input args: pick short string values for context
             arg_summary = _summarize_tool_input(tool_input)
+            label = f"{server_prefix}: {display}" if server_prefix else display
             if arg_summary:
-                activities.append(f":wrench: {display}: {arg_summary}")
+                activities.append(f":wrench: {label}: {arg_summary}")
             else:
-                activities.append(f":wrench: {display}")
+                activities.append(f":wrench: {label}")
 
     return activities
 
