@@ -18,6 +18,7 @@ from chicane.handlers import (
     _process_message,
     _resolve_channel_cwd,
     _should_ignore,
+    _should_show,
     _split_message,
     MAX_FILE_SIZE,
     register_handlers,
@@ -2566,6 +2567,7 @@ class TestCompactBoundaryNotification:
         return Config(
             slack_bot_token="xoxb-test",
             slack_app_token="xapp-test",
+            verbosity="verbose",
         )
 
     @pytest.fixture
@@ -2947,3 +2949,284 @@ class TestCatchAllToolDisplay:
         )
         activities = _format_tool_activity(event)
         assert activities == [":wrench: Some New Tool"]
+
+
+class TestShouldShow:
+    """Unit tests for the _should_show helper."""
+
+    def test_verbose_shows_everything(self):
+        for event_type in ("tool_activity", "tool_error", "tool_result", "compact_boundary"):
+            assert _should_show(event_type, "verbose") is True
+
+    def test_normal_shows_tools_and_errors(self):
+        assert _should_show("tool_activity", "normal") is True
+        assert _should_show("tool_error", "normal") is True
+
+    def test_normal_hides_results_and_compact(self):
+        assert _should_show("tool_result", "normal") is False
+        assert _should_show("compact_boundary", "normal") is False
+
+    def test_minimal_hides_everything(self):
+        for event_type in ("tool_activity", "tool_error", "tool_result", "compact_boundary"):
+            assert _should_show(event_type, "minimal") is False
+
+
+class TestVerbosityFiltering:
+    """Integration tests for verbosity levels in _process_message."""
+
+    def _make_event(self, type: str, text: str = "", **kwargs) -> ClaudeEvent:
+        if type == "assistant":
+            raw = {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": text}]},
+                **kwargs,
+            }
+        elif type == "result":
+            raw = {"type": "result", "result": text, **kwargs}
+        elif type == "user":
+            raw = {"type": "user", **kwargs}
+        else:
+            raw = {"type": type, **kwargs}
+        return ClaudeEvent(type=type, raw=raw)
+
+    def _make_tool_event(self, tool_name: str = "Read", tool_input: dict | None = None) -> ClaudeEvent:
+        """Create an assistant event with a tool_use block."""
+        return ClaudeEvent(
+            type="assistant",
+            raw={
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": tool_name,
+                            "input": tool_input or {"file_path": "/tmp/test.py"},
+                        }
+                    ]
+                },
+            },
+        )
+
+    def _make_user_event_with_results(self, results: list[dict]) -> ClaudeEvent:
+        """Create a user event with tool_result blocks."""
+        return ClaudeEvent(
+            type="user",
+            raw={
+                "type": "user",
+                "message": {"content": results},
+            },
+        )
+
+    def _mock_client(self):
+        client = AsyncMock()
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {"channel": {"name": "general"}}
+        return client
+
+    @pytest.mark.asyncio
+    async def test_minimal_hides_tool_activities(self):
+        config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="minimal")
+        sessions = SessionStore()
+
+        async def fake_stream(prompt):
+            yield self._make_tool_event("Read", {"file_path": "/tmp/test.py"})
+            yield self._make_event("assistant", text="Here is the file content.")
+            yield self._make_event("result", text="Here is the file content.", num_turns=1, duration_ms=5000)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "20000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "read file", client, config, sessions)
+
+        # No tool activity messages should be posted
+        all_texts = [
+            c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list
+        ] + [
+            c.kwargs.get("text", "") for c in client.chat_update.call_args_list
+        ]
+        assert not any(":mag:" in t for t in all_texts)
+
+        # But text and summary should still be present
+        assert any("Here is the file content." in t for t in all_texts)
+        assert any(":checkered_flag:" in t for t in all_texts)
+
+    @pytest.mark.asyncio
+    async def test_minimal_hides_tool_errors(self):
+        config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="minimal")
+        sessions = SessionStore()
+
+        async def fake_stream(prompt):
+            yield self._make_user_event_with_results([
+                {"type": "tool_result", "is_error": True, "content": "Command failed"},
+            ])
+            yield self._make_event("assistant", text="Error occurred.")
+            yield self._make_event("result", text="Error occurred.", num_turns=1, duration_ms=3000)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "20001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "run cmd", client, config, sessions)
+
+        all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        assert not any(":warning:" in t for t in all_texts)
+
+    @pytest.mark.asyncio
+    async def test_normal_shows_tool_activities(self):
+        config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="normal")
+        sessions = SessionStore()
+
+        async def fake_stream(prompt):
+            yield self._make_tool_event("Read", {"file_path": "/tmp/test.py"})
+            yield self._make_event("assistant", text="File content.")
+            yield self._make_event("result", text="File content.", num_turns=1, duration_ms=2000)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "20002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "read file", client, config, sessions)
+
+        all_texts = [
+            c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list
+        ] + [
+            c.kwargs.get("text", "") for c in client.chat_update.call_args_list
+        ]
+        assert any(":mag:" in t for t in all_texts)
+
+    @pytest.mark.asyncio
+    async def test_normal_hides_tool_results(self):
+        config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="normal")
+        sessions = SessionStore()
+
+        async def fake_stream(prompt):
+            yield self._make_user_event_with_results([
+                {"type": "tool_result", "is_error": False, "content": "successful output"},
+            ])
+            yield self._make_event("assistant", text="Done.")
+            yield self._make_event("result", text="Done.", num_turns=1, duration_ms=1000)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "20003.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "do thing", client, config, sessions)
+
+        all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        assert not any(":clipboard: Tool output:" in t for t in all_texts)
+
+    @pytest.mark.asyncio
+    async def test_verbose_shows_tool_results(self):
+        config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="verbose")
+        sessions = SessionStore()
+
+        async def fake_stream(prompt):
+            yield self._make_user_event_with_results([
+                {"type": "tool_result", "is_error": False, "content": "file contents here"},
+            ])
+            yield self._make_event("assistant", text="Done.")
+            yield self._make_event("result", text="Done.", num_turns=1, duration_ms=1000)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "20004.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "do thing", client, config, sessions)
+
+        all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        assert any(":clipboard: Tool output:" in t and "file contents here" in t for t in all_texts)
+
+    @pytest.mark.asyncio
+    async def test_verbose_shows_compact_boundary(self):
+        config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="verbose")
+        sessions = SessionStore()
+
+        async def fake_stream(prompt):
+            yield self._make_event(
+                "system",
+                subtype="compact_boundary",
+                compact_metadata={"trigger": "auto", "pre_tokens": 80000},
+            )
+            yield self._make_event("result", text="done", num_turns=1, duration_ms=1000)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "20005.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hi", client, config, sessions)
+
+        all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        assert any(":brain:" in t for t in all_texts)
+
+    @pytest.mark.asyncio
+    async def test_minimal_hides_compact_boundary(self):
+        config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="minimal")
+        sessions = SessionStore()
+
+        async def fake_stream(prompt):
+            yield self._make_event(
+                "system",
+                subtype="compact_boundary",
+                compact_metadata={"trigger": "auto", "pre_tokens": 80000},
+            )
+            yield self._make_event("result", text="done", num_turns=1, duration_ms=1000)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "20006.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hi", client, config, sessions)
+
+        all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        assert not any(":brain:" in t for t in all_texts)
+
+    @pytest.mark.asyncio
+    async def test_permission_denials_shown_at_all_levels(self):
+        """Permission denials should always be shown regardless of verbosity."""
+        for verbosity in ("minimal", "normal", "verbose"):
+            config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity=verbosity)
+            sessions = SessionStore()
+
+            async def fake_stream(prompt):
+                yield self._make_event("assistant", text="Tried but denied.")
+                yield self._make_event(
+                    "result",
+                    text="Tried but denied.",
+                    num_turns=1,
+                    duration_ms=2000,
+                    permission_denials=[{"tool_name": "Bash", "tool_use_id": "t1", "tool_input": {}}],
+                )
+
+            mock_session = MagicMock()
+            mock_session.stream = fake_stream
+            mock_session.session_id = "s1"
+            client = self._mock_client()
+
+            with patch.object(sessions, "get_or_create", return_value=mock_session):
+                event = {"ts": f"2100{verbosity}.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+                await _process_message(event, "try bash", client, config, sessions)
+
+            all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+            assert any(":no_entry_sign:" in t for t in all_texts), f"Permission denial not shown at {verbosity}"

@@ -237,6 +237,28 @@ class TestChannelDirs:
         assert config.channel_dirs == {}
 
 
+class TestVerbosityConfig:
+    def test_verbosity_default_normal(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.delenv("VERBOSITY", raising=False)
+        assert Config.from_env().verbosity == "normal"
+
+    def test_verbosity_from_env(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        for val, expected in [("minimal", "minimal"), ("VERBOSE", "verbose"), ("Normal", "normal")]:
+            monkeypatch.setenv("VERBOSITY", val)
+            assert Config.from_env().verbosity == expected
+
+    def test_invalid_verbosity_rejected(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("VERBOSITY", "ultra")
+        with pytest.raises(ValueError, match="Invalid VERBOSITY"):
+            Config.from_env()
+
+
 class TestConfigDir:
     def test_override_via_env(self, monkeypatch):
         monkeypatch.setenv("CHICANE_CONFIG_DIR", "/custom/path")

@@ -301,6 +301,66 @@ class TestClaudeEvent:
         assert event.tool_errors == []
 
 
+class TestToolResults:
+    def test_tool_results_from_user_event(self):
+        event = ClaudeEvent(
+            type="user",
+            raw={
+                "type": "user",
+                "message": {
+                    "content": [
+                        {"type": "tool_result", "is_error": False, "content": "file contents here"},
+                        {"type": "tool_result", "is_error": True, "content": "error msg"},
+                        {"type": "tool_result", "is_error": False, "content": "another result"},
+                    ]
+                },
+            },
+        )
+        assert event.tool_results == ["file contents here", "another result"]
+
+    def test_tool_results_with_list_content(self):
+        event = ClaudeEvent(
+            type="user",
+            raw={
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "is_error": False,
+                            "content": [
+                                {"type": "text", "text": "part 1"},
+                                {"type": "text", "text": " part 2"},
+                            ],
+                        }
+                    ]
+                },
+            },
+        )
+        assert event.tool_results == ["part 1 part 2"]
+
+    def test_tool_results_empty_for_non_user_event(self):
+        event = ClaudeEvent(
+            type="assistant",
+            raw={"type": "assistant", "message": {"content": []}},
+        )
+        assert event.tool_results == []
+
+    def test_tool_results_skips_empty_content(self):
+        event = ClaudeEvent(
+            type="user",
+            raw={
+                "type": "user",
+                "message": {
+                    "content": [
+                        {"type": "tool_result", "is_error": False, "content": ""},
+                    ]
+                },
+            },
+        )
+        assert event.tool_results == []
+
+
 class TestClaudeSession:
     def test_build_command_basic(self):
         session = ClaudeSession()
