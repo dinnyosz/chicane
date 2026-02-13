@@ -278,6 +278,7 @@ class ClaudeSession:
         opts = ClaudeAgentOptions(
             cwd=self.cwd,
             allowed_tools=list(self.allowed_tools),
+            setting_sources=["user", "project", "local"],
         )
 
         if self.session_id:
