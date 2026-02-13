@@ -2854,3 +2854,92 @@ class TestSubagentPrefix:
             self._tool_block("Read", file_path="/src/a.py"),
         )
         assert event.parent_tool_use_id is None
+
+
+class TestSummarizeToolInput:
+    """Test _summarize_tool_input for the catch-all tool display."""
+
+    def test_string_values(self):
+        from chicane.handlers import _summarize_tool_input
+        result = _summarize_tool_input({"query": "authentication", "limit": 10})
+        assert "`authentication`" in result
+        assert "`10`" in result
+
+    def test_skips_long_strings(self):
+        from chicane.handlers import _summarize_tool_input
+        result = _summarize_tool_input({"data": "x" * 200})
+        assert result == ""
+
+    def test_truncates_medium_strings(self):
+        from chicane.handlers import _summarize_tool_input
+        val = "a" * 80
+        result = _summarize_tool_input({"query": val})
+        assert result.endswith("...`")
+
+    def test_skips_nested_objects(self):
+        from chicane.handlers import _summarize_tool_input
+        result = _summarize_tool_input({"nested": {"a": 1}, "name": "test"})
+        assert "`test`" in result
+        assert "nested" not in result
+
+    def test_empty_input(self):
+        from chicane.handlers import _summarize_tool_input
+        assert _summarize_tool_input({}) == ""
+
+    def test_bool_values(self):
+        from chicane.handlers import _summarize_tool_input
+        result = _summarize_tool_input({"include_tests": True})
+        assert "`true`" in result
+
+    def test_respects_max_len(self):
+        from chicane.handlers import _summarize_tool_input
+        result = _summarize_tool_input(
+            {"a": "short", "b": "another", "c": "more"},
+            max_len=20,
+        )
+        # Should not include all three
+        assert result.count("`") <= 4  # at most 2 values
+
+
+class TestCatchAllToolDisplay:
+    """Test that the catch-all else branch shows args."""
+
+    def test_mcp_tool_with_args(self):
+        event = ClaudeEvent(
+            type="assistant",
+            raw={
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "mcp__magaldi__pattern_search",
+                            "input": {"pattern": "def main", "mode": "regexp"},
+                        }
+                    ]
+                },
+            },
+        )
+        activities = _format_tool_activity(event)
+        assert len(activities) == 1
+        assert "Pattern Search" in activities[0]
+        assert "`def main`" in activities[0]
+
+    def test_unknown_tool_no_args(self):
+        event = ClaudeEvent(
+            type="assistant",
+            raw={
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "SomeNewTool",
+                            "input": {},
+                        }
+                    ]
+                },
+            },
+        )
+        activities = _format_tool_activity(event)
+        assert activities == [":wrench: Some New Tool"]

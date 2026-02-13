@@ -608,6 +608,33 @@ async def _download_files(
     return downloaded
 
 
+def _summarize_tool_input(tool_input: dict, max_len: int = 80) -> str:
+    """Build a compact summary of tool input args for display.
+
+    Picks short scalar values (strings, numbers, bools) and joins them.
+    Skips large blobs, nested objects, and internal-looking keys.
+    """
+    parts: list[str] = []
+    remaining = max_len
+    for key, val in tool_input.items():
+        if isinstance(val, str):
+            if not val or len(val) > 120:
+                continue
+            snippet = val if len(val) <= 60 else val[:57] + "..."
+        elif isinstance(val, bool):
+            snippet = str(val).lower()
+        elif isinstance(val, (int, float)):
+            snippet = str(val)
+        else:
+            continue
+        part = f"`{snippet}`"
+        if remaining - len(part) < 0 and parts:
+            break
+        parts.append(part)
+        remaining -= len(part) + 2  # account for ", " separator
+    return ", ".join(parts)
+
+
 def _format_tool_activity(event: ClaudeEvent) -> list[str]:
     """Extract tool_use blocks from an assistant event and return human-readable one-liners."""
     message = event.raw.get("message", {})
@@ -720,7 +747,13 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
             # Split CamelCase then underscores, title-case each word
             display = re.sub(r"([a-z])([A-Z])", r"\1 \2", display)
             display = display.replace("_", " ").strip().title()
-            activities.append(f":wrench: {display}")
+
+            # Summarize input args: pick short string values for context
+            arg_summary = _summarize_tool_input(tool_input)
+            if arg_summary:
+                activities.append(f":wrench: {display}: {arg_summary}")
+            else:
+                activities.append(f":wrench: {display}")
 
     return activities
 
