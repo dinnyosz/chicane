@@ -158,8 +158,9 @@ class TestNewMessageInterrupt:
 
         original_interrupt = AsyncMock()
 
-        async def tracking_interrupt():
+        async def tracking_interrupt(source="reaction"):
             mock_session.was_interrupted = True
+            mock_session.interrupt_source = source
             await original_interrupt()
             interrupt_called.set()
 
@@ -213,7 +214,8 @@ class TestInterruptedStreamDisplay:
         mock_session = MagicMock()
         mock_session.session_id = "s1"
         mock_session.is_streaming = False
-        mock_session.was_interrupted = True  # Will be checked after stream
+        mock_session.was_interrupted = True
+        mock_session.interrupt_source = "reaction"
         mock_session.stream = interrupting_stream
         mock_session.interrupt = AsyncMock()
 
@@ -247,6 +249,7 @@ class TestInterruptedStreamDisplay:
         mock_session.session_id = "s1"
         mock_session.is_streaming = False
         mock_session.was_interrupted = True
+        mock_session.interrupt_source = "reaction"
         mock_session.stream = empty_stream
         mock_session.interrupt = AsyncMock()
 
@@ -278,6 +281,7 @@ class TestInterruptedStreamDisplay:
         mock_session.session_id = "s1"
         mock_session.is_streaming = False
         mock_session.was_interrupted = True
+        mock_session.interrupt_source = "reaction"
         mock_session.stream = quick_stream
         mock_session.interrupt = AsyncMock()
 
@@ -310,6 +314,7 @@ class TestInterruptedStreamDisplay:
         mock_session.session_id = "s1"
         mock_session.is_streaming = False
         mock_session.was_interrupted = True
+        mock_session.interrupt_source = "reaction"
         mock_session.stream = stream_with_result
         mock_session.interrupt = AsyncMock()
 
@@ -337,3 +342,59 @@ class TestInterruptedStreamDisplay:
             if c.kwargs.get("name") == "white_check_mark"
         ]
         assert len(checkmark_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_new_message_interrupt_stays_silent(self, config, sessions):
+        """New-message interrupt should NOT post stop indicator or swap reactions."""
+        async def some_stream(prompt):
+            yield make_event("assistant", text="Partial work")
+            yield make_event("result", text="Partial work")
+
+        mock_session = MagicMock()
+        mock_session.session_id = "s1"
+        mock_session.is_streaming = False
+        mock_session.was_interrupted = True
+        mock_session.interrupt_source = "new_message"
+        mock_session.stream = some_stream
+        mock_session.interrupt = AsyncMock()
+
+        info = MagicMock()
+        info.session = mock_session
+        info.lock = asyncio.Lock()
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=info):
+            event = {"ts": "6000.0", "channel": "C_CHAN", "user": "UHUMAN"}
+            await _process_message(event, "do something", client, config, sessions)
+
+        # Should NOT post any ":stop_sign:" messages
+        all_texts = [
+            c.kwargs.get("text", "")
+            for c in client.chat_postMessage.call_args_list
+        ] + [
+            c.kwargs.get("text", "")
+            for c in client.chat_update.call_args_list
+        ]
+        stop_messages = [t for t in all_texts if ":stop_sign:" in t]
+        assert len(stop_messages) == 0
+
+        # Should NOT add octagonal_sign reaction
+        stop_reactions = [
+            c for c in client.reactions_add.call_args_list
+            if c.kwargs.get("name") == "octagonal_sign"
+        ]
+        assert len(stop_reactions) == 0
+
+        # Should still remove eyes
+        client.reactions_remove.assert_called_with(
+            channel="C_CHAN", name="eyes", timestamp="6000.0"
+        )
+
+        # Placeholder should show "New message received" not stop sign
+        update_calls = client.chat_update.call_args_list
+        forward_update = [
+            c for c in update_calls
+            if ":fast_forward:" in c.kwargs.get("text", "")
+        ]
+        assert len(forward_update) == 1

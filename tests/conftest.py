@@ -111,6 +111,7 @@ def mock_session_info(mock_session):
     """
     mock_session.was_interrupted = False
     mock_session.is_streaming = False
+    mock_session.interrupt_source = None
     mock_session.interrupt = AsyncMock()
     info = MagicMock()
     info.session = mock_session

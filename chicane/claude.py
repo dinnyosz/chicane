@@ -272,6 +272,7 @@ class ClaudeSession:
         self._connected = False
         self._is_streaming = False
         self._interrupted = False
+        self._interrupt_source: str | None = None  # "reaction" or "new_message"
 
     def _build_options(self) -> ClaudeAgentOptions:
         """Build SDK options from session config."""
@@ -323,12 +324,22 @@ class ClaudeSession:
     def was_interrupted(self) -> bool:
         return self._interrupted
 
-    async def interrupt(self) -> None:
-        """Interrupt the current stream (sends interrupt signal via SDK)."""
+    @property
+    def interrupt_source(self) -> str | None:
+        """Why the stream was interrupted: "reaction" or "new_message"."""
+        return self._interrupt_source
+
+    async def interrupt(self, source: str = "reaction") -> None:
+        """Interrupt the current stream (sends interrupt signal via SDK).
+
+        *source* identifies why: ``"reaction"`` (user clicked stop emoji)
+        or ``"new_message"`` (new thread reply arrived).
+        """
         if self._client and self._is_streaming:
             self._interrupted = True
+            self._interrupt_source = source
             await self._client.interrupt()
-            logger.info("Interrupted active stream")
+            logger.info("Interrupted active stream (source=%s)", source)
 
     async def stream(self, prompt: str) -> AsyncIterator[ClaudeEvent]:
         """Send a message and yield streaming events.
@@ -340,6 +351,7 @@ class ClaudeSession:
         client = await self._ensure_connected()
         self._is_streaming = True
         self._interrupted = False
+        self._interrupt_source = None
 
         event_count = 0
         try:

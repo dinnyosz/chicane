@@ -290,7 +290,7 @@ async def _process_message(
     # can acquire the lock quickly instead of waiting minutes.
     if session_info.session.is_streaming:
         logger.info(f"New message in {thread_ts} — interrupting active stream")
-        await session_info.session.interrupt()
+        await session_info.session.interrupt(source="new_message")
 
     # Stream Claude's response — hold the session lock so only one
     # _process_message streams at a time per thread.
@@ -417,39 +417,55 @@ async def _process_message(
                 else:
                     logger.debug(f"Event type={event_data.type} subtype={event_data.subtype}")
 
-            # Handle interrupted stream — show partial text + indicator, skip completion
+            # Handle interrupted stream — skip normal completion flow
             if session.was_interrupted:
-                if full_text:
-                    mrkdwn = _markdown_to_mrkdwn(full_text)
+                if session.interrupt_source == "new_message":
+                    # New message will process next — stay silent, just clean up
+                    # Remove placeholder if nothing was posted, otherwise leave partial text
                     if first_activity:
                         await client.chat_update(
                             channel=channel, ts=message_ts,
-                            text=mrkdwn[:SLACK_MAX_LENGTH] + "\n\n:stop_sign: _Interrupted_",
+                            text=":fast_forward: _New message received_",
                         )
-                    else:
-                        for chunk in _split_message(mrkdwn):
-                            await client.chat_postMessage(
-                                channel=channel, thread_ts=thread_ts, text=chunk,
+                    try:
+                        await client.reactions_remove(
+                            channel=channel, name="eyes", timestamp=event["ts"]
+                        )
+                    except Exception:
+                        pass
+                else:
+                    # Reaction interrupt — show partial text + stop indicator
+                    if full_text:
+                        mrkdwn = _markdown_to_mrkdwn(full_text)
+                        if first_activity:
+                            await client.chat_update(
+                                channel=channel, ts=message_ts,
+                                text=mrkdwn[:SLACK_MAX_LENGTH] + "\n\n:stop_sign: _Interrupted_",
                             )
-                        await client.chat_postMessage(
-                            channel=channel, thread_ts=thread_ts,
+                        else:
+                            for chunk in _split_message(mrkdwn):
+                                await client.chat_postMessage(
+                                    channel=channel, thread_ts=thread_ts, text=chunk,
+                                )
+                            await client.chat_postMessage(
+                                channel=channel, thread_ts=thread_ts,
+                                text=":stop_sign: _Interrupted_",
+                            )
+                    else:
+                        await client.chat_update(
+                            channel=channel, ts=message_ts,
                             text=":stop_sign: _Interrupted_",
                         )
-                else:
-                    await client.chat_update(
-                        channel=channel, ts=message_ts,
-                        text=":stop_sign: _Interrupted_",
-                    )
-                # Swap eyes → stop sign reaction
-                try:
-                    await client.reactions_remove(
-                        channel=channel, name="eyes", timestamp=event["ts"]
-                    )
-                    await client.reactions_add(
-                        channel=channel, name="octagonal_sign", timestamp=event["ts"]
-                    )
-                except Exception:
-                    pass
+                    # Swap eyes → stop sign reaction
+                    try:
+                        await client.reactions_remove(
+                            channel=channel, name="eyes", timestamp=event["ts"]
+                        )
+                        await client.reactions_add(
+                            channel=channel, name="octagonal_sign", timestamp=event["ts"]
+                        )
+                    except Exception:
+                        pass
                 return
 
             # Final: send remaining text
