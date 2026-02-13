@@ -279,3 +279,145 @@ class TestMarkdownToMrkdwn:
         text = "```\nuse `inline` here\n```"
         result = _markdown_to_mrkdwn(text)
         assert "```\nuse `inline` here\n```" in result
+
+    # ── HTML entity escaping ──
+
+    def test_ampersand_escaped(self):
+        assert _markdown_to_mrkdwn("Tom & Jerry") == "Tom &amp; Jerry"
+
+    def test_angle_brackets_escaped(self):
+        result = _markdown_to_mrkdwn("use x < 10 and y > 5")
+        assert "&lt;" in result
+        assert "&gt;" in result
+
+    def test_entities_not_escaped_in_code_block(self):
+        text = "```\nx < 10 && y > 5\n```"
+        result = _markdown_to_mrkdwn(text)
+        assert "&lt;" not in result
+        assert "&amp;" not in result
+
+    def test_entities_not_escaped_in_inline_code(self):
+        text = "use `x < 10` here"
+        result = _markdown_to_mrkdwn(text)
+        assert "`x < 10`" in result
+
+    def test_blockquote_gt_not_escaped(self):
+        """The > at start of line (blockquote) must survive."""
+        result = _markdown_to_mrkdwn("> quoted text")
+        assert result.startswith(">")
+        assert "quoted text" in result
+
+    # ── List bullet conversion ──
+
+    def test_unordered_list_dash(self):
+        result = _markdown_to_mrkdwn("- item one\n- item two")
+        assert "• item one" in result
+        assert "• item two" in result
+
+    def test_unordered_list_asterisk(self):
+        result = _markdown_to_mrkdwn("* item one\n* item two")
+        assert "• item one" in result
+
+    def test_unordered_list_plus(self):
+        result = _markdown_to_mrkdwn("+ item one")
+        assert "• item one" in result
+
+    def test_indented_list_preserved(self):
+        result = _markdown_to_mrkdwn("- outer\n  - inner")
+        assert "• outer" in result
+        assert "  • inner" in result
+
+    # ── Task lists ──
+
+    def test_task_list_checked(self):
+        result = _markdown_to_mrkdwn("- [x] Done task")
+        assert "☒ Done task" in result
+
+    def test_task_list_unchecked(self):
+        result = _markdown_to_mrkdwn("- [ ] Todo task")
+        assert "☐ Todo task" in result
+
+    def test_task_list_mixed(self):
+        text = "- [x] First\n- [ ] Second\n- [x] Third"
+        result = _markdown_to_mrkdwn(text)
+        assert "☒ First" in result
+        assert "☐ Second" in result
+        assert "☒ Third" in result
+
+    # ── Zero-width space buffering ──
+
+    def test_bold_mid_word_gets_zws(self):
+        """Bold inside a word should get ZWS to prevent Slack misparse."""
+        result = _markdown_to_mrkdwn("foo**bar**baz")
+        zws = "\u200b"
+        assert f"foo{zws}*bar*{zws}baz" == result
+
+    def test_strikethrough_mid_word_gets_zws(self):
+        result = _markdown_to_mrkdwn("foo~~bar~~baz")
+        zws = "\u200b"
+        assert f"foo{zws}~bar~{zws}baz" == result
+
+    def test_zws_cleaned_at_line_edges(self):
+        """ZWS at start/end of line should be stripped."""
+        result = _markdown_to_mrkdwn("**hello**")
+        assert not result.startswith("\u200b")
+        assert not result.endswith("\u200b")
+        assert result == "*hello*"
+
+    # ── Link reference resolution ──
+
+    def test_reference_link(self):
+        text = "See [the docs][docs] for info.\n\n[docs]: https://example.com"
+        result = _markdown_to_mrkdwn(text)
+        assert "<https://example.com|the docs>" in result
+
+    def test_reference_link_implicit_label(self):
+        """[text][] uses text as the ref label."""
+        text = "Visit [example][] now.\n\n[example]: https://example.com"
+        result = _markdown_to_mrkdwn(text)
+        assert "<https://example.com|example>" in result
+
+    def test_reference_link_unresolved_unchanged(self):
+        """Unknown ref should leave the text unchanged."""
+        text = "See [foo][unknown]"
+        result = _markdown_to_mrkdwn(text)
+        assert "[foo][unknown]" in result
+
+    def test_reference_link_case_insensitive(self):
+        text = "See [link][DOCS]\n\n[docs]: https://example.com"
+        result = _markdown_to_mrkdwn(text)
+        assert "<https://example.com|link>" in result
+
+    # ── HTML comment removal ──
+
+    def test_html_comment_removed(self):
+        result = _markdown_to_mrkdwn("before <!-- comment --> after")
+        assert "<!--" not in result
+        assert "comment" not in result
+        assert "before" in result
+        assert "after" in result
+
+    def test_multiline_html_comment_removed(self):
+        text = "start\n<!-- multi\nline\ncomment -->\nend"
+        result = _markdown_to_mrkdwn(text)
+        assert "<!--" not in result
+        assert "start" in result
+        assert "end" in result
+
+    # ── Email link conversion ──
+
+    def test_email_link(self):
+        result = _markdown_to_mrkdwn("<user@example.com>")
+        assert "<mailto:user@example.com>" in result
+
+    def test_email_link_in_sentence(self):
+        result = _markdown_to_mrkdwn("Contact <support@company.io> for help")
+        assert "<mailto:support@company.io>" in result
+
+    # ── Integration: entities + links coexist ──
+
+    def test_slack_links_not_broken_by_entity_escaping(self):
+        """Angle brackets in converted links should not be escaped."""
+        result = _markdown_to_mrkdwn("[click](https://example.com)")
+        assert "<https://example.com|click>" in result
+        assert "&lt;" not in result

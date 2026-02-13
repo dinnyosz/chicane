@@ -420,13 +420,22 @@ async def _process_message(
             # Handle interrupted stream — skip normal completion flow
             if session.was_interrupted:
                 if session.interrupt_source == "new_message":
-                    # New message will process next — stay silent, just clean up
-                    # Remove placeholder if nothing was posted, otherwise leave partial text
-                    if first_activity:
-                        await client.chat_update(
-                            channel=channel, ts=message_ts,
-                            text=":fast_forward: _New message received_",
-                        )
+                    # New message will process next — post partial text, then note
+                    if full_text:
+                        mrkdwn = _markdown_to_mrkdwn(full_text)
+                        if first_activity:
+                            await client.chat_update(
+                                channel=channel, ts=message_ts, text=mrkdwn[:SLACK_MAX_LENGTH],
+                            )
+                        else:
+                            for chunk in _split_message(mrkdwn):
+                                await client.chat_postMessage(
+                                    channel=channel, thread_ts=thread_ts, text=chunk,
+                                )
+                    await client.chat_postMessage(
+                        channel=channel, thread_ts=thread_ts,
+                        text=":bulb: _Thought added_",
+                    )
                     try:
                         await client.reactions_remove(
                             channel=channel, name="eyes", timestamp=event["ts"]
@@ -992,17 +1001,39 @@ def _markdown_to_mrkdwn(text: str) -> str:
     """Convert standard Markdown to Slack mrkdwn format.
 
     Preserves code blocks (``` and inline `), then converts:
-    - **bold** / __bold__  →  *bold*
+    - **bold** / __bold__  →  *bold*  (with zero-width space buffering)
     - *italic* / _italic_  →  _italic_  (already valid)
-    - ~~strikethrough~~    →  ~strikethrough~
+    - ~~strikethrough~~    →  ~strikethrough~  (with zero-width space buffering)
     - [text](url)          →  <url|text>
+    - [text][ref]          →  <url|text>  (reference-style links)
     - ![alt](url)          →  <url|alt>
+    - <user@example.com>   →  <mailto:user@example.com>
     - # / ## / ### headers →  *Header* (bold line)
     - > blockquotes        →  > (already valid in Slack)
     - Markdown tables      →  preformatted text
     - Horizontal rules     →  ———
+    - - / * / + list items →  • list items
+    - - [x] / - [ ]        →  ☒ / ☐ (task lists)
+    - <!-- comments -->    →  removed
+    - HTML entities         →  & < > escaped outside code
     """
-    # Extract code blocks and inline code to protect them from conversion
+    # Zero-width space for buffering formatting markers in ambiguous contexts
+    _ZWS = "\u200b"
+
+    # ── Collect link reference definitions before any processing ──
+    # [ref]: url or [ref]: url "title"
+    _ref_defs: dict[str, str] = {}
+    def _collect_ref(m: re.Match) -> str:
+        label = m.group(1).lower()
+        url = m.group(2)
+        _ref_defs[label] = url
+        return ""  # Remove the definition line
+    text = re.sub(
+        r"^\[([^\]]+)\]:\s+(\S+)(?:\s+[\"'(].*[\"')])?\s*$",
+        _collect_ref, text, flags=re.MULTILINE,
+    )
+
+    # ── Protect code blocks and inline code from conversion ──
     placeholders: list[str] = []
 
     def _protect(m: re.Match) -> str:
@@ -1013,11 +1044,23 @@ def _markdown_to_mrkdwn(text: str) -> str:
     text = re.sub(r"```[\s\S]*?```", _protect, text)
     text = re.sub(r"`[^`\n]+`", _protect, text)
 
-    # Convert Markdown tables to preformatted text.
-    # A table is a sequence of lines starting with |
+    # ── Remove HTML comments ──
+    text = re.sub(r"<!--[\s\S]*?-->", "", text)
+
+    # ── Escape HTML entities (& < >) ──
+    # Must happen before we insert our own angle-bracket links.
+    # Preserve > at start of line (blockquotes) and existing Slack-style
+    # angle-bracket constructs like <url|text> or <@U123>.
+    text = text.replace("&", "&amp;")
+    # Escape < except when it starts a Slack link/mention pattern or protected placeholder
+    text = re.sub(r"<(?![\x00!@#])", "&lt;", text)
+    # Escape > except at start of line (blockquotes)
+    text = re.sub(r"(?<!^)>", "&gt;", text, flags=re.MULTILINE)
+    # Restore > in blockquotes — already preserved by the negative lookbehind above
+
+    # ── Tables → preformatted text ──
     def _convert_table(m: re.Match) -> str:
         table_text = m.group(0)
-        # Remove separator rows (|---|---|)
         lines = [
             line for line in table_text.split("\n")
             if not re.match(r"^\|[\s\-:|]+\|$", line.strip())
@@ -1026,31 +1069,59 @@ def _markdown_to_mrkdwn(text: str) -> str:
 
     text = re.sub(r"(?:^\|.+\|\n?){2,}", _convert_table, text, flags=re.MULTILINE)
 
-    # Images: ![alt](url) → <url|alt>
+    # ── Images: ![alt](url) → <url|alt> ──
     text = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", r"<\2|\1>", text)
 
-    # Links: [text](url) → <url|text>
+    # ── Inline links: [text](url) → <url|text> ──
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"<\2|\1>", text)
 
-    # Bold: **text** or __text__ → *text*
-    text = re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)
-    text = re.sub(r"__(.+?)__", r"*\1*", text)
+    # ── Reference links: [text][ref] → <url|text> ──
+    def _resolve_ref_link(m: re.Match) -> str:
+        link_text = m.group(1)
+        ref_label = (m.group(2) or link_text).lower()
+        url = _ref_defs.get(ref_label)
+        if url:
+            return f"<{url}|{link_text}>"
+        return m.group(0)  # Leave unchanged if ref not found
 
-    # Strikethrough: ~~text~~ → ~text~
-    text = re.sub(r"~~(.+?)~~", r"~\1~", text)
+    text = re.sub(r"\[([^\]]+)\]\[([^\]]*)\]", _resolve_ref_link, text)
 
-    # Headers: # Header → *Header*
-    text = re.sub(r"^#{1,6}\s+(.+)$", r"*\1*", text, flags=re.MULTILINE)
+    # ── Email links: <user@example.com> → <mailto:user@example.com> ──
+    text = re.sub(
+        r"&lt;([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})&gt;",
+        r"<mailto:\1>", text,
+    )
 
-    # Horizontal rules: --- or *** or ___ → ———
+    # ── Bold: **text** or __text__ → *text* with ZWS buffering ──
+    text = re.sub(r"\*\*(.+?)\*\*", rf"{_ZWS}*\1*{_ZWS}", text)
+    text = re.sub(r"__(.+?)__", rf"{_ZWS}*\1*{_ZWS}", text)
+
+    # ── Strikethrough: ~~text~~ → ~text~ with ZWS buffering ──
+    text = re.sub(r"~~(.+?)~~", rf"{_ZWS}~\1~{_ZWS}", text)
+
+    # ── Task lists: - [x] → ☒, - [ ] → ☐ (before bullet conversion) ──
+    text = re.sub(r"^(\s*)[-*+]\s+\[x\]\s+", r"\1☒ ", text, flags=re.MULTILINE)
+    text = re.sub(r"^(\s*)[-*+]\s+\[ \]\s+", r"\1☐ ", text, flags=re.MULTILINE)
+
+    # ── List bullets: - / * / + items → • items ──
+    text = re.sub(r"^(\s*)[-*+](\s+)", r"\1•\2", text, flags=re.MULTILINE)
+
+    # ── Headers: # Header → *Header* ──
+    text = re.sub(r"^#{1,6}\s+(.+)$", rf"*\1*", text, flags=re.MULTILINE)
+
+    # ── Horizontal rules: --- or *** or ___ → ——— ──
     text = re.sub(r"^[\-\*_]{3,}\s*$", "———", text, flags=re.MULTILINE)
 
-    # Restore protected code blocks
+    # ── Restore protected code blocks ──
     def _restore(m: re.Match) -> str:
         idx = int(m.group(1))
         return placeholders[idx]
 
     text = re.sub(r"\x00PROTECTED(\d+)\x00", _restore, text)
+
+    # ── Clean up redundant ZWS (at start/end of line, doubled) ──
+    text = re.sub(rf"{_ZWS}{{2,}}", _ZWS, text)
+    text = re.sub(rf"^{_ZWS}|{_ZWS}$", "", text, flags=re.MULTILINE)
 
     return text
 
