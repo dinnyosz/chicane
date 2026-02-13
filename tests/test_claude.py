@@ -1,12 +1,17 @@
 """Tests for chicane.claude."""
 
 import asyncio
-import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from chicane.claude import ClaudeEvent, ClaudeSession
+from chicane.claude import (
+    ClaudeEvent,
+    ClaudeSession,
+    _content_blocks_to_dicts,
+    _sdk_message_to_raw,
+)
 
 
 class TestClaudeEvent:
@@ -398,131 +403,182 @@ class TestToolResults:
         assert event.tool_results == []
 
 
-class TestClaudeSession:
-    def test_build_command_basic(self):
-        session = ClaudeSession()
-        cmd = session._build_command("hello")
-        assert cmd[0] == "claude"
-        assert "--print" in cmd
-        assert "--output-format" in cmd
-        assert "stream-json" in cmd
-        assert "--verbose" in cmd
-        assert cmd[-1] == "hello"
+class TestSdkMessageConversion:
+    """Test the SDK message → raw dict conversion functions."""
 
-    def test_build_command_with_resume(self):
+    def test_content_blocks_to_dicts_text(self):
+        from claude_agent_sdk import TextBlock
+        blocks = [TextBlock(text="hello")]
+        result = _content_blocks_to_dicts(blocks)
+        assert result == [{"type": "text", "text": "hello"}]
+
+    def test_content_blocks_to_dicts_tool_use(self):
+        from claude_agent_sdk import ToolUseBlock
+        blocks = [ToolUseBlock(id="tu_1", name="Read", input={"file_path": "/a.py"})]
+        result = _content_blocks_to_dicts(blocks)
+        assert result == [{"type": "tool_use", "id": "tu_1", "name": "Read", "input": {"file_path": "/a.py"}}]
+
+    def test_content_blocks_to_dicts_tool_result(self):
+        from claude_agent_sdk import ToolResultBlock
+        blocks = [ToolResultBlock(tool_use_id="tu_1", content="ok", is_error=False)]
+        result = _content_blocks_to_dicts(blocks)
+        assert result == [{"type": "tool_result", "tool_use_id": "tu_1", "content": "ok", "is_error": False}]
+
+    def test_content_blocks_to_dicts_thinking(self):
+        from claude_agent_sdk import ThinkingBlock
+        blocks = [ThinkingBlock(thinking="let me think", signature="sig123")]
+        result = _content_blocks_to_dicts(blocks)
+        assert result == [{"type": "thinking", "thinking": "let me think", "signature": "sig123"}]
+
+    def test_sdk_message_to_raw_assistant(self):
+        from claude_agent_sdk import AssistantMessage, TextBlock
+        msg = AssistantMessage(content=[TextBlock(text="hi")], model="opus", parent_tool_use_id=None, error=None)
+        raw = _sdk_message_to_raw(msg)
+        assert raw["type"] == "assistant"
+        assert raw["message"]["content"] == [{"type": "text", "text": "hi"}]
+
+    def test_sdk_message_to_raw_assistant_with_parent(self):
+        from claude_agent_sdk import AssistantMessage, TextBlock
+        msg = AssistantMessage(content=[TextBlock(text="sub")], model="opus", parent_tool_use_id="toolu_abc", error=None)
+        raw = _sdk_message_to_raw(msg)
+        assert raw["parent_tool_use_id"] == "toolu_abc"
+
+    def test_sdk_message_to_raw_user_string(self):
+        from claude_agent_sdk import UserMessage
+        msg = UserMessage(content="hello", uuid=None, parent_tool_use_id=None, tool_use_result=None)
+        raw = _sdk_message_to_raw(msg)
+        assert raw["type"] == "user"
+        assert raw["message"]["content"] == [{"type": "text", "text": "hello"}]
+
+    def test_sdk_message_to_raw_system_init(self):
+        from claude_agent_sdk import SystemMessage
+        msg = SystemMessage(subtype="init", data={"session_id": "s1", "cwd": "/tmp"})
+        raw = _sdk_message_to_raw(msg)
+        assert raw["type"] == "system"
+        assert raw["subtype"] == "init"
+        assert raw["session_id"] == "s1"
+
+    def test_sdk_message_to_raw_result(self):
+        from claude_agent_sdk import ResultMessage
+        msg = ResultMessage(
+            subtype="success", duration_ms=5000, duration_api_ms=4000,
+            is_error=False, num_turns=3, session_id="s1",
+            total_cost_usd=0.05, usage=None, result="done",
+        )
+        raw = _sdk_message_to_raw(msg)
+        assert raw["type"] == "result"
+        assert raw["result"] == "done"
+        assert raw["num_turns"] == 3
+        assert raw["total_cost_usd"] == 0.05
+
+
+class TestBuildOptions:
+    """Test that ClaudeSession._build_options() produces correct ClaudeAgentOptions."""
+
+    def test_basic_options(self):
+        session = ClaudeSession(cwd=Path("/tmp/test"))
+        opts = session._build_options()
+        assert opts.cwd == Path("/tmp/test")
+        assert opts.resume is None
+        assert opts.model is None
+        assert opts.permission_mode is None
+        assert opts.system_prompt is None
+
+    def test_with_resume(self):
         session = ClaudeSession(session_id="abc-123")
-        cmd = session._build_command("follow up")
-        assert "--resume" in cmd
-        idx = cmd.index("--resume")
-        assert cmd[idx + 1] == "abc-123"
+        opts = session._build_options()
+        assert opts.resume == "abc-123"
 
-    def test_build_command_with_model(self):
+    def test_with_model(self):
         session = ClaudeSession(model="sonnet")
-        cmd = session._build_command("hello")
-        assert "--model" in cmd
-        idx = cmd.index("--model")
-        assert cmd[idx + 1] == "sonnet"
+        opts = session._build_options()
+        assert opts.model == "sonnet"
 
-    def test_build_command_with_permission_mode(self):
+    def test_with_permission_mode(self):
         session = ClaudeSession(permission_mode="bypassPermissions")
-        cmd = session._build_command("hello")
-        assert "--permission-mode" in cmd
-        idx = cmd.index("--permission-mode")
-        assert cmd[idx + 1] == "bypassPermissions"
+        opts = session._build_options()
+        assert opts.permission_mode == "bypassPermissions"
 
-    def test_build_command_default_permission_not_included(self):
+    def test_default_permission_not_included(self):
         session = ClaudeSession(permission_mode="default")
-        cmd = session._build_command("hello")
-        assert "--permission-mode" not in cmd
+        opts = session._build_options()
+        assert opts.permission_mode is None
 
-    def test_build_command_with_system_prompt(self):
+    def test_with_system_prompt(self):
         session = ClaudeSession(system_prompt="You are a Slack bot.")
-        cmd = session._build_command("hello")
-        assert "--append-system-prompt" in cmd
-        idx = cmd.index("--append-system-prompt")
-        assert cmd[idx + 1] == "You are a Slack bot."
-
-    def test_build_command_no_system_prompt_by_default(self):
-        session = ClaudeSession()
-        cmd = session._build_command("hello")
-        assert "--append-system-prompt" not in cmd
+        opts = session._build_options()
+        assert opts.system_prompt == "You are a Slack bot."
 
     def test_system_prompt_skipped_on_resume(self):
-        """System prompt should only be sent on the first call, not on resumes."""
-        session = ClaudeSession(system_prompt="You are a Slack bot.")
-        session.session_id = "existing-session-123"
-        cmd = session._build_command("follow up")
-        assert "--append-system-prompt" not in cmd
+        session = ClaudeSession(system_prompt="You are a Slack bot.", session_id="existing-session")
+        opts = session._build_options()
+        assert opts.system_prompt is None
 
-    def test_build_command_with_allowed_tools(self):
+    def test_with_allowed_tools(self):
         session = ClaudeSession(allowed_tools=["Bash(npm run *)", "Read"])
-        cmd = session._build_command("do stuff")
-        assert "--allowedTools" in cmd
-        idx = cmd.index("--allowedTools")
-        assert cmd[idx + 1] == "Bash(npm run *)"
-        assert cmd[idx + 2] == "Read"
+        opts = session._build_options()
+        assert opts.allowed_tools == ["Bash(npm run *)", "Read"]
 
-    def test_build_command_no_allowed_tools(self):
+    def test_no_allowed_tools(self):
         session = ClaudeSession()
-        cmd = session._build_command("do stuff")
-        assert "--allowedTools" not in cmd
+        opts = session._build_options()
+        assert opts.allowed_tools == []
 
-    def test_build_command_with_max_turns(self):
+    def test_with_max_turns(self):
         session = ClaudeSession(max_turns=25)
-        cmd = session._build_command("hello")
-        assert "--max-turns" in cmd
-        idx = cmd.index("--max-turns")
-        assert cmd[idx + 1] == "25"
+        opts = session._build_options()
+        assert opts.max_turns == 25
 
-    def test_build_command_no_max_turns_by_default(self):
+    def test_no_max_turns(self):
         session = ClaudeSession()
-        cmd = session._build_command("hello")
-        assert "--max-turns" not in cmd
+        opts = session._build_options()
+        assert opts.max_turns is None
 
-    def test_build_command_with_max_budget(self):
+    def test_with_max_budget(self):
         session = ClaudeSession(max_budget_usd=5.50)
-        cmd = session._build_command("hello")
-        assert "--max-budget-usd" in cmd
-        idx = cmd.index("--max-budget-usd")
-        assert cmd[idx + 1] == "5.5"
+        opts = session._build_options()
+        assert opts.max_budget_usd == 5.50
 
-    def test_build_command_no_max_budget_by_default(self):
+    def test_no_max_budget(self):
         session = ClaudeSession()
-        cmd = session._build_command("hello")
-        assert "--max-budget-usd" not in cmd
+        opts = session._build_options()
+        assert opts.max_budget_usd is None
 
 
-def _make_process_mock(stdout_lines: list[bytes], returncode: int = 0):
-    """Create a mock subprocess with the given stdout lines."""
-    process = AsyncMock()
-    process.returncode = returncode
+def _mock_sdk_client(messages):
+    """Create a mock ClaudeSDKClient that yields the given messages."""
+    client = AsyncMock()
+    client.connect = AsyncMock()
+    client.disconnect = AsyncMock()
+    client.query = AsyncMock()
+    client.interrupt = MagicMock()
 
-    async def stdout_iter():
-        for line in stdout_lines:
-            yield line
+    async def _receive_response():
+        for msg in messages:
+            yield msg
 
-    process.stdout = stdout_iter()
-    process.stderr = AsyncMock()
-    process.stderr.read = AsyncMock(return_value=b"")
-    process.wait = AsyncMock()
-    process.kill = MagicMock()
-    return process
+    client.receive_response = _receive_response
+    return client
 
 
 class TestClaudeSessionStream:
-    """Tests for the stream() async generator."""
+    """Tests for the stream() async generator using the SDK client."""
 
     @pytest.mark.asyncio
     async def test_stream_yields_parsed_events(self):
-        lines = [
-            json.dumps({"type": "system", "subtype": "init", "session_id": "s1"}).encode() + b"\n",
-            json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}}).encode() + b"\n",
-            json.dumps({"type": "result", "result": "done"}).encode() + b"\n",
+        from claude_agent_sdk import AssistantMessage, ResultMessage, SystemMessage, TextBlock
+
+        messages = [
+            SystemMessage(subtype="init", data={"session_id": "s1"}),
+            AssistantMessage(content=[TextBlock(text="hi")], model="opus", parent_tool_use_id=None, error=None),
+            ResultMessage(subtype="success", duration_ms=1000, duration_api_ms=900,
+                          is_error=False, num_turns=1, session_id="s1",
+                          total_cost_usd=0.01, usage=None, result="done"),
         ]
-        process = _make_process_mock(lines)
+        mock_client = _mock_sdk_client(messages)
 
         session = ClaudeSession()
-        with patch("asyncio.create_subprocess_exec", return_value=process):
+        with patch.object(session, "_ensure_connected", return_value=mock_client):
             events = [e async for e in session.stream("hello")]
 
         assert len(events) == 3
@@ -534,193 +590,82 @@ class TestClaudeSessionStream:
 
     @pytest.mark.asyncio
     async def test_stream_captures_session_id(self):
-        lines = [
-            json.dumps({"type": "system", "subtype": "init", "session_id": "captured-id"}).encode() + b"\n",
+        from claude_agent_sdk import SystemMessage
+
+        messages = [
+            SystemMessage(subtype="init", data={"session_id": "captured-id"}),
         ]
-        process = _make_process_mock(lines)
+        mock_client = _mock_sdk_client(messages)
 
         session = ClaudeSession()
         assert session.session_id is None
 
-        with patch("asyncio.create_subprocess_exec", return_value=process):
+        with patch.object(session, "_ensure_connected", return_value=mock_client):
             async for _ in session.stream("hello"):
                 pass
 
         assert session.session_id == "captured-id"
 
     @pytest.mark.asyncio
-    async def test_stream_skips_empty_lines(self):
-        lines = [
-            b"\n",
-            b"   \n",
-            json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "only"}]}}).encode() + b"\n",
-            b"\n",
-        ]
-        process = _make_process_mock(lines)
-
-        session = ClaudeSession()
-        with patch("asyncio.create_subprocess_exec", return_value=process):
-            events = [e async for e in session.stream("hello")]
-
-        assert len(events) == 1
-        assert events[0].text == "only"
-
-    @pytest.mark.asyncio
-    async def test_stream_skips_invalid_json(self):
-        lines = [
-            b"not json at all\n",
-            json.dumps({"type": "result", "result": "ok"}).encode() + b"\n",
-        ]
-        process = _make_process_mock(lines)
-
-        session = ClaudeSession()
-        with patch("asyncio.create_subprocess_exec", return_value=process):
-            events = [e async for e in session.stream("hello")]
-
-        assert len(events) == 1
-        assert events[0].type == "result"
-
-    @pytest.mark.asyncio
-    async def test_stream_kills_process_on_exception(self):
-        async def exploding_stdout():
-            yield json.dumps({"type": "system", "subtype": "init", "session_id": "s1"}).encode() + b"\n"
-            raise RuntimeError("boom")
-
-        process = AsyncMock()
-        process.returncode = None
-        process.stdout = exploding_stdout()
-        process.stderr = AsyncMock()
-        process.stderr.read = AsyncMock(return_value=b"")
-        process.wait = AsyncMock()
-        process.kill = MagicMock()
-        # After kill(), returncode becomes set
-        def _set_returncode():
-            process.returncode = -9
-        process.kill.side_effect = _set_returncode
-
-        session = ClaudeSession()
-        with patch("asyncio.create_subprocess_exec", return_value=process):
-            with pytest.raises(RuntimeError, match="boom"):
-                async for _ in session.stream("hello"):
-                    pass
-
-        process.kill.assert_called()
-
-    @pytest.mark.asyncio
-    async def test_stream_logs_nonzero_exit_code(self, caplog):
-        lines = [
-            json.dumps({"type": "result", "result": "partial"}).encode() + b"\n",
-        ]
-        process = _make_process_mock(lines, returncode=1)
-
-        session = ClaudeSession()
-        with patch("asyncio.create_subprocess_exec", return_value=process):
-            async for _ in session.stream("hello"):
-                pass
-
-        assert any("exited with code 1" in r.message for r in caplog.records)
-
-    @pytest.mark.asyncio
     async def test_stream_warns_on_no_events(self, caplog):
-        process = _make_process_mock([], returncode=0)
+        mock_client = _mock_sdk_client([])
 
         session = ClaudeSession()
-        with patch("asyncio.create_subprocess_exec", return_value=process):
+        with patch.object(session, "_ensure_connected", return_value=mock_client):
             events = [e async for e in session.stream("hello")]
 
         assert len(events) == 0
         assert any("no events" in r.message.lower() for r in caplog.records)
 
     @pytest.mark.asyncio
-    async def test_stream_timeout_on_process_wait(self, caplog):
-        lines = [
-            json.dumps({"type": "result", "result": "ok"}).encode() + b"\n",
+    async def test_stream_sets_and_clears_is_streaming(self):
+        from claude_agent_sdk import ResultMessage
+
+        messages = [
+            ResultMessage(subtype="success", duration_ms=100, duration_api_ms=90,
+                          is_error=False, num_turns=1, session_id="s1",
+                          total_cost_usd=None, usage=None, result="ok"),
         ]
-        process = _make_process_mock(lines, returncode=0)
-        process.wait = AsyncMock(side_effect=asyncio.TimeoutError)
+        mock_client = _mock_sdk_client(messages)
 
         session = ClaudeSession()
-        with patch("asyncio.create_subprocess_exec", return_value=process):
-            async for _ in session.stream("hello"):
-                pass
+        assert not session.is_streaming
 
-        assert any("did not exit in time" in r.message for r in caplog.records)
+        with patch.object(session, "_ensure_connected", return_value=mock_client):
+            async for _ in session.stream("hello"):
+                assert session.is_streaming
+
+        assert not session.is_streaming
 
     @pytest.mark.asyncio
-    async def test_stream_kills_subprocess_on_cancel(self):
-        """CancelledError (BaseException) must still kill the subprocess."""
-        cancel_after_first = True
+    async def test_stream_clears_is_streaming_on_error(self):
+        client = AsyncMock()
+        client.query = AsyncMock()
 
-        async def cancelling_stdout():
-            yield json.dumps({"type": "system", "subtype": "init", "session_id": "s1"}).encode() + b"\n"
-            raise asyncio.CancelledError()
+        async def _exploding_response():
+            raise RuntimeError("boom")
+            yield  # make it an async generator  # noqa: unreachable
 
-        process = AsyncMock()
-        process.returncode = None
-        process.stdout = cancelling_stdout()
-        process.stderr = AsyncMock()
-        process.stderr.read = AsyncMock(return_value=b"")
-        process.wait = AsyncMock()
-        process.kill = MagicMock()
-        def _set_returncode():
-            process.returncode = -9
-        process.kill.side_effect = _set_returncode
+        client.receive_response = _exploding_response
 
         session = ClaudeSession()
-        with patch("asyncio.create_subprocess_exec", return_value=process):
-            with pytest.raises(asyncio.CancelledError):
+        with patch.object(session, "_ensure_connected", return_value=client):
+            with pytest.raises(RuntimeError, match="boom"):
                 async for _ in session.stream("hello"):
                     pass
 
-        process.kill.assert_called()
-        assert session._process is None
+        assert not session.is_streaming
 
     @pytest.mark.asyncio
-    async def test_stream_sets_and_clears_process(self):
-        """_process is set during streaming and cleared after."""
-        lines = [
-            json.dumps({"type": "result", "result": "ok"}).encode() + b"\n",
-        ]
-        process = _make_process_mock(lines)
+    async def test_stream_calls_query_with_prompt(self):
+        mock_client = _mock_sdk_client([])
 
         session = ClaudeSession()
-        assert session._process is None
+        with patch.object(session, "_ensure_connected", return_value=mock_client):
+            async for _ in session.stream("test prompt"):
+                pass
 
-        with patch("asyncio.create_subprocess_exec", return_value=process):
-            async for _ in session.stream("hello"):
-                assert session._process is process
-
-        assert session._process is None
-
-
-class TestClaudeSessionKill:
-    """Tests for the kill() method."""
-
-    def test_kill_terminates_active_process(self):
-        process = MagicMock()
-        process.returncode = None
-        process.kill = MagicMock()
-
-        session = ClaudeSession()
-        session._process = process
-        session.kill()
-
-        process.kill.assert_called_once()
-
-    def test_kill_noop_when_no_process(self):
-        session = ClaudeSession()
-        session.kill()  # Should not raise
-
-    def test_kill_noop_when_process_already_exited(self):
-        process = MagicMock()
-        process.returncode = 0
-        process.kill = MagicMock()
-
-        session = ClaudeSession()
-        session._process = process
-        session.kill()
-
-        process.kill.assert_not_called()
+        mock_client.query.assert_awaited_once_with("test prompt")
 
 
 class TestClaudeSessionRun:
@@ -728,27 +673,104 @@ class TestClaudeSessionRun:
 
     @pytest.mark.asyncio
     async def test_run_returns_result_text(self):
-        lines = [
-            json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "thinking"}]}}).encode() + b"\n",
-            json.dumps({"type": "result", "result": "final answer"}).encode() + b"\n",
+        from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+
+        messages = [
+            AssistantMessage(content=[TextBlock(text="thinking")], model="opus", parent_tool_use_id=None, error=None),
+            ResultMessage(subtype="success", duration_ms=500, duration_api_ms=400,
+                          is_error=False, num_turns=1, session_id="s1",
+                          total_cost_usd=0.01, usage=None, result="final answer"),
         ]
-        process = _make_process_mock(lines)
+        mock_client = _mock_sdk_client(messages)
 
         session = ClaudeSession()
-        with patch("asyncio.create_subprocess_exec", return_value=process):
+        with patch.object(session, "_ensure_connected", return_value=mock_client):
             result = await session.run("hello")
 
         assert result == "final answer"
 
     @pytest.mark.asyncio
     async def test_run_returns_empty_when_no_result(self):
-        lines = [
-            json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "just chatting"}]}}).encode() + b"\n",
+        from claude_agent_sdk import AssistantMessage, TextBlock
+
+        messages = [
+            AssistantMessage(content=[TextBlock(text="just chatting")], model="opus", parent_tool_use_id=None, error=None),
         ]
-        process = _make_process_mock(lines)
+        mock_client = _mock_sdk_client(messages)
 
         session = ClaudeSession()
-        with patch("asyncio.create_subprocess_exec", return_value=process):
+        with patch.object(session, "_ensure_connected", return_value=mock_client):
             result = await session.run("hello")
 
         assert result == ""
+
+
+class TestClaudeSessionDisconnect:
+    """Tests for disconnect and kill."""
+
+    @pytest.mark.asyncio
+    async def test_disconnect(self):
+        session = ClaudeSession()
+        session._client = AsyncMock()
+        session._connected = True
+
+        await session.disconnect()
+
+        session._client is None
+        assert not session._connected
+
+    def test_kill_calls_interrupt(self):
+        session = ClaudeSession()
+        session._client = MagicMock()
+        session.kill()
+        session._client.interrupt.assert_called_once()
+
+    def test_kill_noop_when_no_client(self):
+        session = ClaudeSession()
+        session.kill()  # Should not raise
+
+    def test_interrupt_when_streaming(self):
+        session = ClaudeSession()
+        session._client = MagicMock()
+        session._is_streaming = True
+        session.interrupt()
+        session._client.interrupt.assert_called_once()
+
+    def test_interrupt_noop_when_not_streaming(self):
+        session = ClaudeSession()
+        session._client = MagicMock()
+        session._is_streaming = False
+        session.interrupt()
+        session._client.interrupt.assert_not_called()
+
+
+class TestEnsureConnected:
+    """Tests for the _ensure_connected method."""
+
+    @pytest.mark.asyncio
+    async def test_creates_client_on_first_call(self):
+        session = ClaudeSession(cwd=Path("/tmp"))
+
+        with patch("chicane.claude.ClaudeSDKClient") as MockClient:
+            mock_instance = AsyncMock()
+            MockClient.return_value = mock_instance
+
+            client = await session._ensure_connected()
+
+            MockClient.assert_called_once()
+            mock_instance.connect.assert_awaited_once()
+            assert client is mock_instance
+            assert session._connected
+
+    @pytest.mark.asyncio
+    async def test_reuses_existing_client(self):
+        session = ClaudeSession()
+        existing_client = AsyncMock()
+        session._client = existing_client
+        session._connected = True
+
+        client = await session._ensure_connected()
+
+        assert client is existing_client
+        # connect should NOT have been called again
+        existing_client.connect.assert_not_awaited()

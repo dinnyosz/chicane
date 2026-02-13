@@ -1,22 +1,124 @@
-"""Claude Code CLI subprocess wrapper with streaming JSON support."""
+"""Claude Agent SDK wrapper with streaming support.
+
+Uses the ``claude-agent-sdk`` Python package (``ClaudeSDKClient``) to maintain
+a persistent Claude Code session per Slack thread.  Each call to ``stream()``
+sends a new user message into the *same* running session, enabling inter-turn
+messaging and interruption.
+"""
 
 import asyncio
 import html
-import json
 import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncIterator
 
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    ResultMessage,
+    SystemMessage,
+    TextBlock,
+    ThinkingBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
+)
+
 logger = logging.getLogger(__name__)
+
+# SDK message type → ClaudeEvent type string
+_MSG_TYPE_MAP = {
+    AssistantMessage: "assistant",
+    UserMessage: "user",
+    SystemMessage: "system",
+    ResultMessage: "result",
+}
+
+
+def _content_blocks_to_dicts(
+    blocks: list[TextBlock | ThinkingBlock | ToolUseBlock | ToolResultBlock],
+) -> list[dict]:
+    """Convert SDK content blocks to the dict format ClaudeEvent expects."""
+    result = []
+    for block in blocks:
+        if isinstance(block, TextBlock):
+            result.append({"type": "text", "text": block.text})
+        elif isinstance(block, ThinkingBlock):
+            result.append(
+                {"type": "thinking", "thinking": block.thinking, "signature": block.signature}
+            )
+        elif isinstance(block, ToolUseBlock):
+            result.append(
+                {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
+            )
+        elif isinstance(block, ToolResultBlock):
+            result.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block.tool_use_id,
+                    "content": block.content,
+                    "is_error": block.is_error or False,
+                }
+            )
+    return result
+
+
+def _sdk_message_to_raw(msg) -> dict:
+    """Convert an SDK message to the raw dict format ClaudeEvent expects."""
+    if isinstance(msg, AssistantMessage):
+        raw = {
+            "type": "assistant",
+            "message": {"content": _content_blocks_to_dicts(msg.content)},
+        }
+        if msg.parent_tool_use_id:
+            raw["parent_tool_use_id"] = msg.parent_tool_use_id
+        return raw
+
+    if isinstance(msg, UserMessage):
+        if isinstance(msg.content, str):
+            content = [{"type": "text", "text": msg.content}]
+        else:
+            content = _content_blocks_to_dicts(msg.content)
+        raw: dict = {"type": "user", "message": {"content": content}}
+        if msg.parent_tool_use_id:
+            raw["parent_tool_use_id"] = msg.parent_tool_use_id
+        return raw
+
+    if isinstance(msg, SystemMessage):
+        raw = {"type": "system", "subtype": msg.subtype, **msg.data}
+        if msg.subtype == "init":
+            raw["session_id"] = msg.data.get("session_id")
+        return raw
+
+    if isinstance(msg, ResultMessage):
+        return {
+            "type": "result",
+            "subtype": msg.subtype,
+            "result": msg.result or "",
+            "is_error": msg.is_error,
+            "num_turns": msg.num_turns,
+            "duration_ms": msg.duration_ms,
+            "duration_api_ms": msg.duration_api_ms,
+            "total_cost_usd": msg.total_cost_usd,
+            "session_id": msg.session_id,
+        }
+
+    return {"type": "unknown"}
 
 
 @dataclass
 class ClaudeEvent:
-    """A parsed event from Claude's stream-json output."""
+    """A parsed event from Claude's streaming output.
 
-    type: str  # "system", "assistant", "user", "result", "stream_event"
+    This is the common interface used by handlers.py.  The ``raw`` dict
+    mirrors the old stream-json format so all existing property accessors
+    continue to work unchanged.
+    """
+
+    type: str  # "system", "assistant", "user", "result"
     raw: dict = field(repr=False)
 
     @property
@@ -140,7 +242,12 @@ class ClaudeEvent:
 
 
 class ClaudeSession:
-    """Manages a Claude Code CLI subprocess for a single conversation."""
+    """Manages a persistent Claude Agent SDK session for a single conversation.
+
+    Unlike the old subprocess-per-message approach, this keeps the SDK client
+    alive across multiple ``stream()`` calls.  Each call sends a new user
+    message into the running session, enabling inter-turn messaging.
+    """
 
     def __init__(
         self,
@@ -161,98 +268,79 @@ class ClaudeSession:
         self.allowed_tools = allowed_tools or []
         self.max_turns = max_turns
         self.max_budget_usd = max_budget_usd
-        self._process: asyncio.subprocess.Process | None = None
-        self._aborted = False
+        self._client: ClaudeSDKClient | None = None
+        self._connected = False
+        self._is_streaming = False
 
-    def kill(self) -> None:
-        """Kill the active subprocess if any."""
-        if self._process and self._process.returncode is None:
-            self._process.kill()
-
-    def abort(self) -> None:
-        """Abort the current stream so a new one can start.
-
-        Sets the ``_aborted`` flag and kills the active subprocess.
-        The streaming loop in ``stream()`` will detect the flag and
-        exit cleanly, allowing the caller to skip final message posting.
-        """
-        self._aborted = True
-        self.kill()
-
-    @property
-    def was_aborted(self) -> bool:
-        return self._aborted
-
-    @property
-    def is_streaming(self) -> bool:
-        return self._process is not None and self._process.returncode is None
-
-    def _build_command(self, prompt: str) -> list[str]:
-        cmd = [
-            "claude",
-            "--print",
-            "--output-format", "stream-json",
-            "--verbose",
-        ]
+    def _build_options(self) -> ClaudeAgentOptions:
+        """Build SDK options from session config."""
+        opts = ClaudeAgentOptions(
+            cwd=self.cwd,
+            allowed_tools=list(self.allowed_tools),
+        )
 
         if self.session_id:
-            cmd.extend(["--resume", self.session_id])
+            opts.resume = self.session_id
 
         if self.model:
-            cmd.extend(["--model", self.model])
+            opts.model = self.model
 
-        if self.permission_mode != "default":
-            cmd.extend(["--permission-mode", self.permission_mode])
-
-        if self.allowed_tools:
-            cmd.append("--allowedTools")
-            cmd.extend(self.allowed_tools)
+        if self.permission_mode and self.permission_mode != "default":
+            opts.permission_mode = self.permission_mode
 
         if self.max_turns is not None:
-            cmd.extend(["--max-turns", str(self.max_turns)])
+            opts.max_turns = self.max_turns
 
         if self.max_budget_usd is not None:
-            cmd.extend(["--max-budget-usd", str(self.max_budget_usd)])
+            opts.max_budget_usd = self.max_budget_usd
 
         # Only send system prompt on the first invocation — resumed sessions
         # already have it, so resending wastes tokens.
         if self.system_prompt and not self.session_id:
-            cmd.extend(["--append-system-prompt", self.system_prompt])
+            opts.system_prompt = self.system_prompt
 
-        cmd.append(prompt)
-        return cmd
+        return opts
+
+    async def _ensure_connected(self) -> ClaudeSDKClient:
+        """Connect the SDK client if not already connected."""
+        if self._client is not None and self._connected:
+            return self._client
+
+        opts = self._build_options()
+        self._client = ClaudeSDKClient(options=opts)
+        await self._client.connect()
+        self._connected = True
+        logger.info(f"SDK client connected (session_id={self.session_id}, cwd={self.cwd})")
+        return self._client
+
+    @property
+    def is_streaming(self) -> bool:
+        return self._is_streaming
+
+    def interrupt(self) -> None:
+        """Interrupt the current stream (sends interrupt signal via SDK)."""
+        if self._client and self._is_streaming:
+            self._client.interrupt()
+            logger.info("Interrupted active stream")
 
     async def stream(self, prompt: str) -> AsyncIterator[ClaudeEvent]:
-        """Run a prompt through Claude and yield streaming events."""
-        self._aborted = False
-        cmd = self._build_command(prompt)
+        """Send a message and yield streaming events.
 
-        logger.debug(f"Running: {' '.join(cmd[:6])}...")
-        logger.debug(f"Full command: {' '.join(cmd)}")
-
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(self.cwd),
-            limit=1024 * 1024,  # 1 MiB – Claude stream-json lines can exceed the 64 KiB default
-        )
-        self._process = process
+        On the first call this connects the SDK client. On subsequent calls
+        it reuses the same client, sending the new prompt into the existing
+        conversation.
+        """
+        client = await self._ensure_connected()
+        self._is_streaming = True
 
         event_count = 0
         try:
-            async for line in process.stdout:
-                line = line.decode().strip()
-                if not line:
-                    continue
+            await client.query(prompt)
 
-                try:
-                    data = json.loads(line)
-                except json.JSONDecodeError:
-                    logger.warning(f"Skipping non-JSON line: {line[:100]}")
-                    continue
-
-                event = ClaudeEvent(type=data.get("type", "unknown"), raw=data)
+            async for msg in client.receive_response():
+                event_type = _MSG_TYPE_MAP.get(type(msg), "unknown")
+                raw = _sdk_message_to_raw(msg)
+                event = ClaudeEvent(type=event_type, raw=raw)
                 event_count += 1
 
                 # Capture session_id from init event
@@ -261,28 +349,11 @@ class ClaudeSession:
                     logger.info(f"Session started: {self.session_id}")
 
                 yield event
-
         finally:
-            if process.returncode is None:
-                process.kill()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                logger.warning("Claude subprocess did not exit in time.")
-            self._process = None
-
-            stderr = ""
-            if process.stderr:
-                stderr = (await process.stderr.read()).decode()
-
-            if process.returncode and process.returncode != 0:
-                logger.error(
-                    f"Claude exited with code {process.returncode}: {stderr}"
-                )
-            elif event_count == 0:
+            self._is_streaming = False
+            if event_count == 0:
                 logger.warning(
-                    f"Claude produced no events. exit={process.returncode} "
-                    f"stderr={stderr[:500] if stderr else '(empty)'}"
+                    f"Claude produced no events. session_id={self.session_id}"
                 )
 
     async def run(self, prompt: str) -> str:
@@ -292,3 +363,21 @@ class ClaudeSession:
             if event.type == "result":
                 result_text = event.text
         return result_text
+
+    async def disconnect(self) -> None:
+        """Disconnect the SDK client."""
+        if self._client:
+            try:
+                await self._client.disconnect()
+            except Exception:
+                logger.debug("Error disconnecting SDK client", exc_info=True)
+            self._client = None
+            self._connected = False
+
+    def kill(self) -> None:
+        """Kill the active session. For backward compatibility."""
+        if self._client:
+            try:
+                self._client.interrupt()
+            except Exception:
+                pass

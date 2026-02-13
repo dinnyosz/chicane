@@ -113,16 +113,18 @@ class TestSessionStore:
         assert info.session.session_id == "sess-42"
         assert info.session.cwd == Path("/tmp/work")
 
-    def test_shutdown_kills_all_sessions(self, store, config):
+    @pytest.mark.asyncio
+    async def test_shutdown_disconnects_all_sessions(self, store, config):
+        from unittest.mock import AsyncMock
         s1 = store.get_or_create("thread-1", config, cwd=Path("/tmp/a"))
         s2 = store.get_or_create("thread-2", config, cwd=Path("/tmp/b"))
-        s1.session.kill = MagicMock()
-        s2.session.kill = MagicMock()
+        s1.session.disconnect = AsyncMock()
+        s2.session.disconnect = AsyncMock()
 
-        store.shutdown()
+        await store.shutdown()
 
-        s1.session.kill.assert_called_once()
-        s2.session.kill.assert_called_once()
+        s1.session.disconnect.assert_awaited_once()
+        s2.session.disconnect.assert_awaited_once()
 
     def test_system_prompt_forbids_terminal_suggestions(self, store, config):
         """System prompt must tell Claude to never suggest local actions."""
@@ -147,11 +149,12 @@ class TestSessionStore:
         assert "streamed output mode" in prompt.lower()
         assert "will NOT work" in prompt
 
-    def test_shutdown_clears_sessions(self, store, config):
+    @pytest.mark.asyncio
+    async def test_shutdown_clears_sessions(self, store, config):
         store.get_or_create("thread-1", config, cwd=Path("/tmp/a"))
         store.get_or_create("thread-2", config, cwd=Path("/tmp/b"))
 
-        store.shutdown()
+        await store.shutdown()
 
         assert len(store._sessions) == 0
         assert not store.has("thread-1")

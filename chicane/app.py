@@ -208,7 +208,7 @@ async def start(config: Config | None = None) -> None:
                 termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, restored)
             except (ImportError, OSError):
                 pass
-        sessions.shutdown()
+        await sessions.shutdown()
         try:
             await asyncio.wait_for(handler.close_async(), timeout=3.0)
         except asyncio.TimeoutError:

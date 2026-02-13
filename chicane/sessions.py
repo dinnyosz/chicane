@@ -195,10 +195,10 @@ class SessionStore:
         """Remove a session."""
         self._sessions.pop(thread_ts, None)
 
-    def shutdown(self) -> None:
-        """Kill all active Claude subprocesses."""
+    async def shutdown(self) -> None:
+        """Disconnect all active Claude SDK sessions."""
         for info in self._sessions.values():
-            info.session.kill()
+            await info.session.disconnect()
         self._sessions.clear()
 
     def cleanup(self, max_age_hours: int = 24) -> int:
