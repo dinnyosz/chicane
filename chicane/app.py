@@ -150,8 +150,14 @@ async def start(config: Config | None = None) -> None:
             signal.signal(signal.SIGINT, lambda *_: os._exit(1))
             signal.signal(signal.SIGTERM, lambda *_: os._exit(1))
 
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, _handle_signal)
+        if sys.platform != "win32":
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, _handle_signal)
+        else:
+            # Windows: add_signal_handler is not supported. Use a raw
+            # signal handler so Ctrl+C still triggers graceful shutdown.
+            signal.signal(signal.SIGINT, lambda *_: _handle_signal())
+            signal.signal(signal.SIGTERM, lambda *_: _handle_signal())
 
         await stop.wait()
 
