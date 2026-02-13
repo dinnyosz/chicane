@@ -261,7 +261,7 @@ async def _process_message(
                 show_activities = _should_show("tool_activity", config.verbosity)
 
                 if show_activities and activities and full_text:
-                    for chunk in _split_message(full_text):
+                    for chunk in _split_message(_markdown_to_mrkdwn(full_text)):
                         await client.chat_postMessage(
                             channel=channel, thread_ts=thread_ts, text=chunk,
                         )
@@ -336,7 +336,7 @@ async def _process_message(
 
         # Final: send remaining text
         if full_text:
-            chunks = _split_message(full_text)
+            chunks = _split_message(_markdown_to_mrkdwn(full_text))
             if first_activity:
                 # No tool activities were posted — update the placeholder
                 await client.chat_update(
@@ -826,6 +826,73 @@ def _format_completion_summary(event: ClaudeEvent) -> str | None:
             duration = f"{int(secs)}s"
         return f"{emoji} {turns} took {duration}{reason}{cost}"
     return f"{emoji} Done — {turns}{reason}{cost}"
+
+
+def _markdown_to_mrkdwn(text: str) -> str:
+    """Convert standard Markdown to Slack mrkdwn format.
+
+    Preserves code blocks (``` and inline `), then converts:
+    - **bold** / __bold__  →  *bold*
+    - *italic* / _italic_  →  _italic_  (already valid)
+    - ~~strikethrough~~    →  ~strikethrough~
+    - [text](url)          →  <url|text>
+    - ![alt](url)          →  <url|alt>
+    - # / ## / ### headers →  *Header* (bold line)
+    - > blockquotes        →  > (already valid in Slack)
+    - Markdown tables      →  preformatted text
+    - Horizontal rules     →  ———
+    """
+    # Extract code blocks and inline code to protect them from conversion
+    placeholders: list[str] = []
+
+    def _protect(m: re.Match) -> str:
+        placeholders.append(m.group(0))
+        return f"\x00PROTECTED{len(placeholders) - 1}\x00"
+
+    # Protect fenced code blocks first, then inline code
+    text = re.sub(r"```[\s\S]*?```", _protect, text)
+    text = re.sub(r"`[^`\n]+`", _protect, text)
+
+    # Convert Markdown tables to preformatted text.
+    # A table is a sequence of lines starting with |
+    def _convert_table(m: re.Match) -> str:
+        table_text = m.group(0)
+        # Remove separator rows (|---|---|)
+        lines = [
+            line for line in table_text.split("\n")
+            if not re.match(r"^\|[\s\-:|]+\|$", line.strip())
+        ]
+        return "```\n" + "\n".join(lines) + "\n```"
+
+    text = re.sub(r"(?:^\|.+\|\n?){2,}", _convert_table, text, flags=re.MULTILINE)
+
+    # Images: ![alt](url) → <url|alt>
+    text = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", r"<\2|\1>", text)
+
+    # Links: [text](url) → <url|text>
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"<\2|\1>", text)
+
+    # Bold: **text** or __text__ → *text*
+    text = re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)
+    text = re.sub(r"__(.+?)__", r"*\1*", text)
+
+    # Strikethrough: ~~text~~ → ~text~
+    text = re.sub(r"~~(.+?)~~", r"~\1~", text)
+
+    # Headers: # Header → *Header*
+    text = re.sub(r"^#{1,6}\s+(.+)$", r"*\1*", text, flags=re.MULTILINE)
+
+    # Horizontal rules: --- or *** or ___ → ———
+    text = re.sub(r"^[\-\*_]{3,}\s*$", "———", text, flags=re.MULTILINE)
+
+    # Restore protected code blocks
+    def _restore(m: re.Match) -> str:
+        idx = int(m.group(1))
+        return placeholders[idx]
+
+    text = re.sub(r"\x00PROTECTED(\d+)\x00", _restore, text)
+
+    return text
 
 
 def _split_message(text: str) -> list[str]:

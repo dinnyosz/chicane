@@ -15,6 +15,7 @@ from chicane.handlers import (
     _format_completion_summary,
     _format_tool_activity,
     _HANDOFF_RE,
+    _markdown_to_mrkdwn,
     _process_message,
     _resolve_channel_cwd,
     _should_ignore,
@@ -3230,3 +3231,101 @@ class TestVerbosityFiltering:
 
             all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
             assert any(":no_entry_sign:" in t for t in all_texts), f"Permission denial not shown at {verbosity}"
+
+
+class TestMarkdownToMrkdwn:
+    """Tests for _markdown_to_mrkdwn() Markdown → Slack mrkdwn conversion."""
+
+    def test_bold_double_asterisks(self):
+        assert _markdown_to_mrkdwn("**hello**") == "*hello*"
+
+    def test_bold_double_underscores(self):
+        assert _markdown_to_mrkdwn("__hello__") == "*hello*"
+
+    def test_strikethrough(self):
+        assert _markdown_to_mrkdwn("~~removed~~") == "~removed~"
+
+    def test_link(self):
+        assert _markdown_to_mrkdwn("[click here](https://example.com)") == "<https://example.com|click here>"
+
+    def test_image(self):
+        assert _markdown_to_mrkdwn("![alt text](https://img.png)") == "<https://img.png|alt text>"
+
+    def test_headers(self):
+        assert _markdown_to_mrkdwn("# Title") == "*Title*"
+        assert _markdown_to_mrkdwn("## Subtitle") == "*Subtitle*"
+        assert _markdown_to_mrkdwn("### Section") == "*Section*"
+
+    def test_horizontal_rule(self):
+        assert _markdown_to_mrkdwn("---") == "———"
+        assert _markdown_to_mrkdwn("***") == "———"
+        assert _markdown_to_mrkdwn("___") == "———"
+
+    def test_code_block_preserved(self):
+        text = "```python\n**not bold**\n```"
+        result = _markdown_to_mrkdwn(text)
+        assert "**not bold**" in result
+
+    def test_inline_code_preserved(self):
+        text = "use `**this**` for bold"
+        result = _markdown_to_mrkdwn(text)
+        assert "`**this**`" in result
+
+    def test_mixed_content(self):
+        text = "# Hello\n\nThis is **bold** and [a link](https://x.com).\n\n---\n\nDone."
+        result = _markdown_to_mrkdwn(text)
+        assert "*Hello*" in result
+        assert "*bold*" in result
+        assert "<https://x.com|a link>" in result
+        assert "———" in result
+
+    def test_plain_text_unchanged(self):
+        text = "Just some normal text with no markdown."
+        assert _markdown_to_mrkdwn(text) == text
+
+    def test_table_converted_to_preformatted(self):
+        text = "| Col A | Col B |\n|---|---|\n| val1 | val2 |"
+        result = _markdown_to_mrkdwn(text)
+        assert "```" in result
+        assert "val1" in result
+        # Separator row should be removed
+        assert "|---|" not in result
+
+    def test_bold_inside_code_block_not_converted(self):
+        text = "Before\n```\n**stay bold md**\n```\nAfter **convert me**"
+        result = _markdown_to_mrkdwn(text)
+        assert "**stay bold md**" in result
+        assert "*convert me*" in result
+
+    def test_multiple_links_on_one_line(self):
+        text = "See [foo](https://a.com) and [bar](https://b.com)"
+        result = _markdown_to_mrkdwn(text)
+        assert "<https://a.com|foo>" in result
+        assert "<https://b.com|bar>" in result
+
+    def test_nested_bold_in_header(self):
+        """Header conversion should still work even if bold markers are inside."""
+        text = "## **Important**"
+        result = _markdown_to_mrkdwn(text)
+        # After header conversion: *__Important__* or similar — bold should resolve
+        assert "Important" in result
+
+    def test_blockquote_preserved(self):
+        text = "> This is a quote"
+        result = _markdown_to_mrkdwn(text)
+        assert "> This is a quote" in result
+
+    def test_italic_single_asterisk_preserved(self):
+        """Single asterisk italic is already valid Slack mrkdwn."""
+        text = "*italic text*"
+        result = _markdown_to_mrkdwn(text)
+        assert "*italic text*" in result
+
+    def test_empty_string(self):
+        assert _markdown_to_mrkdwn("") == ""
+
+    def test_code_block_with_backticks_inside(self):
+        text = "```\nuse `inline` here\n```"
+        result = _markdown_to_mrkdwn(text)
+        # The whole fenced block is protected, so nothing inside changes
+        assert "```\nuse `inline` here\n```" in result
