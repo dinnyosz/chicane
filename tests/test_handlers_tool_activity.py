@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from chicane.claude import ClaudeEvent
-from chicane.handlers import _format_tool_activity, _process_message
+from chicane.handlers import _format_tool_activity, _has_file_edit, _process_message
 from tests.conftest import make_event, make_tool_event, mock_client, mock_session_info, tool_block
 
 
@@ -457,10 +457,10 @@ class TestToolActivityStreaming:
             await _process_message(event, "hello", client, config, sessions)
 
         # Long text should be uploaded as a snippet, not split into chunks
-        client.files_upload_v2.assert_called_once()
-        upload_kwargs = client.files_upload_v2.call_args.kwargs
-        assert upload_kwargs["content"] == long_text
-        assert upload_kwargs["channel"] == "C_CHAN"
+        client.files_getUploadURLExternal.assert_called_once()
+        client.files_completeUploadExternal.assert_called_once()
+        complete_kwargs = client.files_completeUploadExternal.call_args.kwargs
+        assert complete_kwargs["channel_id"] == "C_CHAN"
 
 
 class TestToolErrorHandling:
@@ -652,3 +652,304 @@ class TestGitCommitReaction:
             if c.kwargs.get("name") == "package"
         ]
         assert len(reaction_calls) == 1
+
+
+class TestHasFileEdit:
+    """Test _has_file_edit helper for detecting file-modifying tools."""
+
+    def test_edit_tool_detected(self):
+        event = make_tool_event(tool_block("Edit", file_path="/src/a.py"))
+        assert _has_file_edit(event) is True
+
+    def test_write_tool_detected(self):
+        event = make_tool_event(tool_block("Write", file_path="/src/b.py"))
+        assert _has_file_edit(event) is True
+
+    def test_notebook_edit_detected(self):
+        event = make_tool_event(
+            tool_block("NotebookEdit", notebook_path="/nb.ipynb")
+        )
+        assert _has_file_edit(event) is True
+
+    def test_read_not_detected(self):
+        event = make_tool_event(tool_block("Read", file_path="/src/a.py"))
+        assert _has_file_edit(event) is False
+
+    def test_bash_not_detected(self):
+        event = make_tool_event(tool_block("Bash", command="echo hello"))
+        assert _has_file_edit(event) is False
+
+    def test_mixed_blocks_detected(self):
+        """If any block is a file edit, return True."""
+        event = make_tool_event(
+            tool_block("Read", file_path="/src/a.py"),
+            tool_block("Edit", file_path="/src/a.py"),
+        )
+        assert _has_file_edit(event) is True
+
+    def test_empty_content(self):
+        event = ClaudeEvent(
+            type="assistant",
+            raw={"type": "assistant", "message": {"content": []}},
+        )
+        assert _has_file_edit(event) is False
+
+
+class TestFileChangedReaction:
+    """Test that a :pencil2: reaction is added on file edits and removed on commit."""
+
+    @pytest.mark.asyncio
+    async def test_file_edit_adds_pencil_reaction(self, config, sessions):
+        async def fake_stream(prompt):
+            yield make_tool_event(
+                tool_block("Edit", file_path="/src/app.py")
+            )
+            yield make_event("assistant", text="Updated.")
+            yield make_event("result", text="Updated.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "fix it", client, config, sessions)
+
+        pencil_calls = [
+            c for c in client.reactions_add.call_args_list
+            if c.kwargs.get("name") == "pencil2"
+        ]
+        assert len(pencil_calls) == 1
+        assert pencil_calls[0].kwargs["timestamp"] == "1000.0"  # thread_ts
+
+    @pytest.mark.asyncio
+    async def test_write_tool_adds_pencil_reaction(self, config, sessions):
+        async def fake_stream(prompt):
+            yield make_tool_event(
+                tool_block("Write", file_path="/src/new.py")
+            )
+            yield make_event("assistant", text="Created.")
+            yield make_event("result", text="Created.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "create file", client, config, sessions)
+
+        pencil_calls = [
+            c for c in client.reactions_add.call_args_list
+            if c.kwargs.get("name") == "pencil2"
+        ]
+        assert len(pencil_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_file_edit_no_pencil_reaction(self, config, sessions):
+        async def fake_stream(prompt):
+            yield make_tool_event(
+                tool_block("Read", file_path="/src/app.py")
+            )
+            yield make_event("assistant", text="Here it is.")
+            yield make_event("result", text="Here it is.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "show file", client, config, sessions)
+
+        pencil_calls = [
+            c for c in client.reactions_add.call_args_list
+            if c.kwargs.get("name") == "pencil2"
+        ]
+        assert len(pencil_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_commit_removes_pencil_reaction(self, config, sessions):
+        async def fake_stream(prompt):
+            yield make_tool_event(
+                tool_block("Edit", file_path="/src/app.py")
+            )
+            yield make_tool_event(
+                tool_block("Bash", command='git commit -m "fix bug"')
+            )
+            yield make_event("assistant", text="Committed.")
+            yield make_event("result", text="Committed.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "fix and commit", client, config, sessions)
+
+        # Pencil was added then removed
+        pencil_add_calls = [
+            c for c in client.reactions_add.call_args_list
+            if c.kwargs.get("name") == "pencil2"
+        ]
+        assert len(pencil_add_calls) == 1
+
+        pencil_remove_calls = [
+            c for c in client.reactions_remove.call_args_list
+            if c.kwargs.get("name") == "pencil2"
+        ]
+        assert len(pencil_remove_calls) == 1
+        assert pencil_remove_calls[0].kwargs["timestamp"] == "1000.0"
+
+    @pytest.mark.asyncio
+    async def test_multiple_edits_only_one_pencil_reaction(self, config, sessions):
+        async def fake_stream(prompt):
+            yield make_tool_event(
+                tool_block("Edit", file_path="/src/a.py")
+            )
+            yield make_tool_event(
+                tool_block("Write", file_path="/src/b.py")
+            )
+            yield make_tool_event(
+                tool_block("Edit", file_path="/src/c.py")
+            )
+            yield make_event("assistant", text="Done.")
+            yield make_event("result", text="Done.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "edit all", client, config, sessions)
+
+        pencil_calls = [
+            c for c in client.reactions_add.call_args_list
+            if c.kwargs.get("name") == "pencil2"
+        ]
+        assert len(pencil_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_commit_without_edits_no_pencil_removal(self, config, sessions):
+        """If only a commit happens (no tracked edits), don't try to remove pencil."""
+        async def fake_stream(prompt):
+            yield make_tool_event(
+                tool_block("Bash", command='git commit -m "amend"')
+            )
+            yield make_event("assistant", text="Done.")
+            yield make_event("result", text="Done.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "commit it", client, config, sessions)
+
+        pencil_remove_calls = [
+            c for c in client.reactions_remove.call_args_list
+            if c.kwargs.get("name") == "pencil2"
+        ]
+        assert len(pencil_remove_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_edit_after_commit_removes_package_adds_pencil(self, config, sessions):
+        """Edit → commit → edit again: package removed, pencil re-added."""
+        async def fake_stream(prompt):
+            yield make_tool_event(
+                tool_block("Edit", file_path="/src/a.py")
+            )
+            yield make_tool_event(
+                tool_block("Bash", command='git commit -m "first"')
+            )
+            yield make_tool_event(
+                tool_block("Edit", file_path="/src/b.py")
+            )
+            yield make_event("assistant", text="Done.")
+            yield make_event("result", text="Done.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "edit commit edit", client, config, sessions)
+
+        # Pencil added twice (once per edit cycle)
+        pencil_add = [
+            c for c in client.reactions_add.call_args_list
+            if c.kwargs.get("name") == "pencil2"
+        ]
+        assert len(pencil_add) == 2
+
+        # Pencil removed once (by the commit)
+        pencil_remove = [
+            c for c in client.reactions_remove.call_args_list
+            if c.kwargs.get("name") == "pencil2"
+        ]
+        assert len(pencil_remove) == 1
+
+        # Package added once (by the commit)
+        package_add = [
+            c for c in client.reactions_add.call_args_list
+            if c.kwargs.get("name") == "package"
+        ]
+        assert len(package_add) == 1
+
+        # Package removed once (by the second edit)
+        package_remove = [
+            c for c in client.reactions_remove.call_args_list
+            if c.kwargs.get("name") == "package"
+        ]
+        assert len(package_remove) == 1
+        assert package_remove[0].kwargs["timestamp"] == "1000.0"
+
+    @pytest.mark.asyncio
+    async def test_full_cycle_edit_commit_edit_commit(self, config, sessions):
+        """Edit → commit → edit → commit: both cycles complete cleanly."""
+        async def fake_stream(prompt):
+            yield make_tool_event(tool_block("Edit", file_path="/src/a.py"))
+            yield make_tool_event(tool_block("Bash", command='git commit -m "1"'))
+            yield make_tool_event(tool_block("Write", file_path="/src/b.py"))
+            yield make_tool_event(tool_block("Bash", command='git commit -m "2"'))
+            yield make_event("result", text="done")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "cycle", client, config, sessions)
+
+        # Pencil added twice, removed twice
+        pencil_add = [c for c in client.reactions_add.call_args_list if c.kwargs.get("name") == "pencil2"]
+        pencil_remove = [c for c in client.reactions_remove.call_args_list if c.kwargs.get("name") == "pencil2"]
+        assert len(pencil_add) == 2
+        assert len(pencil_remove) == 2
+
+        # Package added twice (each commit), removed once (second edit)
+        package_add = [c for c in client.reactions_add.call_args_list if c.kwargs.get("name") == "package"]
+        package_remove = [c for c in client.reactions_remove.call_args_list if c.kwargs.get("name") == "package"]
+        assert len(package_add) == 2
+        assert len(package_remove) == 1

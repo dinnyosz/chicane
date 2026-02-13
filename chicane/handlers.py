@@ -299,7 +299,8 @@ async def _process_message(
         event_count = 0
         first_activity = True  # track whether to update placeholder or post new
         result_event = None  # capture result event for completion summary
-        git_committed = False  # track whether a git commit happened
+        git_committed = False  # track whether a git commit happened (since last edit)
+        files_changed = False  # track uncommitted file changes
         tool_id_to_name: dict[str, str] = {}  # tool_use_id → tool name
 
         try:
@@ -341,16 +342,46 @@ async def _process_message(
                                 )
                                 sessions.register_bot_message(r["ts"], thread_ts)
 
-                    # Detect git commits from Bash tool use
-                    if not git_committed and _has_git_commit(event_data):
-                        git_committed = True
-                        for ts in dict.fromkeys([thread_ts, event["ts"]]):
+                    # Detect file edits — add pencil reaction to thread root
+                    if not files_changed and _has_file_edit(event_data):
+                        files_changed = True
+                        try:
+                            await client.reactions_add(
+                                channel=channel, name="pencil2", timestamp=thread_ts,
+                            )
+                        except Exception:
+                            pass
+                        # Remove package if editing after a commit (uncommitted changes again)
+                        if git_committed:
+                            git_committed = False
                             try:
-                                await client.reactions_add(
-                                    channel=channel, name="package", timestamp=ts,
+                                await client.reactions_remove(
+                                    channel=channel, name="package", timestamp=thread_ts,
                                 )
                             except Exception:
                                 pass
+
+                    # Detect git commits from Bash tool use
+                    if _has_git_commit(event_data):
+                        # Remove pencil reaction — changes are committed
+                        if files_changed:
+                            files_changed = False
+                            try:
+                                await client.reactions_remove(
+                                    channel=channel, name="pencil2", timestamp=thread_ts,
+                                )
+                            except Exception:
+                                pass
+                        # Add package reaction (only if not already showing)
+                        if not git_committed:
+                            git_committed = True
+                            for ts in dict.fromkeys([thread_ts, event["ts"]]):
+                                try:
+                                    await client.reactions_add(
+                                        channel=channel, name="package", timestamp=ts,
+                                    )
+                                except Exception:
+                                    pass
 
                     # Accumulate text
                     chunk = event_data.text
@@ -803,6 +834,21 @@ def _has_git_commit(event: ClaudeEvent) -> bool:
         cmd = block.get("input", {}).get("command", "")
         if re.search(r"\bgit\b.*\bcommit\b", cmd):
             logger.debug("_has_git_commit matched git commit in: %s", cmd)
+            return True
+    return False
+
+
+# Tools that modify files on disk.
+_FILE_EDIT_TOOLS = frozenset({"Edit", "Write", "NotebookEdit"})
+
+
+def _has_file_edit(event: ClaudeEvent) -> bool:
+    """Check if an assistant event contains a tool_use that modifies files."""
+    message = event.raw.get("message", {})
+    for block in message.get("content", []):
+        if block.get("type") != "tool_use":
+            continue
+        if block.get("name") in _FILE_EDIT_TOOLS:
             return True
     return False
 
