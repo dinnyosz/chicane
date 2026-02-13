@@ -608,15 +608,17 @@ async def _download_files(
     return downloaded
 
 
-def _summarize_tool_input(tool_input: dict, max_len: int = 80) -> str:
-    """Build a compact summary of tool input args for display.
+def _summarize_tool_input(tool_input: dict, max_params: int = 6) -> str:
+    """Build a multi-line summary of tool input args for display.
 
-    Picks short scalar values (strings, numbers, bools) and joins them.
-    Skips large blobs, nested objects, and internal-looking keys.
+    Picks short scalar values (strings, numbers, bools) and formats
+    each as its own line. Skips large blobs, nested objects, and
+    internal-looking keys.
     """
-    parts: list[str] = []
-    remaining = max_len
+    lines: list[str] = []
     for key, val in tool_input.items():
+        if len(lines) >= max_params:
+            break
         if isinstance(val, str):
             if not val or len(val) > 120:
                 continue
@@ -627,12 +629,8 @@ def _summarize_tool_input(tool_input: dict, max_len: int = 80) -> str:
             snippet = str(val)
         else:
             continue
-        part = f"{key}: `{snippet}`"
-        if remaining - len(part) < 0 and parts:
-            break
-        parts.append(part)
-        remaining -= len(part) + 2  # account for ", " separator
-    return ", ".join(parts)
+        lines.append(f"  {key}: `{snippet}`")
+    return "\n".join(lines)
 
 
 def _format_tool_activity(event: ClaudeEvent) -> list[str]:
@@ -751,11 +749,11 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
             display = re.sub(r"([a-z])([A-Z])", r"\1 \2", display)
             display = display.replace("_", " ").strip().title()
 
-            # Summarize input args: pick short string values for context
+            # Summarize input args: each param on its own line
             arg_summary = _summarize_tool_input(tool_input)
             label = f"{server_prefix}: {display}" if server_prefix else display
             if arg_summary:
-                activities.append(f":wrench: {label}: {arg_summary}")
+                activities.append(f":wrench: {label}\n{arg_summary}")
             else:
                 activities.append(f":wrench: {label}")
 
