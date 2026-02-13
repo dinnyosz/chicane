@@ -101,6 +101,25 @@ class ClaudeEvent:
                         errors.append(text)
         return errors
 
+    @property
+    def tool_results(self) -> list[str]:
+        """Extract output text from successful tool_result blocks in user events."""
+        if self.type != "user":
+            return []
+        message = self.raw.get("message", {})
+        content = message.get("content", [])
+        results = []
+        for block in content:
+            if block.get("type") == "tool_result" and not block.get("is_error"):
+                text = block.get("content", "")
+                if isinstance(text, list):
+                    text = "".join(
+                        p.get("text", "") for p in text if isinstance(p, dict)
+                    )
+                if text:
+                    results.append(text)
+        return results
+
 
 class ClaudeSession:
     """Manages a Claude Code CLI subprocess for a single conversation."""

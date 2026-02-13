@@ -31,6 +31,7 @@ load_dotenv(env_file())
 
 
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
+VALID_VERBOSITY_LEVELS = {"minimal", "normal", "verbose"}
 
 
 def _validate_log_level(value: str) -> str:
@@ -39,6 +40,16 @@ def _validate_log_level(value: str) -> str:
         raise ValueError(
             f"Invalid LOG_LEVEL '{value}'. "
             f"Must be one of: {', '.join(sorted(VALID_LOG_LEVELS))}"
+        )
+    return level
+
+
+def _validate_verbosity(value: str) -> str:
+    level = value.lower()
+    if level not in VALID_VERBOSITY_LEVELS:
+        raise ValueError(
+            f"Invalid VERBOSITY '{value}'. "
+            f"Must be one of: {', '.join(sorted(VALID_VERBOSITY_LEVELS))}"
         )
     return level
 
@@ -59,6 +70,7 @@ class Config:
     claude_allowed_tools: list[str] = field(default_factory=list)
     claude_max_turns: int | None = None
     claude_max_budget_usd: float | None = None
+    verbosity: str = "normal"
 
 
     def resolve_dir_channel(self, cwd: Path) -> str | None:
@@ -144,6 +156,8 @@ class Config:
                 # channel name = directory name (relative to BASE_DIRECTORY)
                 channel_dirs[entry] = entry
 
+        verbosity = _validate_verbosity(os.environ.get("VERBOSITY", "normal"))
+
         return cls(
             slack_bot_token=bot_token,
             slack_app_token=app_token,
@@ -157,4 +171,5 @@ class Config:
             claude_allowed_tools=[t.strip() for t in raw_tools.split(",") if t.strip()],
             claude_max_turns=max_turns,
             claude_max_budget_usd=max_budget,
+            verbosity=verbosity,
         )
