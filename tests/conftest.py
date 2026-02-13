@@ -1,5 +1,6 @@
 """Shared fixtures and helpers for handler tests."""
 
+import asyncio
 import itertools
 from unittest.mock import AsyncMock, MagicMock
 
@@ -89,6 +90,25 @@ def make_user_event_with_results(results: list[dict]) -> ClaudeEvent:
             "message": {"content": results},
         },
     )
+
+
+def mock_session_info(mock_session):
+    """Wrap a mock ClaudeSession in a mock SessionInfo with a real asyncio.Lock.
+
+    Since ``SessionStore.get_or_create`` now returns a ``SessionInfo`` object
+    (with ``.session`` and ``.lock``), all handler tests that patch
+    ``get_or_create`` need to return this wrapper.
+
+    Also configures the mock session with sensible defaults for the abort
+    mechanism so tests don't fail on the ``was_aborted`` / ``is_streaming``
+    checks introduced by the concurrency control.
+    """
+    mock_session.was_aborted = False
+    mock_session.is_streaming = False
+    info = MagicMock()
+    info.session = mock_session
+    info.lock = asyncio.Lock()
+    return info
 
 
 def capture_app_handlers(mock_app):

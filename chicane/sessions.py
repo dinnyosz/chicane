@@ -1,5 +1,6 @@
 """Session management — maps Slack threads to Claude sessions."""
 
+import asyncio
 import logging
 import tempfile
 from dataclasses import dataclass, field
@@ -116,6 +117,7 @@ class SessionInfo:
     cwd: Path
     created_at: datetime = field(default_factory=datetime.now)
     last_used: datetime = field(default_factory=datetime.now)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def touch(self) -> None:
         self.last_used = datetime.now()
@@ -133,8 +135,11 @@ class SessionStore:
         config: Config,
         cwd: Path | None = None,
         session_id: str | None = None,
-    ) -> ClaudeSession:
+    ) -> SessionInfo:
         """Get existing session for a thread or create a new one.
+
+        Returns the full ``SessionInfo`` (including the lock) so callers
+        can coordinate concurrent access.
 
         When *session_id* is provided the new ``ClaudeSession`` is created
         with that id so it resumes an existing Claude Code conversation
@@ -144,7 +149,7 @@ class SessionStore:
             info = self._sessions[thread_ts]
             info.touch()
             logger.debug(f"Reusing session for thread {thread_ts}")
-            return info.session
+            return info
 
         if cwd:
             work_dir = cwd
@@ -163,14 +168,15 @@ class SessionStore:
             system_prompt=SLACK_SYSTEM_PROMPT,
         )
 
-        self._sessions[thread_ts] = SessionInfo(
+        info = SessionInfo(
             session=session,
             thread_ts=thread_ts,
             cwd=work_dir,
         )
+        self._sessions[thread_ts] = info
 
         logger.info(f"New session for thread {thread_ts} (cwd={work_dir})")
-        return session
+        return info
 
     def has(self, thread_ts: str) -> bool:
         """Check if a session exists for this thread."""

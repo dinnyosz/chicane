@@ -11,7 +11,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 
 from .claude import ClaudeSession
 from .config import Config
-from .sessions import SessionStore
+from .sessions import SessionInfo, SessionStore
 
 logger = logging.getLogger(__name__)
 
@@ -206,12 +206,21 @@ async def _process_message(
             )
 
     # Get or create a Claude session for this thread
-    session = sessions.get_or_create(
+    session_info = sessions.get_or_create(
         thread_ts=thread_ts,
         config=config,
         cwd=cwd,
         session_id=handoff_session_id,
     )
+    session = session_info.session
+
+    # If the session is already streaming (user sent a new message while
+    # Claude was thinking/working), abort the active stream so we can
+    # start fresh.  The previous _process_message task will detect the
+    # abort flag and clean up without posting final results.
+    if session.is_streaming:
+        logger.info(f"Aborting active stream for thread {thread_ts} — new message arrived")
+        session.abort()
 
     # On reconnect (no session_id found), fall back to rebuilding context
     # from Slack thread history.
@@ -249,214 +258,261 @@ async def _process_message(
     )
     message_ts = result["ts"]
 
-    # Stream Claude's response
-    full_text = ""
-    event_count = 0
-    first_activity = True  # track whether to update placeholder or post new
-    result_event = None  # capture result event for completion summary
-    git_committed = False  # track whether a git commit happened
-    tool_id_to_name: dict[str, str] = {}  # tool_use_id → tool name
+    # Stream Claude's response — hold the session lock so only one
+    # _process_message streams at a time per thread.
+    async with session_info.lock:
+        full_text = ""
+        event_count = 0
+        first_activity = True  # track whether to update placeholder or post new
+        result_event = None  # capture result event for completion summary
+        git_committed = False  # track whether a git commit happened
+        tool_id_to_name: dict[str, str] = {}  # tool_use_id → tool name
 
-    try:
-        async for event_data in session.stream(prompt):
-            event_count += 1
-            if event_data.type == "assistant":
-                # Track tool_use_id → tool name so we can filter results later
-                tool_id_to_name.update(event_data.tool_use_ids)
+        try:
+            async for event_data in session.stream(prompt):
+                event_count += 1
+                if event_data.type == "assistant":
+                    # Track tool_use_id → tool name so we can filter results later
+                    tool_id_to_name.update(event_data.tool_use_ids)
 
-                # Flush any accumulated text before posting tool activity
-                # so the message order matches Claude Code console.
-                activities = _format_tool_activity(event_data)
+                    # Flush any accumulated text before posting tool activity
+                    # so the message order matches Claude Code console.
+                    activities = _format_tool_activity(event_data)
 
-                # Prefix subagent activities
-                if event_data.parent_tool_use_id:
-                    activities = [f":arrow_right_hook: {a}" for a in activities]
+                    # Prefix subagent activities
+                    if event_data.parent_tool_use_id:
+                        activities = [f":arrow_right_hook: {a}" for a in activities]
 
-                show_activities = _should_show("tool_activity", config.verbosity)
+                    show_activities = _should_show("tool_activity", config.verbosity)
 
-                if show_activities and activities and full_text:
-                    for chunk in _split_message(_markdown_to_mrkdwn(full_text)):
-                        await client.chat_postMessage(
-                            channel=channel, thread_ts=thread_ts, text=chunk,
-                        )
-                    full_text = ""
-
-                # Post tool activity
-                if show_activities:
-                    for activity in activities:
-                        if first_activity:
-                            await client.chat_update(
-                                channel=channel, ts=message_ts, text=activity,
-                            )
-                            first_activity = False
-                        else:
+                    if show_activities and activities and full_text:
+                        for chunk in _split_message(_markdown_to_mrkdwn(full_text)):
                             await client.chat_postMessage(
-                                channel=channel, thread_ts=thread_ts, text=activity,
+                                channel=channel, thread_ts=thread_ts, text=chunk,
+                            )
+                        full_text = ""
+
+                    # Post tool activity
+                    if show_activities:
+                        for activity in activities:
+                            if first_activity:
+                                await client.chat_update(
+                                    channel=channel, ts=message_ts, text=activity,
+                                )
+                                first_activity = False
+                            else:
+                                await client.chat_postMessage(
+                                    channel=channel, thread_ts=thread_ts, text=activity,
+                                )
+
+                    # Detect git commits from Bash tool use
+                    if not git_committed and _has_git_commit(event_data):
+                        git_committed = True
+                        for ts in dict.fromkeys([thread_ts, event["ts"]]):
+                            try:
+                                await client.reactions_add(
+                                    channel=channel, name="package", timestamp=ts,
+                                )
+                            except Exception:
+                                pass
+
+                    # Accumulate text
+                    chunk = event_data.text
+                    if chunk:
+                        full_text += chunk
+
+                elif event_data.type == "result":
+                    result_event = event_data
+                    # Prefer whichever is longer — streamed text preserves
+                    # formatting but could miss chunks; result blob is
+                    # complete but may flatten newlines.
+                    result_text = event_data.text or ""
+                    if len(result_text) > len(full_text):
+                        full_text = result_text
+
+                elif event_data.type == "user":
+                    # Check for tool errors in user events (tool results)
+                    if _should_show("tool_error", config.verbosity):
+                        for error_msg in event_data.tool_errors:
+                            truncated = (error_msg[:200] + "...") if len(error_msg) > 200 else error_msg
+                            await client.chat_postMessage(
+                                channel=channel,
+                                thread_ts=thread_ts,
+                                text=f":warning: Tool error: {truncated}",
                             )
 
-                # Detect git commits from Bash tool use
-                if not git_committed and _has_git_commit(event_data):
-                    git_committed = True
-                    for ts in dict.fromkeys([thread_ts, event["ts"]]):
-                        try:
-                            await client.reactions_add(
-                                channel=channel, name="package", timestamp=ts,
+                    # Show tool outputs in verbose mode (skip noisy tools)
+                    if _should_show("tool_result", config.verbosity):
+                        for tool_use_id, result_text in event_data.tool_results:
+                            tool_name = tool_id_to_name.get(tool_use_id, "")
+                            if tool_name in _QUIET_TOOLS:
+                                continue
+                            truncated = (result_text[:500] + "...") if len(result_text) > 500 else result_text
+                            await client.chat_postMessage(
+                                channel=channel,
+                                thread_ts=thread_ts,
+                                text=f":clipboard: Tool output:\n```\n{truncated}\n```",
                             )
-                        except Exception:
-                            pass
 
-                # Accumulate text
-                chunk = event_data.text
-                if chunk:
-                    full_text += chunk
-
-            elif event_data.type == "result":
-                result_event = event_data
-                # Prefer whichever is longer — streamed text preserves
-                # formatting but could miss chunks; result blob is
-                # complete but may flatten newlines.
-                result_text = event_data.text or ""
-                if len(result_text) > len(full_text):
-                    full_text = result_text
-
-            elif event_data.type == "user":
-                # Check for tool errors in user events (tool results)
-                if _should_show("tool_error", config.verbosity):
-                    for error_msg in event_data.tool_errors:
-                        truncated = (error_msg[:200] + "...") if len(error_msg) > 200 else error_msg
+                elif event_data.type == "system" and event_data.subtype == "compact_boundary":
+                    if _should_show("compact_boundary", config.verbosity):
+                        meta = event_data.compact_metadata or {}
+                        trigger = meta.get("trigger", "auto")
+                        pre_tokens = meta.get("pre_tokens")
+                        if trigger == "auto":
+                            note = ":brain: Context was automatically compacted"
+                        else:
+                            note = ":brain: Context was manually compacted"
+                        if pre_tokens:
+                            note += f" ({pre_tokens:,} tokens before)"
+                        note += " — earlier messages may be summarized"
                         await client.chat_postMessage(
-                            channel=channel,
-                            thread_ts=thread_ts,
-                            text=f":warning: Tool error: {truncated}",
+                            channel=channel, thread_ts=thread_ts, text=note,
                         )
 
-                # Show tool outputs in verbose mode (skip noisy tools)
-                if _should_show("tool_result", config.verbosity):
-                    for tool_use_id, result_text in event_data.tool_results:
-                        tool_name = tool_id_to_name.get(tool_use_id, "")
-                        if tool_name in _QUIET_TOOLS:
-                            continue
-                        truncated = (result_text[:500] + "...") if len(result_text) > 500 else result_text
-                        await client.chat_postMessage(
-                            channel=channel,
-                            thread_ts=thread_ts,
-                            text=f":clipboard: Tool output:\n```\n{truncated}\n```",
-                        )
+                else:
+                    logger.debug(f"Event type={event_data.type} subtype={event_data.subtype}")
 
-            elif event_data.type == "system" and event_data.subtype == "compact_boundary":
-                if _should_show("compact_boundary", config.verbosity):
-                    meta = event_data.compact_metadata or {}
-                    trigger = meta.get("trigger", "auto")
-                    pre_tokens = meta.get("pre_tokens")
-                    if trigger == "auto":
-                        note = ":brain: Context was automatically compacted"
+            # -- Stream finished. Check if we were aborted by a newer message. --
+            if session.was_aborted:
+                logger.info(f"Stream aborted for thread {thread_ts}, skipping final posting")
+                # Delete the placeholder message — the newer task will post its own.
+                try:
+                    await client.chat_delete(channel=channel, ts=message_ts)
+                except Exception:
+                    # Fallback: update it instead (bots can't always delete)
+                    try:
+                        await client.chat_update(
+                            channel=channel, ts=message_ts,
+                            text=":fast_forward: Interrupted — processing new message...",
+                        )
+                    except Exception:
+                        pass
+                # Remove eyes reaction silently
+                try:
+                    await client.reactions_remove(
+                        channel=channel, name="eyes", timestamp=event["ts"],
+                    )
+                except Exception:
+                    pass
+                return
+
+            # Final: send remaining text
+            if full_text:
+                mrkdwn = _markdown_to_mrkdwn(full_text)
+
+                if len(mrkdwn) > SNIPPET_THRESHOLD:
+                    # Long output → upload as a snippet file
+                    if first_activity:
+                        await client.chat_update(
+                            channel=channel, ts=message_ts,
+                            text=":page_facing_up: Response uploaded as snippet (too long for a message).",
+                        )
+                    await _send_snippet(client, channel, thread_ts, full_text)
+                else:
+                    chunks = _split_message(mrkdwn)
+                    if first_activity:
+                        # No tool activities were posted — update the placeholder
+                        await client.chat_update(
+                            channel=channel, ts=message_ts, text=chunks[0],
+                        )
+                        for chunk in chunks[1:]:
+                            await client.chat_postMessage(
+                                channel=channel, thread_ts=thread_ts, text=chunk,
+                            )
                     else:
-                        note = ":brain: Context was manually compacted"
-                    if pre_tokens:
-                        note += f" ({pre_tokens:,} tokens before)"
-                    note += " — earlier messages may be summarized"
+                        # Tool activities were posted — send text as thread replies
+                        for chunk in chunks:
+                            await client.chat_postMessage(
+                                channel=channel, thread_ts=thread_ts, text=chunk,
+                            )
+            else:
+                logger.warning(
+                    f"Empty response from Claude: {event_count} events received, "
+                    f"session_id={session.session_id}, "
+                    f"handoff={handoff_session_id}, reconnect={is_reconnect}"
+                )
+                msg = (
+                    ":warning: Claude returned an empty response. "
+                    "This usually means the session is still active in a terminal. "
+                    "Please close that Claude Code session first (type `/exit` or quit), "
+                    "then try again."
+                )
+                await client.chat_update(
+                    channel=channel,
+                    ts=message_ts,
+                    text=msg,
+                )
+
+            # Post completion summary from result event
+            if result_event:
+                summary = _format_completion_summary(result_event)
+                if summary:
+                    await client.chat_postMessage(
+                        channel=channel, thread_ts=thread_ts, text=summary,
+                    )
+
+                # Surface permission denials so users know why tools were blocked
+                denials = result_event.permission_denials
+                if denials:
+                    names = sorted({d.get("tool_name", "unknown") for d in denials})
+                    note = (
+                        f":no_entry_sign: {len(denials)} tool permission"
+                        f"{'s' if len(denials) != 1 else ''}"
+                        f" denied: {', '.join(f'`{n}`' for n in names)}"
+                    )
                     await client.chat_postMessage(
                         channel=channel, thread_ts=thread_ts, text=note,
                     )
 
-            else:
-                logger.debug(f"Event type={event_data.type} subtype={event_data.subtype}")
+            # Swap eyes for checkmark
+            try:
+                await client.reactions_remove(
+                    channel=channel, name="eyes", timestamp=event["ts"]
+                )
+                await client.reactions_add(
+                    channel=channel, name="white_check_mark", timestamp=event["ts"]
+                )
+            except Exception:
+                pass
 
-        # Final: send remaining text
-        if full_text:
-            mrkdwn = _markdown_to_mrkdwn(full_text)
+        except Exception as exc:
+            # Don't post error messages for aborted streams
+            if session.was_aborted:
+                logger.info(f"Stream aborted (with exception) for thread {thread_ts}")
+                try:
+                    await client.chat_delete(channel=channel, ts=message_ts)
+                except Exception:
+                    try:
+                        await client.chat_update(
+                            channel=channel, ts=message_ts,
+                            text=":fast_forward: Interrupted — processing new message...",
+                        )
+                    except Exception:
+                        pass
+                try:
+                    await client.reactions_remove(
+                        channel=channel, name="eyes", timestamp=event["ts"],
+                    )
+                except Exception:
+                    pass
+                return
 
-            if len(mrkdwn) > SNIPPET_THRESHOLD:
-                # Long output → upload as a snippet file
-                if first_activity:
-                    await client.chat_update(
-                        channel=channel, ts=message_ts,
-                        text=":page_facing_up: Response uploaded as snippet (too long for a message).",
-                    )
-                await _send_snippet(client, channel, thread_ts, full_text)
-            else:
-                chunks = _split_message(mrkdwn)
-                if first_activity:
-                    # No tool activities were posted — update the placeholder
-                    await client.chat_update(
-                        channel=channel, ts=message_ts, text=chunks[0],
-                    )
-                    for chunk in chunks[1:]:
-                        await client.chat_postMessage(
-                            channel=channel, thread_ts=thread_ts, text=chunk,
-                        )
-                else:
-                    # Tool activities were posted — send text as thread replies
-                    for chunk in chunks:
-                        await client.chat_postMessage(
-                            channel=channel, thread_ts=thread_ts, text=chunk,
-                        )
-        else:
-            logger.warning(
-                f"Empty response from Claude: {event_count} events received, "
-                f"session_id={session.session_id}, "
-                f"handoff={handoff_session_id}, reconnect={is_reconnect}"
-            )
-            msg = (
-                ":warning: Claude returned an empty response. "
-                "This usually means the session is still active in a terminal. "
-                "Please close that Claude Code session first (type `/exit` or quit), "
-                "then try again."
-            )
+            logger.exception(f"Error processing message: {exc}")
             await client.chat_update(
                 channel=channel,
                 ts=message_ts,
-                text=msg,
+                text=f":x: Error: {exc}",
             )
-
-        # Post completion summary from result event
-        if result_event:
-            summary = _format_completion_summary(result_event)
-            if summary:
-                await client.chat_postMessage(
-                    channel=channel, thread_ts=thread_ts, text=summary,
+            try:
+                await client.reactions_remove(
+                    channel=channel, name="eyes", timestamp=event["ts"]
                 )
-
-            # Surface permission denials so users know why tools were blocked
-            denials = result_event.permission_denials
-            if denials:
-                names = sorted({d.get("tool_name", "unknown") for d in denials})
-                note = (
-                    f":no_entry_sign: {len(denials)} tool permission"
-                    f"{'s' if len(denials) != 1 else ''}"
-                    f" denied: {', '.join(f'`{n}`' for n in names)}"
+                await client.reactions_add(
+                    channel=channel, name="x", timestamp=event["ts"]
                 )
-                await client.chat_postMessage(
-                    channel=channel, thread_ts=thread_ts, text=note,
-                )
-
-        # Swap eyes for checkmark
-        try:
-            await client.reactions_remove(
-                channel=channel, name="eyes", timestamp=event["ts"]
-            )
-            await client.reactions_add(
-                channel=channel, name="white_check_mark", timestamp=event["ts"]
-            )
-        except Exception:
-            pass
-
-    except Exception as exc:
-        logger.exception(f"Error processing message: {exc}")
-        await client.chat_update(
-            channel=channel,
-            ts=message_ts,
-            text=f":x: Error: {exc}",
-        )
-        try:
-            await client.reactions_remove(
-                channel=channel, name="eyes", timestamp=event["ts"]
-            )
-            await client.reactions_add(
-                channel=channel, name="x", timestamp=event["ts"]
-            )
-        except Exception:
-            pass
+            except Exception:
+                pass
 
 
 async def _fetch_thread_history(
@@ -735,8 +791,7 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
             activities.append(f":mag: Reading `{basename}`")
         elif tool_name == "Bash":
             cmd = tool_input.get("command", "")
-            short_cmd = (cmd[:60] + "...") if len(cmd) > 60 else cmd
-            activities.append(f":computer: Running `{short_cmd}`")
+            activities.append(f":computer: Running `{cmd}`")
         elif tool_name == "Edit":
             file_path = tool_input.get("file_path", "")
             basename = Path(file_path).name if file_path else "file"

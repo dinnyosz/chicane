@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from chicane.handlers import _download_files, _process_message, MAX_FILE_SIZE
-from tests.conftest import make_event, mock_client
+from tests.conftest import make_event, mock_client, mock_session_info
 
 
 def _mock_http_session(responses):
@@ -294,7 +294,7 @@ class TestProcessMessageWithFiles:
         ]
 
         with (
-            patch.object(sessions, "get_or_create", return_value=mock_session),
+            patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)),
             patch("chicane.handlers._download_files", new_callable=AsyncMock, return_value=downloaded),
         ):
             event = {
@@ -332,7 +332,7 @@ class TestProcessMessageWithFiles:
         ]
 
         with (
-            patch.object(sessions, "get_or_create", return_value=mock_session),
+            patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)),
             patch("chicane.handlers._download_files", new_callable=AsyncMock, return_value=downloaded),
         ):
             event = {
@@ -368,7 +368,7 @@ class TestProcessMessageWithFiles:
         ]
 
         with (
-            patch.object(sessions, "get_or_create", return_value=mock_session),
+            patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)),
             patch("chicane.handlers._download_files", new_callable=AsyncMock, return_value=downloaded),
         ):
             event = {
@@ -399,7 +399,7 @@ class TestProcessMessageWithFiles:
         client = mock_client()
 
         with (
-            patch.object(sessions, "get_or_create", return_value=mock_session),
+            patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)),
             patch("chicane.handlers._download_files", new_callable=AsyncMock, return_value=[]),
         ):
             event = {

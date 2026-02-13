@@ -7,7 +7,7 @@ import pytest
 from chicane.config import Config
 from chicane.handlers import _process_message
 from chicane.sessions import SessionStore
-from tests.conftest import make_event, make_tool_event, make_user_event_with_results, mock_client, tool_block
+from tests.conftest import make_event, make_tool_event, make_user_event_with_results, mock_client, mock_session_info, tool_block
 
 
 class TestCompletionSummaryPosting:
@@ -28,7 +28,7 @@ class TestCompletionSummaryPosting:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "11000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
@@ -51,7 +51,7 @@ class TestCompletionSummaryPosting:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "11001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
@@ -91,7 +91,7 @@ class TestCompactBoundaryNotification:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "12000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "big task", client, config, sessions)
 
@@ -121,7 +121,7 @@ class TestCompactBoundaryNotification:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "12001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "compact", client, config, sessions)
 
@@ -148,7 +148,7 @@ class TestCompactBoundaryNotification:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "12002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hi", client, config, sessions)
 
@@ -178,7 +178,7 @@ class TestCompactBoundaryNotification:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "12003.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hi", client, config, sessions)
 
@@ -213,7 +213,7 @@ class TestPermissionDenialNotification:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "13000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "do it", client, config, sessions)
 
@@ -244,7 +244,7 @@ class TestPermissionDenialNotification:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "13001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "edit it", client, config, sessions)
 
@@ -270,7 +270,7 @@ class TestPermissionDenialNotification:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "13002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hi", client, config, sessions)
 
@@ -299,7 +299,7 @@ class TestVerbosityFiltering:
         mock_session.session_id = "s1"
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "read file", client, config, sessions)
 
@@ -329,7 +329,7 @@ class TestVerbosityFiltering:
         mock_session.session_id = "s1"
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "run cmd", client, config, sessions)
 
@@ -351,7 +351,7 @@ class TestVerbosityFiltering:
         mock_session.session_id = "s1"
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "read file", client, config, sessions)
 
@@ -379,7 +379,7 @@ class TestVerbosityFiltering:
         mock_session.session_id = "s1"
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20003.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "do thing", client, config, sessions)
 
@@ -407,7 +407,7 @@ class TestVerbosityFiltering:
         mock_session.session_id = "s1"
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20004.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "do thing", client, config, sessions)
 
@@ -433,7 +433,7 @@ class TestVerbosityFiltering:
         mock_session.session_id = "s1"
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20007.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "read file", client, config, sessions)
 
@@ -458,7 +458,7 @@ class TestVerbosityFiltering:
         mock_session.session_id = "s1"
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20005.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hi", client, config, sessions)
 
@@ -483,7 +483,7 @@ class TestVerbosityFiltering:
         mock_session.session_id = "s1"
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20006.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hi", client, config, sessions)
 
@@ -512,7 +512,7 @@ class TestVerbosityFiltering:
             mock_session.session_id = "s1"
             client = mock_client()
 
-            with patch.object(sessions, "get_or_create", return_value=mock_session):
+            with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
                 event = {"ts": f"2100{verbosity}.0", "channel": "C_CHAN", "user": "UHUMAN1"}
                 await _process_message(event, "try bash", client, config, sessions)
 

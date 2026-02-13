@@ -6,7 +6,7 @@ import pytest
 
 from chicane.claude import ClaudeEvent
 from chicane.handlers import _format_tool_activity, _process_message
-from tests.conftest import make_event, make_tool_event, mock_client, tool_block
+from tests.conftest import make_event, make_tool_event, mock_client, mock_session_info, tool_block
 
 
 class TestFormatToolActivity:
@@ -24,15 +24,14 @@ class TestFormatToolActivity:
         )
         assert _format_tool_activity(event) == [":computer: Running `pytest tests/`"]
 
-    def test_bash_tool_long_command_truncated(self):
-        long_cmd = "a" * 100
+    def test_bash_tool_long_command_not_truncated(self):
+        long_cmd = "git diff chicane/handlers.py tests/test_handlers_process_message.py tests/test_handlers_tool_activity.py"
         event = make_tool_event(
             tool_block("Bash", command=long_cmd)
         )
         result = _format_tool_activity(event)
         assert len(result) == 1
-        assert result[0].endswith("...`")
-        assert len(result[0]) < len(long_cmd) + 30
+        assert result[0] == f":computer: Running `{long_cmd}`"
 
     def test_edit_tool(self):
         event = make_tool_event(
@@ -318,7 +317,7 @@ class TestToolActivityStreaming:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "show config", client, config, sessions)
 
@@ -347,7 +346,7 @@ class TestToolActivityStreaming:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "fix tests", client, config, sessions)
 
@@ -375,7 +374,7 @@ class TestToolActivityStreaming:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
@@ -398,7 +397,7 @@ class TestToolActivityStreaming:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
@@ -424,7 +423,7 @@ class TestToolActivityStreaming:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "fix it", client, config, sessions)
 
@@ -453,7 +452,7 @@ class TestToolActivityStreaming:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
@@ -491,7 +490,7 @@ class TestToolErrorHandling:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "10000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "run tests", client, config, sessions)
 
@@ -527,7 +526,7 @@ class TestToolErrorHandling:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "10001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "do it", client, config, sessions)
 
@@ -561,7 +560,7 @@ class TestToolErrorHandling:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "10002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "do it", client, config, sessions)
 
@@ -590,7 +589,7 @@ class TestGitCommitReaction:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "commit it", client, config, sessions)
 
@@ -616,7 +615,7 @@ class TestGitCommitReaction:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "run tests", client, config, sessions)
 
@@ -644,7 +643,7 @@ class TestGitCommitReaction:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "commit both", client, config, sessions)
 

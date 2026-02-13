@@ -26,9 +26,9 @@ def store():
 
 class TestSessionStore:
     def test_create_new_session_with_cwd(self, store, config):
-        session = store.get_or_create("thread-1", config, cwd=Path("/tmp/projects"))
-        assert session is not None
-        assert session.cwd == Path("/tmp/projects")
+        info = store.get_or_create("thread-1", config, cwd=Path("/tmp/projects"))
+        assert info is not None
+        assert info.session.cwd == Path("/tmp/projects")
 
     def test_reuse_existing_session(self, store, config):
         s1 = store.get_or_create("thread-1", config)
@@ -41,13 +41,13 @@ class TestSessionStore:
         assert s1 is not s2
 
     def test_custom_cwd(self, store, config):
-        session = store.get_or_create("thread-1", config, cwd=Path("/tmp/other"))
-        assert session.cwd == Path("/tmp/other")
+        info = store.get_or_create("thread-1", config, cwd=Path("/tmp/other"))
+        assert info.session.cwd == Path("/tmp/other")
 
     def test_set_cwd(self, store, config):
-        session = store.get_or_create("thread-1", config)
+        info = store.get_or_create("thread-1", config)
         assert store.set_cwd("thread-1", Path("/tmp/new"))
-        assert session.cwd == Path("/tmp/new")
+        assert info.session.cwd == Path("/tmp/new")
 
     def test_set_cwd_nonexistent_thread(self, store):
         assert store.set_cwd("nope", Path("/tmp")) is False
@@ -56,8 +56,8 @@ class TestSessionStore:
         store.get_or_create("thread-1", config)
         store.remove("thread-1")
         # Next call should create a new session
-        s = store.get_or_create("thread-1", config)
-        assert s.session_id is None  # Fresh session
+        info = store.get_or_create("thread-1", config)
+        assert info.session.session_id is None  # Fresh session
 
     def test_cleanup_old_sessions(self, store, config):
         store.get_or_create("old-thread", config)
@@ -81,20 +81,20 @@ class TestSessionStore:
             slack_app_token="xapp-test",
         )
         store = SessionStore()
-        session = store.get_or_create("thread-1", config)
-        assert str(session.cwd).startswith("/tmp/chicane-") or "chicane-" in str(session.cwd)
+        info = store.get_or_create("thread-1", config)
+        assert str(info.session.cwd).startswith("/tmp/chicane-") or "chicane-" in str(info.session.cwd)
 
     def test_sessions_include_slack_system_prompt(self, store, config):
-        session = store.get_or_create("thread-1", config)
-        assert session.system_prompt is not None
-        assert "Slack" in session.system_prompt
+        info = store.get_or_create("thread-1", config)
+        assert info.session.system_prompt is not None
+        assert "Slack" in info.session.system_prompt
 
     def test_create_with_explicit_session_id(self, store, config):
         """When session_id is passed, the ClaudeSession should use --resume."""
-        session = store.get_or_create(
+        info = store.get_or_create(
             "thread-1", config, session_id="abc-123-def"
         )
-        assert session.session_id == "abc-123-def"
+        assert info.session.session_id == "abc-123-def"
 
     def test_explicit_session_id_not_used_on_reuse(self, store, config):
         """An existing session is returned as-is; session_id doesn't override it."""
@@ -103,46 +103,46 @@ class TestSessionStore:
             "thread-1", config, session_id="should-be-ignored"
         )
         assert s1 is s2
-        assert s2.session_id is None  # original session had no id
+        assert s2.session.session_id is None  # original session had no id
 
     def test_session_id_with_cwd(self, store, config):
         """session_id and cwd can be provided together."""
-        session = store.get_or_create(
+        info = store.get_or_create(
             "thread-1", config, cwd=Path("/tmp/work"), session_id="sess-42"
         )
-        assert session.session_id == "sess-42"
-        assert session.cwd == Path("/tmp/work")
+        assert info.session.session_id == "sess-42"
+        assert info.session.cwd == Path("/tmp/work")
 
     def test_shutdown_kills_all_sessions(self, store, config):
         s1 = store.get_or_create("thread-1", config, cwd=Path("/tmp/a"))
         s2 = store.get_or_create("thread-2", config, cwd=Path("/tmp/b"))
-        s1.kill = MagicMock()
-        s2.kill = MagicMock()
+        s1.session.kill = MagicMock()
+        s2.session.kill = MagicMock()
 
         store.shutdown()
 
-        s1.kill.assert_called_once()
-        s2.kill.assert_called_once()
+        s1.session.kill.assert_called_once()
+        s2.session.kill.assert_called_once()
 
     def test_system_prompt_forbids_terminal_suggestions(self, store, config):
         """System prompt must tell Claude to never suggest local actions."""
-        session = store.get_or_create("thread-1", config)
-        prompt = session.system_prompt
+        info = store.get_or_create("thread-1", config)
+        prompt = info.session.system_prompt
         assert "open a terminal" in prompt.lower()
         assert "start a new Claude Code session" in prompt
         assert "ONLY interact through Slack" in prompt
 
     def test_system_prompt_forbids_local_workarounds(self, store, config):
         """System prompt must forbid suggesting shell commands for the user."""
-        session = store.get_or_create("thread-1", config)
-        prompt = session.system_prompt
+        info = store.get_or_create("thread-1", config)
+        prompt = info.session.system_prompt
         assert "running shell commands" in prompt.lower()
         assert "host system directly" in prompt.lower()
 
     def test_system_prompt_forbids_interactive_tools(self, store, config):
         """System prompt must tell Claude not to use blocking interactive tools."""
-        session = store.get_or_create("thread-1", config)
-        prompt = session.system_prompt
+        info = store.get_or_create("thread-1", config)
+        prompt = info.session.system_prompt
         assert "AskUserQuestion" in prompt
         assert "streamed output mode" in prompt.lower()
         assert "will NOT work" in prompt
@@ -156,3 +156,16 @@ class TestSessionStore:
         assert len(store._sessions) == 0
         assert not store.has("thread-1")
         assert not store.has("thread-2")
+
+    def test_session_info_has_lock(self, store, config):
+        """Each SessionInfo should have an asyncio.Lock for concurrency control."""
+        import asyncio
+
+        info = store.get_or_create("thread-1", config)
+        assert isinstance(info.lock, asyncio.Lock)
+
+    def test_different_threads_have_different_locks(self, store, config):
+        """Each thread's SessionInfo should have its own lock."""
+        s1 = store.get_or_create("thread-1", config)
+        s2 = store.get_or_create("thread-2", config)
+        assert s1.lock is not s2.lock

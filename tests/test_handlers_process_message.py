@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from chicane.handlers import _process_message
-from tests.conftest import make_event, mock_client
+from tests.conftest import make_event, mock_client, mock_session_info
 
 
 class TestProcessMessageFormatting:
@@ -30,7 +30,7 @@ class TestProcessMessageFormatting:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {
                 "ts": "1000.0",
                 "channel": "C_CHAN",
@@ -59,7 +59,7 @@ class TestProcessMessageFormatting:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {
                 "ts": "1001.0",
                 "channel": "C_CHAN",
@@ -85,7 +85,7 @@ class TestProcessMessageEdgeCases:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session) as mock_create:
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)) as mock_create:
             event = {"ts": "5000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(
                 event,
@@ -106,7 +106,7 @@ class TestProcessMessageEdgeCases:
         client = mock_client()
         client.reactions_add.side_effect = Exception("permission denied")
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "5001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
@@ -123,7 +123,7 @@ class TestProcessMessageEdgeCases:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "5002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
@@ -142,7 +142,7 @@ class TestProcessMessageEdgeCases:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "5003.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
@@ -164,7 +164,7 @@ class TestProcessMessageEdgeCases:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "5004.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
@@ -194,7 +194,7 @@ class TestProcessMessageEdgeCases:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "5004.1", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
@@ -218,7 +218,7 @@ class TestProcessMessageEdgeCases:
 
         client = mock_client()
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "5005.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
@@ -253,7 +253,7 @@ class TestProcessMessageEdgeCases:
 
         mock_session.stream = capturing_stream
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session):
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {
                 "ts": "6002.0",
                 "thread_ts": "6000.0",
@@ -286,7 +286,7 @@ class TestProcessMessageEdgeCases:
             ]
         }
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session) as mock_create:
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)) as mock_create:
             event = {
                 "ts": "7001.0",
                 "thread_ts": "7000.0",

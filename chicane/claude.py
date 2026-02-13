@@ -162,11 +162,30 @@ class ClaudeSession:
         self.max_turns = max_turns
         self.max_budget_usd = max_budget_usd
         self._process: asyncio.subprocess.Process | None = None
+        self._aborted = False
 
     def kill(self) -> None:
         """Kill the active subprocess if any."""
         if self._process and self._process.returncode is None:
             self._process.kill()
+
+    def abort(self) -> None:
+        """Abort the current stream so a new one can start.
+
+        Sets the ``_aborted`` flag and kills the active subprocess.
+        The streaming loop in ``stream()`` will detect the flag and
+        exit cleanly, allowing the caller to skip final message posting.
+        """
+        self._aborted = True
+        self.kill()
+
+    @property
+    def was_aborted(self) -> bool:
+        return self._aborted
+
+    @property
+    def is_streaming(self) -> bool:
+        return self._process is not None and self._process.returncode is None
 
     def _build_command(self, prompt: str) -> list[str]:
         cmd = [
@@ -205,6 +224,7 @@ class ClaudeSession:
 
     async def stream(self, prompt: str) -> AsyncIterator[ClaudeEvent]:
         """Run a prompt through Claude and yield streaming events."""
+        self._aborted = False
         cmd = self._build_command(prompt)
 
         logger.debug(f"Running: {' '.join(cmd[:6])}...")
