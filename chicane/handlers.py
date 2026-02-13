@@ -627,7 +627,7 @@ def _summarize_tool_input(tool_input: dict, max_len: int = 80) -> str:
             snippet = str(val)
         else:
             continue
-        part = f"`{snippet}`"
+        part = f"{key}: `{snippet}`"
         if remaining - len(part) < 0 and parts:
             break
         parts.append(part)

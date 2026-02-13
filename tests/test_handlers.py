@@ -2862,8 +2862,8 @@ class TestSummarizeToolInput:
     def test_string_values(self):
         from chicane.handlers import _summarize_tool_input
         result = _summarize_tool_input({"query": "authentication", "limit": 10})
-        assert "`authentication`" in result
-        assert "`10`" in result
+        assert "query: `authentication`" in result
+        assert "limit: `10`" in result
 
     def test_skips_long_strings(self):
         from chicane.handlers import _summarize_tool_input
@@ -2879,8 +2879,8 @@ class TestSummarizeToolInput:
     def test_skips_nested_objects(self):
         from chicane.handlers import _summarize_tool_input
         result = _summarize_tool_input({"nested": {"a": 1}, "name": "test"})
-        assert "`test`" in result
-        assert "nested" not in result
+        assert "name: `test`" in result
+        assert "nested: " not in result
 
     def test_empty_input(self):
         from chicane.handlers import _summarize_tool_input
@@ -2889,7 +2889,7 @@ class TestSummarizeToolInput:
     def test_bool_values(self):
         from chicane.handlers import _summarize_tool_input
         result = _summarize_tool_input({"include_tests": True})
-        assert "`true`" in result
+        assert "include_tests: `true`" in result
 
     def test_respects_max_len(self):
         from chicane.handlers import _summarize_tool_input
@@ -2923,7 +2923,7 @@ class TestCatchAllToolDisplay:
         activities = _format_tool_activity(event)
         assert len(activities) == 1
         assert "magaldi: Pattern Search" in activities[0]
-        assert "`def main`" in activities[0]
+        assert "pattern: `def main`" in activities[0]
 
     def test_unknown_tool_no_args(self):
         event = ClaudeEvent(
