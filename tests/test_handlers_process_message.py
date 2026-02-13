@@ -151,7 +151,8 @@ class TestProcessMessageEdgeCases:
         assert "stream exploded" in error_update.kwargs["text"]
 
     @pytest.mark.asyncio
-    async def test_long_response_split_into_chunks(self, config, sessions):
+    async def test_long_response_uploaded_as_snippet(self, config, sessions):
+        """Responses exceeding SNIPPET_THRESHOLD are uploaded as a file snippet."""
         long_text = "a" * 8000
 
         async def fake_stream(prompt):
@@ -167,7 +168,39 @@ class TestProcessMessageEdgeCases:
             event = {"ts": "5004.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
+        # Placeholder updated to indicate snippet
         assert client.chat_update.called
+        update_text = client.chat_update.call_args.kwargs["text"]
+        assert "snippet" in update_text.lower()
+
+        # Snippet uploaded via files_upload_v2
+        client.files_upload_v2.assert_called_once()
+        upload_kwargs = client.files_upload_v2.call_args.kwargs
+        assert upload_kwargs["content"] == long_text
+        assert upload_kwargs["channel"] == "C_CHAN"
+
+    @pytest.mark.asyncio
+    async def test_moderate_response_split_into_chunks(self, config, sessions):
+        """Responses between SLACK_MAX_LENGTH and SNIPPET_THRESHOLD still chunk."""
+        # 3950 chars: above SLACK_MAX_LENGTH (3900) but below SNIPPET_THRESHOLD (4000)
+        text = "a" * 3950
+
+        async def fake_stream(prompt):
+            yield make_event("result", text=text)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "5004.1", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions)
+
+        # Should be split into 2 messages, not uploaded as snippet
+        assert client.chat_update.called
+        client.files_upload_v2.assert_not_called()
         assert client.chat_postMessage.call_count >= 2
 
     @pytest.mark.asyncio

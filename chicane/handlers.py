@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 # Max message length for Slack
 SLACK_MAX_LENGTH = 3900
 
+# Threshold above which we upload a snippet instead of splitting into
+# multiple messages.  Set slightly above SLACK_MAX_LENGTH so short
+# overflows still get a simple two-message split.
+SNIPPET_THRESHOLD = 4000
+
 # Max file size to download from Slack (10 MB)
 MAX_FILE_SIZE = 10 * 1024 * 1024
 
@@ -359,22 +364,33 @@ async def _process_message(
 
         # Final: send remaining text
         if full_text:
-            chunks = _split_message(_markdown_to_mrkdwn(full_text))
-            if first_activity:
-                # No tool activities were posted — update the placeholder
-                await client.chat_update(
-                    channel=channel, ts=message_ts, text=chunks[0],
-                )
-                for chunk in chunks[1:]:
-                    await client.chat_postMessage(
-                        channel=channel, thread_ts=thread_ts, text=chunk,
+            mrkdwn = _markdown_to_mrkdwn(full_text)
+
+            if len(mrkdwn) > SNIPPET_THRESHOLD:
+                # Long output → upload as a snippet file
+                if first_activity:
+                    await client.chat_update(
+                        channel=channel, ts=message_ts,
+                        text=":page_facing_up: Response uploaded as snippet (too long for a message).",
                     )
+                await _send_snippet(client, channel, thread_ts, full_text)
             else:
-                # Tool activities were posted — send text as thread replies
-                for chunk in chunks:
-                    await client.chat_postMessage(
-                        channel=channel, thread_ts=thread_ts, text=chunk,
+                chunks = _split_message(mrkdwn)
+                if first_activity:
+                    # No tool activities were posted — update the placeholder
+                    await client.chat_update(
+                        channel=channel, ts=message_ts, text=chunks[0],
                     )
+                    for chunk in chunks[1:]:
+                        await client.chat_postMessage(
+                            channel=channel, thread_ts=thread_ts, text=chunk,
+                        )
+                else:
+                    # Tool activities were posted — send text as thread replies
+                    for chunk in chunks:
+                        await client.chat_postMessage(
+                            channel=channel, thread_ts=thread_ts, text=chunk,
+                        )
         else:
             logger.warning(
                 f"Empty response from Claude: {event_count} events received, "
@@ -932,6 +948,29 @@ def _markdown_to_mrkdwn(text: str) -> str:
     text = re.sub(r"\x00PROTECTED(\d+)\x00", _restore, text)
 
     return text
+
+
+async def _send_snippet(
+    client: AsyncWebClient,
+    channel: str,
+    thread_ts: str,
+    text: str,
+    initial_comment: str = "",
+) -> None:
+    """Upload *text* as a Slack snippet file in the thread.
+
+    Uses ``files_upload_v2`` so the full content is viewable in Slack
+    without spamming multiple messages.
+    """
+    await client.files_upload_v2(
+        content=text,
+        filename="response.md",
+        snippet_type="markdown",
+        title="Full response",
+        channel=channel,
+        thread_ts=thread_ts,
+        initial_comment=initial_comment or None,
+    )
 
 
 def _split_message(text: str) -> list[str]:

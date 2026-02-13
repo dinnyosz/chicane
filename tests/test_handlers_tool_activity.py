@@ -436,7 +436,7 @@ class TestToolActivityStreaming:
         assert post_calls[3].kwargs["text"] == "Done editing."
 
     @pytest.mark.asyncio
-    async def test_long_text_with_activities_all_chunks_as_replies(
+    async def test_long_text_with_activities_uploaded_as_snippet(
         self, config, sessions
     ):
         long_text = "a" * 8000
@@ -457,14 +457,11 @@ class TestToolActivityStreaming:
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
-        post_calls = client.chat_postMessage.call_args_list
-        text_replies = [
-            c for c in post_calls[1:]
-            if not c.kwargs["text"].startswith(":")
-        ]
-        assert len(text_replies) >= 2
-        reassembled = "".join(c.kwargs["text"] for c in text_replies)
-        assert reassembled == long_text
+        # Long text should be uploaded as a snippet, not split into chunks
+        client.files_upload_v2.assert_called_once()
+        upload_kwargs = client.files_upload_v2.call_args.kwargs
+        assert upload_kwargs["content"] == long_text
+        assert upload_kwargs["channel"] == "C_CHAN"
 
 
 class TestToolErrorHandling:
