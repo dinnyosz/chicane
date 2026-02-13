@@ -186,6 +186,28 @@ class TestClaudeEvent:
         )
         assert event.tool_errors == []
 
+    def test_compact_metadata(self):
+        event = ClaudeEvent(
+            type="system",
+            raw={
+                "type": "system",
+                "subtype": "compact_boundary",
+                "compact_metadata": {
+                    "trigger": "auto",
+                    "pre_tokens": 95000,
+                },
+            },
+        )
+        assert event.subtype == "compact_boundary"
+        assert event.compact_metadata == {"trigger": "auto", "pre_tokens": 95000}
+
+    def test_compact_metadata_absent(self):
+        event = ClaudeEvent(
+            type="system",
+            raw={"type": "system", "subtype": "init", "session_id": "s1"},
+        )
+        assert event.compact_metadata is None
+
     def test_tool_errors_empty_when_no_errors(self):
         event = ClaudeEvent(
             type="user",

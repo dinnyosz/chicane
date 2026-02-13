@@ -2411,6 +2411,156 @@ class TestCompletionSummaryPosting:
         assert len(summary_calls) == 0
 
 
+class TestCompactBoundaryNotification:
+    """Test that context compaction events notify the user in Slack."""
+
+    @pytest.fixture
+    def config(self):
+        return Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+        )
+
+    @pytest.fixture
+    def sessions(self):
+        return SessionStore()
+
+    def _make_event(self, type: str, text: str = "", **kwargs) -> ClaudeEvent:
+        if type == "assistant":
+            raw = {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": text}]},
+                **kwargs,
+            }
+        elif type == "result":
+            raw = {"type": "result", "result": text, **kwargs}
+        else:
+            raw = {"type": type, **kwargs}
+        return ClaudeEvent(type=type, raw=raw)
+
+    def _mock_client(self):
+        client = AsyncMock()
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {"channel": {"name": "general"}}
+        return client
+
+    @pytest.mark.asyncio
+    async def test_auto_compaction_notifies_user(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_event("assistant", text="Working on it...")
+            yield self._make_event(
+                "system",
+                subtype="compact_boundary",
+                compact_metadata={"trigger": "auto", "pre_tokens": 95000},
+            )
+            yield self._make_event("assistant", text="Continuing after compaction.")
+            yield self._make_event("result", text="Continuing after compaction.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "12000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "big task", client, config, sessions)
+
+        brain_calls = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":brain:" in c.kwargs.get("text", "")
+        ]
+        assert len(brain_calls) == 1
+        msg = brain_calls[0].kwargs["text"]
+        assert "automatically compacted" in msg
+        assert "95,000 tokens" in msg
+        assert "earlier messages may be summarized" in msg
+
+    @pytest.mark.asyncio
+    async def test_manual_compaction_notifies_user(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_event(
+                "system",
+                subtype="compact_boundary",
+                compact_metadata={"trigger": "manual", "pre_tokens": 50000},
+            )
+            yield self._make_event("result", text="done")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "12001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "compact", client, config, sessions)
+
+        brain_calls = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":brain:" in c.kwargs.get("text", "")
+        ]
+        assert len(brain_calls) == 1
+        assert "manually compacted" in brain_calls[0].kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_compaction_without_pre_tokens(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_event(
+                "system",
+                subtype="compact_boundary",
+                compact_metadata={"trigger": "auto"},
+            )
+            yield self._make_event("result", text="done")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "12002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hi", client, config, sessions)
+
+        brain_calls = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":brain:" in c.kwargs.get("text", "")
+        ]
+        assert len(brain_calls) == 1
+        msg = brain_calls[0].kwargs["text"]
+        assert "tokens" not in msg
+        assert "earlier messages may be summarized" in msg
+
+    @pytest.mark.asyncio
+    async def test_compaction_without_metadata(self, config, sessions):
+        """Handle edge case where compact_metadata is missing entirely."""
+
+        async def fake_stream(prompt):
+            yield self._make_event(
+                "system",
+                subtype="compact_boundary",
+            )
+            yield self._make_event("result", text="done")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "12003.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hi", client, config, sessions)
+
+        brain_calls = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":brain:" in c.kwargs.get("text", "")
+        ]
+        assert len(brain_calls) == 1
+        assert "automatically compacted" in brain_calls[0].kwargs["text"]
+
+
 class TestSubagentPrefix:
     """Test that subagent activities get the hook prefix."""
 

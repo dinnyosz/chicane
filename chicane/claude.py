@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class ClaudeEvent:
     """A parsed event from Claude's stream-json output."""
 
-    type: str  # "system", "assistant", "result"
+    type: str  # "system", "assistant", "user", "result", "stream_event"
     raw: dict = field(repr=False)
 
     @property
@@ -53,6 +53,11 @@ class ClaudeEvent:
     @property
     def duration_ms(self) -> int | None:
         return self.raw.get("duration_ms")
+
+    @property
+    def compact_metadata(self) -> dict | None:
+        """Compaction info when subtype is 'compact_boundary'."""
+        return self.raw.get("compact_metadata")
 
     @property
     def parent_tool_use_id(self) -> str | None:

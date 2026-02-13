@@ -287,6 +287,21 @@ async def _process_message(
                         text=f":warning: Tool error: {truncated}",
                     )
 
+            elif event_data.type == "system" and event_data.subtype == "compact_boundary":
+                meta = event_data.compact_metadata or {}
+                trigger = meta.get("trigger", "auto")
+                pre_tokens = meta.get("pre_tokens")
+                if trigger == "auto":
+                    note = ":brain: Context was automatically compacted"
+                else:
+                    note = ":brain: Context was manually compacted"
+                if pre_tokens:
+                    note += f" ({pre_tokens:,} tokens before)"
+                note += " — earlier messages may be summarized"
+                await client.chat_postMessage(
+                    channel=channel, thread_ts=thread_ts, text=note,
+                )
+
             else:
                 logger.debug(f"Event type={event_data.type} subtype={event_data.subtype}")
 
