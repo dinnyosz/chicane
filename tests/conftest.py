@@ -2,7 +2,7 @@
 
 import asyncio
 import itertools
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -78,6 +78,12 @@ def mock_client():
     client = AsyncMock()
     client.chat_postMessage.return_value = {"ts": "9999.0"}
     client.conversations_info.return_value = {"channel": {"name": "general"}}
+    # Support the 3-step file upload flow used by _send_snippet.
+    client.files_getUploadURLExternal.return_value = {
+        "upload_url": "https://files.slack.com/upload/v1/fake",
+        "file_id": "F_FAKE",
+    }
+    client.files_completeUploadExternal.return_value = {"ok": True}
     return client
 
 
@@ -99,16 +105,49 @@ def mock_session_info(mock_session):
     (with ``.session`` and ``.lock``), all handler tests that patch
     ``get_or_create`` need to return this wrapper.
 
-    Also configures the mock session with sensible defaults for the abort
-    mechanism so tests don't fail on the ``was_aborted`` / ``is_streaming``
+    Also configures the mock session with sensible defaults for the interrupt
+    mechanism so tests don't fail on the ``was_interrupted`` / ``is_streaming``
     checks introduced by the concurrency control.
     """
-    mock_session.was_aborted = False
+    mock_session.was_interrupted = False
     mock_session.is_streaming = False
+    mock_session.interrupt = AsyncMock()
     info = MagicMock()
     info.session = mock_session
     info.lock = asyncio.Lock()
     return info
+
+
+def _make_fake_http_session():
+    """Build a mock aiohttp.ClientSession that accepts PUT for snippet uploads."""
+    fake_resp = MagicMock()
+    fake_resp.raise_for_status = MagicMock()
+
+    class _FakeSession:
+        async def put(self, url, **kw):
+            return fake_resp
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            pass
+
+    return _FakeSession()
+
+
+@pytest.fixture(autouse=True)
+def _patch_snippet_io():
+    """Eliminate real I/O and sleeps from _send_snippet in all tests."""
+
+    async def _instant_sleep(_delay):
+        return
+
+    with (
+        patch("chicane.handlers.aiohttp.ClientSession", return_value=_make_fake_http_session()),
+        patch("chicane.handlers.asyncio.sleep", side_effect=_instant_sleep),
+    ):
+        yield
 
 
 def capture_app_handlers(mock_app):

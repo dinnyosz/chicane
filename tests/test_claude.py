@@ -719,29 +719,56 @@ class TestClaudeSessionDisconnect:
         session._client is None
         assert not session._connected
 
-    def test_kill_calls_interrupt(self):
+    @pytest.mark.asyncio
+    async def test_kill_calls_interrupt(self):
         session = ClaudeSession()
-        session._client = MagicMock()
-        session.kill()
-        session._client.interrupt.assert_called_once()
+        session._client = AsyncMock()
+        await session.kill()
+        session._client.interrupt.assert_awaited_once()
 
-    def test_kill_noop_when_no_client(self):
+    @pytest.mark.asyncio
+    async def test_kill_noop_when_no_client(self):
         session = ClaudeSession()
-        session.kill()  # Should not raise
+        await session.kill()  # Should not raise
 
-    def test_interrupt_when_streaming(self):
+    @pytest.mark.asyncio
+    async def test_interrupt_when_streaming(self):
         session = ClaudeSession()
-        session._client = MagicMock()
+        session._client = AsyncMock()
         session._is_streaming = True
-        session.interrupt()
-        session._client.interrupt.assert_called_once()
+        await session.interrupt()
+        session._client.interrupt.assert_awaited_once()
+        assert session.was_interrupted
 
-    def test_interrupt_noop_when_not_streaming(self):
+    @pytest.mark.asyncio
+    async def test_interrupt_noop_when_not_streaming(self):
         session = ClaudeSession()
-        session._client = MagicMock()
+        session._client = AsyncMock()
         session._is_streaming = False
-        session.interrupt()
-        session._client.interrupt.assert_not_called()
+        await session.interrupt()
+        session._client.interrupt.assert_not_awaited()
+        assert not session.was_interrupted
+
+    @pytest.mark.asyncio
+    async def test_was_interrupted_resets_on_stream(self):
+        from claude_agent_sdk import ResultMessage
+
+        messages = [
+            ResultMessage(subtype="success", duration_ms=100, duration_api_ms=90,
+                          is_error=False, num_turns=1, session_id="s1",
+                          total_cost_usd=None, usage=None, result="ok"),
+        ]
+        mock_client = _mock_sdk_client(messages)
+
+        session = ClaudeSession()
+        session._interrupted = True  # Set from a previous interrupt
+
+        with patch.object(session, "_ensure_connected", return_value=mock_client):
+            async for _ in session.stream("hello"):
+                pass
+
+        # stream() should have reset the flag
+        assert not session.was_interrupted
 
 
 class TestEnsureConnected:

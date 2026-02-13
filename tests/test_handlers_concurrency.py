@@ -31,7 +31,7 @@ class TestSessionLock:
         mock_session = MagicMock()
         mock_session.session_id = "s1"
         mock_session.is_streaming = False
-        mock_session.was_aborted = False
+        mock_session.was_interrupted = False
         mock_session.stream = slow_stream
 
         info = MagicMock()
@@ -75,7 +75,7 @@ class TestSessionLock:
         mock_session = MagicMock()
         mock_session.session_id = "s1"
         mock_session.is_streaming = False
-        mock_session.was_aborted = False
+        mock_session.was_interrupted = False
         mock_session.stream = recording_stream
 
         info = MagicMock()
@@ -109,7 +109,7 @@ class TestSessionLock:
         mock_session = MagicMock()
         mock_session.session_id = "s1"
         mock_session.is_streaming = False
-        mock_session.was_aborted = False
+        mock_session.was_interrupted = False
         mock_session.stream = fake_stream
 
         info = MagicMock()
@@ -150,7 +150,7 @@ class TestSessionLock:
         mock_session = MagicMock()
         mock_session.session_id = "s1"
         mock_session.is_streaming = False
-        mock_session.was_aborted = False
+        mock_session.was_interrupted = False
         mock_session.stream = sometimes_exploding_stream
 
         info = MagicMock()

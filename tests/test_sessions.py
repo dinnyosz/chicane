@@ -172,3 +172,49 @@ class TestSessionStore:
         s1 = store.get_or_create("thread-1", config)
         s2 = store.get_or_create("thread-2", config)
         assert s1.lock is not s2.lock
+
+    def test_get_returns_session(self, store, config):
+        info = store.get_or_create("thread-1", config)
+        assert store.get("thread-1") is info
+
+    def test_get_returns_none_for_unknown(self, store):
+        assert store.get("nonexistent") is None
+
+    def test_register_and_lookup_bot_message(self, store, config):
+        store.get_or_create("thread-1", config)
+        store.register_bot_message("msg-1", "thread-1")
+        store.register_bot_message("msg-2", "thread-1")
+        assert store.thread_for_message("msg-1") == "thread-1"
+        assert store.thread_for_message("msg-2") == "thread-1"
+        assert store.thread_for_message("msg-unknown") is None
+
+    def test_remove_cleans_up_message_entries(self, store, config):
+        store.get_or_create("thread-1", config)
+        store.register_bot_message("msg-1", "thread-1")
+        store.register_bot_message("msg-2", "thread-1")
+        store.remove("thread-1")
+        assert store.thread_for_message("msg-1") is None
+        assert store.thread_for_message("msg-2") is None
+
+    def test_cleanup_removes_orphaned_message_entries(self, store, config):
+        store.get_or_create("old-thread", config)
+        store.register_bot_message("msg-old", "old-thread")
+        store._sessions["old-thread"].last_used = datetime.now() - timedelta(hours=25)
+
+        store.get_or_create("new-thread", config)
+        store.register_bot_message("msg-new", "new-thread")
+
+        store.cleanup(max_age_hours=24)
+        assert store.thread_for_message("msg-old") is None
+        assert store.thread_for_message("msg-new") == "new-thread"
+
+    @pytest.mark.asyncio
+    async def test_shutdown_clears_message_entries(self, store, config):
+        from unittest.mock import AsyncMock
+        store.get_or_create("thread-1", config, cwd=Path("/tmp/a"))
+        store.register_bot_message("msg-1", "thread-1")
+        store._sessions["thread-1"].session.disconnect = AsyncMock()
+
+        await store.shutdown()
+
+        assert store.thread_for_message("msg-1") is None
