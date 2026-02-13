@@ -246,6 +246,42 @@ class TestClaudeEvent:
         )
         assert event.errors == []
 
+    def test_tool_errors_strips_html_entities_and_xml_tags(self):
+        event = ClaudeEvent(
+            type="user",
+            raw={
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "is_error": True,
+                            "content": "&lt;tool_use_error&gt;Sibling tool call errored&lt;/tool_use_error&gt;",
+                        }
+                    ]
+                },
+            },
+        )
+        assert event.tool_errors == ["Sibling tool call errored"]
+
+    def test_tool_errors_strips_raw_xml_tags(self):
+        event = ClaudeEvent(
+            type="user",
+            raw={
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "is_error": True,
+                            "content": "<tool_use_error>Something failed</tool_use_error>",
+                        }
+                    ]
+                },
+            },
+        )
+        assert event.tool_errors == ["Something failed"]
+
     def test_tool_errors_empty_when_no_errors(self):
         event = ClaudeEvent(
             type="user",

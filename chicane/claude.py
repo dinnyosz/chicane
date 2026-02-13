@@ -1,8 +1,10 @@
 """Claude Code CLI subprocess wrapper with streaming JSON support."""
 
 import asyncio
+import html
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncIterator
@@ -90,7 +92,13 @@ class ClaudeEvent:
                         p.get("text", "") for p in text if isinstance(p, dict)
                     )
                 if text:
-                    errors.append(text)
+                    # Unescape HTML entities (&lt; → <) and strip XML-like
+                    # wrapper tags (e.g. <tool_use_error>...</tool_use_error>)
+                    # so Slack output is clean.
+                    text = html.unescape(text)
+                    text = re.sub(r"</?[a-z_]+>", "", text).strip()
+                    if text:
+                        errors.append(text)
         return errors
 
 
