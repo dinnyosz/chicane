@@ -9,7 +9,6 @@ from platformdirs import user_cache_dir
 from slack_bolt.async_app import AsyncApp
 from slack_sdk.web.async_client import AsyncWebClient
 
-from .claude import ClaudeSession
 from .config import Config
 from .sessions import SessionInfo, SessionStore
 
@@ -339,15 +338,15 @@ async def _process_message(
                             tool_name = tool_id_to_name.get(tool_use_id, "")
                             if tool_name in _QUIET_TOOLS:
                                 continue
-                            # Upload long tool output as a snippet
-                            wrapped = f":clipboard: Tool output:\n```\n{result_text}\n```"
-                            if len(wrapped) > SNIPPET_THRESHOLD:
+                            # Upload long tool output as a snippet (>500 chars)
+                            if len(result_text) > 500:
                                 await _send_snippet(
                                     client, channel, thread_ts,
                                     result_text,
                                     initial_comment=":clipboard: Tool output (uploaded as snippet):",
                                 )
                             else:
+                                wrapped = f":clipboard: Tool output:\n```\n{result_text}\n```"
                                 await client.chat_postMessage(
                                     channel=channel,
                                     thread_ts=thread_ts,

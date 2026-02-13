@@ -446,7 +446,7 @@ class TestVerbosityFiltering:
         config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="verbose")
         sessions = SessionStore()
 
-        long_output = "x" * 5000
+        long_output = "x" * 501
 
         async def fake_stream(prompt):
             yield make_tool_event(tool_block("Bash", id="tu_bash_2", command="cat big.log"))
