@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import atexit
 import json
 import logging
 import os
@@ -25,6 +26,41 @@ from .sessions import SessionStore
 logger = logging.getLogger(__name__)
 
 PID_FILE = config_dir() / "chicane.pid"
+
+
+def save_terminal_state():
+    """Save terminal state and register cleanup for restore on any exit.
+
+    Returns the saved state, or None if not a tty / not supported.
+    Registers both an atexit handler and a SIGTERM handler so the
+    terminal is restored even when the process is killed.
+    """
+    if not sys.stdin.isatty():
+        return None
+    try:
+        import termios
+
+        fd = sys.stdin.fileno()
+        saved = termios.tcgetattr(fd)
+
+        def _restore_terminal(*_args):
+            try:
+                termios.tcsetattr(fd, termios.TCSANOW, saved)
+            except (OSError, termios.error):
+                pass
+
+        atexit.register(_restore_terminal)
+        signal.signal(signal.SIGTERM, lambda *a: (_restore_terminal(), sys.exit(143)))
+
+        # Fix ISIG right now in case it's already broken.
+        attrs = termios.tcgetattr(fd)
+        if not (attrs[3] & termios.ISIG):
+            attrs[3] |= termios.ISIG
+            termios.tcsetattr(fd, termios.TCSANOW, attrs)
+
+        return saved
+    except (ImportError, OSError):
+        return None
 
 
 def _acquire_pidfile() -> None:
@@ -357,6 +393,7 @@ def _run_detached() -> None:
 
 def main() -> None:
     """Sync entrypoint for the console script."""
+    save_terminal_state()
     parser = _build_parser()
     args = parser.parse_args()
 

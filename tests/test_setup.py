@@ -1,14 +1,15 @@
 """Tests for chicane.setup — the setup wizard."""
 
 import argparse
+import signal
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from chicane.app import save_terminal_state
 from chicane.setup import (
     _copy_to_clipboard,
-    _ensure_isig,
     _load_existing_env,
     _load_manifest,
     _parse_allowed_tools,
@@ -31,52 +32,78 @@ from chicane.setup import (
 )
 
 
-class TestEnsureIsig:
-    def test_enables_isig_when_disabled(self):
-        """_ensure_isig re-enables ISIG if it was cleared."""
+class TestSaveTerminalState:
+    def test_saves_and_fixes_isig_when_disabled(self):
+        """save_terminal_state enables ISIG and registers cleanup."""
         import termios
 
-        mock_attrs = [0, 0, 0, 0, 0, 0, []]  # lflag (index 3) = 0, ISIG not set
+        saved_attrs = [0, 0, 0, termios.ISIG, 0, 0, []]
+        broken_attrs = [0, 0, 0, 0, 0, 0, []]
+        # First call returns saved state, second returns broken state for fix
         with patch("sys.stdin") as mock_stdin, \
-             patch("termios.tcgetattr", return_value=mock_attrs) as mock_get, \
-             patch("termios.tcsetattr") as mock_set:
+             patch("termios.tcgetattr", side_effect=[saved_attrs, broken_attrs]), \
+             patch("termios.tcsetattr") as mock_set, \
+             patch("atexit.register") as mock_atexit, \
+             patch("chicane.app.signal.signal"):
             mock_stdin.isatty.return_value = True
             mock_stdin.fileno.return_value = 0
-            _ensure_isig()
-            mock_get.assert_called_once_with(0)
+            result = save_terminal_state()
+            assert result == saved_attrs
+            mock_atexit.assert_called_once()
+            # tcsetattr called to fix ISIG
             mock_set.assert_called_once()
-            # Verify ISIG was enabled in the attrs passed to tcsetattr
             set_attrs = mock_set.call_args[0][2]
             assert set_attrs[3] & termios.ISIG
 
-    def test_skips_when_isig_already_set(self):
-        """_ensure_isig does nothing if ISIG is already enabled."""
+    def test_skips_fix_when_isig_already_set(self):
+        """save_terminal_state doesn't touch termios if ISIG is fine."""
         import termios
 
-        mock_attrs = [0, 0, 0, termios.ISIG, 0, 0, []]
+        good_attrs = [0, 0, 0, termios.ISIG, 0, 0, []]
         with patch("sys.stdin") as mock_stdin, \
-             patch("termios.tcgetattr", return_value=mock_attrs), \
-             patch("termios.tcsetattr") as mock_set:
+             patch("termios.tcgetattr", return_value=good_attrs), \
+             patch("termios.tcsetattr") as mock_set, \
+             patch("atexit.register"), \
+             patch("chicane.app.signal.signal"):
             mock_stdin.isatty.return_value = True
             mock_stdin.fileno.return_value = 0
-            _ensure_isig()
+            result = save_terminal_state()
+            assert result == good_attrs
             mock_set.assert_not_called()
 
-    def test_skips_when_not_a_tty(self):
-        """_ensure_isig is a no-op when stdin is not a tty."""
+    def test_returns_none_when_not_a_tty(self):
+        """save_terminal_state returns None when stdin is not a tty."""
         with patch("sys.stdin") as mock_stdin, \
              patch("termios.tcgetattr") as mock_get:
             mock_stdin.isatty.return_value = False
-            _ensure_isig()
+            result = save_terminal_state()
+            assert result is None
             mock_get.assert_not_called()
 
     def test_handles_oserror_gracefully(self):
-        """_ensure_isig doesn't raise on OSError."""
+        """save_terminal_state returns None on OSError."""
         with patch("sys.stdin") as mock_stdin, \
              patch("termios.tcgetattr", side_effect=OSError):
             mock_stdin.isatty.return_value = True
             mock_stdin.fileno.return_value = 0
-            _ensure_isig()  # Should not raise
+            result = save_terminal_state()
+            assert result is None
+
+    def test_registers_sigterm_handler(self):
+        """save_terminal_state installs a SIGTERM handler."""
+        import termios
+
+        attrs = [0, 0, 0, termios.ISIG, 0, 0, []]
+        with patch("sys.stdin") as mock_stdin, \
+             patch("termios.tcgetattr", return_value=attrs), \
+             patch("termios.tcsetattr"), \
+             patch("atexit.register"), \
+             patch("chicane.app.signal.signal") as mock_signal:
+            mock_stdin.isatty.return_value = True
+            mock_stdin.fileno.return_value = 0
+            save_terminal_state()
+            mock_signal.assert_called_once()
+            assert mock_signal.call_args[0][0] == signal.SIGTERM
 
 
 class TestLoadManifest:

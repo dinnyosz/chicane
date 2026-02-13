@@ -453,30 +453,8 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
     path.write_text("\n".join(lines) + "\n")
 
 
-def _ensure_isig() -> None:
-    """Re-enable ISIG so Ctrl+C generates SIGINT.
-
-    Claude Code subprocesses (and some terminal emulators like iTerm2)
-    can leave the tty with ISIG disabled, causing ^C to echo literally
-    instead of raising KeyboardInterrupt.
-    """
-    if not sys.stdin.isatty():
-        return
-    try:
-        import termios
-
-        fd = sys.stdin.fileno()
-        attrs = termios.tcgetattr(fd)
-        if not (attrs[3] & termios.ISIG):
-            attrs[3] |= termios.ISIG
-            termios.tcsetattr(fd, termios.TCSANOW, attrs)
-    except (ImportError, OSError):
-        pass
-
-
 def setup_command(args) -> None:
     """Main setup wizard entrypoint."""
-    _ensure_isig()
     try:
         _run_wizard(args)
     except KeyboardInterrupt:
