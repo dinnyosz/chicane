@@ -102,8 +102,25 @@ class ClaudeEvent:
         return errors
 
     @property
-    def tool_results(self) -> list[str]:
-        """Extract output text from successful tool_result blocks in user events."""
+    def tool_use_ids(self) -> dict[str, str]:
+        """Map tool_use_id -> tool_name from tool_use blocks in assistant events."""
+        if self.type != "assistant":
+            return {}
+        message = self.raw.get("message", {})
+        content = message.get("content", [])
+        return {
+            block["id"]: block.get("name", "unknown")
+            for block in content
+            if block.get("type") == "tool_use" and "id" in block
+        }
+
+    @property
+    def tool_results(self) -> list[tuple[str, str]]:
+        """Extract (tool_use_id, text) from successful tool_result blocks.
+
+        Returns tuples so callers can correlate results back to the tool
+        that produced them via the tool_use_id.
+        """
         if self.type != "user":
             return []
         message = self.raw.get("message", {})
@@ -111,13 +128,14 @@ class ClaudeEvent:
         results = []
         for block in content:
             if block.get("type") == "tool_result" and not block.get("is_error"):
+                tool_use_id = block.get("tool_use_id", "")
                 text = block.get("content", "")
                 if isinstance(text, list):
                     text = "".join(
                         p.get("text", "") for p in text if isinstance(p, dict)
                     )
                 if text:
-                    results.append(text)
+                    results.append((tool_use_id, text))
         return results
 
 

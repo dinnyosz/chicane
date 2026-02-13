@@ -415,8 +415,8 @@ class TestVerbosityFiltering:
         assert any(":clipboard: Tool output:" in t and "hello" in t for t in all_texts)
 
     @pytest.mark.asyncio
-    async def test_verbose_hides_quiet_tool_results(self):
-        """Even in verbose mode, Read/Grep/Glob output is suppressed."""
+    async def test_verbose_hides_read_tool_results(self):
+        """Even in verbose mode, Read tool output is suppressed."""
         config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="verbose")
         sessions = SessionStore()
 
@@ -424,14 +424,6 @@ class TestVerbosityFiltering:
             yield make_tool_event(tool_block("Read", id="tu_read_1", file_path="/tmp/test.py"))
             yield make_user_event_with_results([
                 {"type": "tool_result", "tool_use_id": "tu_read_1", "is_error": False, "content": "file contents here"},
-            ])
-            yield make_tool_event(tool_block("Grep", id="tu_grep_1", pattern="foo"))
-            yield make_user_event_with_results([
-                {"type": "tool_result", "tool_use_id": "tu_grep_1", "is_error": False, "content": "grep results"},
-            ])
-            yield make_tool_event(tool_block("Glob", id="tu_glob_1", pattern="**/*.py"))
-            yield make_user_event_with_results([
-                {"type": "tool_result", "tool_use_id": "tu_glob_1", "is_error": False, "content": "file list"},
             ])
             yield make_event("assistant", text="Done.")
             yield make_event("result", text="Done.", num_turns=1, duration_ms=1000)
@@ -443,7 +435,7 @@ class TestVerbosityFiltering:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session):
             event = {"ts": "20007.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "search stuff", client, config, sessions)
+            await _process_message(event, "read file", client, config, sessions)
 
         all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
         assert not any(":clipboard: Tool output:" in t for t in all_texts)

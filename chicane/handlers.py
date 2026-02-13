@@ -25,6 +25,10 @@ MAX_FILE_SIZE = 10 * 1024 * 1024
 # Matches both plain  (session_id: uuid)  and Slack-italicised  _(session_id: uuid)_
 _HANDOFF_RE = re.compile(r"_?\(session_id:\s*([a-f0-9\-]+)\)_?\s*$")
 
+# Tools whose output is too noisy for Slack (file contents).
+# Their tool_result blocks are silently dropped even in verbose mode.
+_QUIET_TOOLS = frozenset({"Read"})
+
 
 def _should_show(event_type: str, verbosity: str) -> bool:
     """Check whether an event type should be displayed at the given verbosity level.
@@ -246,11 +250,15 @@ async def _process_message(
     first_activity = True  # track whether to update placeholder or post new
     result_event = None  # capture result event for completion summary
     git_committed = False  # track whether a git commit happened
+    tool_id_to_name: dict[str, str] = {}  # tool_use_id → tool name
 
     try:
         async for event_data in session.stream(prompt):
             event_count += 1
             if event_data.type == "assistant":
+                # Track tool_use_id → tool name so we can filter results later
+                tool_id_to_name.update(event_data.tool_use_ids)
+
                 # Flush any accumulated text before posting tool activity
                 # so the message order matches Claude Code console.
                 activities = _format_tool_activity(event_data)
@@ -316,9 +324,12 @@ async def _process_message(
                             text=f":warning: Tool error: {truncated}",
                         )
 
-                # Show tool outputs in verbose mode
+                # Show tool outputs in verbose mode (skip noisy tools)
                 if _should_show("tool_result", config.verbosity):
-                    for result_text in event_data.tool_results:
+                    for tool_use_id, result_text in event_data.tool_results:
+                        tool_name = tool_id_to_name.get(tool_use_id, "")
+                        if tool_name in _QUIET_TOOLS:
+                            continue
                         truncated = (result_text[:500] + "...") if len(result_text) > 500 else result_text
                         await client.chat_postMessage(
                             channel=channel,

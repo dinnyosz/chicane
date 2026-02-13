@@ -301,6 +301,42 @@ class TestClaudeEvent:
         assert event.tool_errors == []
 
 
+class TestToolUseIds:
+    def test_extracts_ids_from_assistant_event(self):
+        event = ClaudeEvent(
+            type="assistant",
+            raw={
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "tool_use", "id": "tu_1", "name": "Read", "input": {}},
+                        {"type": "text", "text": "hello"},
+                        {"type": "tool_use", "id": "tu_2", "name": "Bash", "input": {}},
+                    ]
+                },
+            },
+        )
+        assert event.tool_use_ids == {"tu_1": "Read", "tu_2": "Bash"}
+
+    def test_empty_for_non_assistant(self):
+        event = ClaudeEvent(type="user", raw={"type": "user", "message": {"content": []}})
+        assert event.tool_use_ids == {}
+
+    def test_skips_blocks_without_id(self):
+        event = ClaudeEvent(
+            type="assistant",
+            raw={
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "tool_use", "name": "Read", "input": {}},
+                    ]
+                },
+            },
+        )
+        assert event.tool_use_ids == {}
+
+
 class TestToolResults:
     def test_tool_results_from_user_event(self):
         event = ClaudeEvent(
@@ -309,14 +345,14 @@ class TestToolResults:
                 "type": "user",
                 "message": {
                     "content": [
-                        {"type": "tool_result", "is_error": False, "content": "file contents here"},
-                        {"type": "tool_result", "is_error": True, "content": "error msg"},
-                        {"type": "tool_result", "is_error": False, "content": "another result"},
+                        {"type": "tool_result", "tool_use_id": "tu_1", "is_error": False, "content": "file contents here"},
+                        {"type": "tool_result", "tool_use_id": "tu_2", "is_error": True, "content": "error msg"},
+                        {"type": "tool_result", "tool_use_id": "tu_3", "is_error": False, "content": "another result"},
                     ]
                 },
             },
         )
-        assert event.tool_results == ["file contents here", "another result"]
+        assert event.tool_results == [("tu_1", "file contents here"), ("tu_3", "another result")]
 
     def test_tool_results_with_list_content(self):
         event = ClaudeEvent(
@@ -327,6 +363,7 @@ class TestToolResults:
                     "content": [
                         {
                             "type": "tool_result",
+                            "tool_use_id": "tu_1",
                             "is_error": False,
                             "content": [
                                 {"type": "text", "text": "part 1"},
@@ -337,7 +374,7 @@ class TestToolResults:
                 },
             },
         )
-        assert event.tool_results == ["part 1 part 2"]
+        assert event.tool_results == [("tu_1", "part 1 part 2")]
 
     def test_tool_results_empty_for_non_user_event(self):
         event = ClaudeEvent(
@@ -353,7 +390,7 @@ class TestToolResults:
                 "type": "user",
                 "message": {
                     "content": [
-                        {"type": "tool_result", "is_error": False, "content": ""},
+                        {"type": "tool_result", "tool_use_id": "tu_1", "is_error": False, "content": ""},
                     ]
                 },
             },
