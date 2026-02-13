@@ -155,12 +155,15 @@ async def start(config: Config | None = None) -> None:
 
         await stop.wait()
 
-        # Cancel the watchdog and restore original terminal settings.
+        # Cancel the watchdog and restore terminal settings with ISIG
+        # guaranteed enabled so Ctrl+C works after shutdown.
         if _saved_termios is not None:
             isig_task.cancel()
             try:
                 import termios
-                termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, _saved_termios)
+                restored = list(_saved_termios)
+                restored[3] |= termios.ISIG
+                termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, restored)
             except (ImportError, OSError):
                 pass
         sessions.shutdown()
