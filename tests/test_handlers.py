@@ -14,6 +14,7 @@ from chicane.handlers import (
     _find_session_id_in_thread,
     _format_completion_summary,
     _format_tool_activity,
+    _has_git_commit,
     _HANDOFF_RE,
     _markdown_to_mrkdwn,
     _process_message,
@@ -3329,3 +3330,180 @@ class TestMarkdownToMrkdwn:
         result = _markdown_to_mrkdwn(text)
         # The whole fenced block is protected, so nothing inside changes
         assert "```\nuse `inline` here\n```" in result
+
+
+class TestHasGitCommit:
+    """Test _has_git_commit detection helper."""
+
+    def _make_tool_event(self, *tool_blocks) -> ClaudeEvent:
+        content = list(tool_blocks)
+        raw = {"type": "assistant", "message": {"content": content}}
+        return ClaudeEvent(type="assistant", raw=raw)
+
+    def _tool_block(self, name: str, **inputs) -> dict:
+        return {"type": "tool_use", "name": name, "input": inputs}
+
+    def test_simple_git_commit(self):
+        event = self._make_tool_event(
+            self._tool_block("Bash", command='git commit -m "fix bug"')
+        )
+        assert _has_git_commit(event) is True
+
+    def test_git_add_and_commit_chained(self):
+        event = self._make_tool_event(
+            self._tool_block("Bash", command='git add . && git commit -m "feat"')
+        )
+        assert _has_git_commit(event) is True
+
+    def test_git_commit_amend(self):
+        event = self._make_tool_event(
+            self._tool_block("Bash", command="git commit --amend --no-edit")
+        )
+        assert _has_git_commit(event) is True
+
+    def test_not_git_commit(self):
+        event = self._make_tool_event(
+            self._tool_block("Bash", command="git status")
+        )
+        assert _has_git_commit(event) is False
+
+    def test_non_bash_tool(self):
+        event = self._make_tool_event(
+            self._tool_block("Read", file_path="/src/app.py")
+        )
+        assert _has_git_commit(event) is False
+
+    def test_no_tool_blocks(self):
+        raw = {"type": "assistant", "message": {"content": [{"type": "text", "text": "hello"}]}}
+        event = ClaudeEvent(type="assistant", raw=raw)
+        assert _has_git_commit(event) is False
+
+    def test_multiple_blocks_one_is_commit(self):
+        event = self._make_tool_event(
+            self._tool_block("Bash", command="git add ."),
+            self._tool_block("Bash", command='git commit -m "done"'),
+        )
+        assert _has_git_commit(event) is True
+
+
+class TestGitCommitReaction:
+    """Test that a :package: emoji is added when a git commit happens."""
+
+    @pytest.fixture
+    def config(self):
+        return Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test")
+
+    @pytest.fixture
+    def sessions(self):
+        return SessionStore()
+
+    def _make_event(self, type: str, text: str = "", **kwargs) -> ClaudeEvent:
+        if type == "assistant":
+            raw = {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": text}]},
+                **kwargs,
+            }
+        elif type == "result":
+            raw = {"type": "result", "result": text, **kwargs}
+        else:
+            raw = {"type": type, **kwargs}
+        return ClaudeEvent(type=type, raw=raw)
+
+    def _make_tool_event(self, *tool_blocks, text: str = "") -> ClaudeEvent:
+        content = []
+        if text:
+            content.append({"type": "text", "text": text})
+        content.extend(tool_blocks)
+        raw = {"type": "assistant", "message": {"content": content}}
+        return ClaudeEvent(type="assistant", raw=raw)
+
+    def _tool_block(self, name: str, **inputs) -> dict:
+        return {"type": "tool_use", "name": name, "input": inputs}
+
+    def _mock_client(self):
+        client = AsyncMock()
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {"channel": {"name": "general"}}
+        return client
+
+    @pytest.mark.asyncio
+    async def test_git_commit_adds_package_reaction(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_tool_event(
+                self._tool_block("Bash", command='git commit -m "feat: add thing"')
+            )
+            yield self._make_event("assistant", text="Committed.")
+            yield self._make_event("result", text="Committed.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "commit it", client, config, sessions)
+
+        # Check that :package: was added
+        reaction_calls = [
+            c for c in client.reactions_add.call_args_list
+            if c.kwargs.get("name") == "package"
+        ]
+        assert len(reaction_calls) == 1
+        assert reaction_calls[0].kwargs["timestamp"] == "1000.0"
+
+    @pytest.mark.asyncio
+    async def test_no_git_commit_no_package_reaction(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_tool_event(
+                self._tool_block("Bash", command="pytest tests/")
+            )
+            yield self._make_event("assistant", text="Tests pass.")
+            yield self._make_event("result", text="Tests pass.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "run tests", client, config, sessions)
+
+        # No :package: reaction
+        reaction_calls = [
+            c for c in client.reactions_add.call_args_list
+            if c.kwargs.get("name") == "package"
+        ]
+        assert len(reaction_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_multiple_commits_only_one_reaction(self, config, sessions):
+        async def fake_stream(prompt):
+            yield self._make_tool_event(
+                self._tool_block("Bash", command='git commit -m "first"')
+            )
+            yield self._make_tool_event(
+                self._tool_block("Bash", command='git commit -m "second"')
+            )
+            yield self._make_event("assistant", text="Done.")
+            yield self._make_event("result", text="Done.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = self._mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "commit both", client, config, sessions)
+
+        reaction_calls = [
+            c for c in client.reactions_add.call_args_list
+            if c.kwargs.get("name") == "package"
+        ]
+        assert len(reaction_calls) == 1

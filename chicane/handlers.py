@@ -245,6 +245,7 @@ async def _process_message(
     event_count = 0
     first_activity = True  # track whether to update placeholder or post new
     result_event = None  # capture result event for completion summary
+    git_committed = False  # track whether a git commit happened
 
     try:
         async for event_data in session.stream(prompt):
@@ -279,6 +280,16 @@ async def _process_message(
                             await client.chat_postMessage(
                                 channel=channel, thread_ts=thread_ts, text=activity,
                             )
+
+                # Detect git commits from Bash tool use
+                if not git_committed and _has_git_commit(event_data):
+                    git_committed = True
+                    try:
+                        await client.reactions_add(
+                            channel=channel, name="package", timestamp=event["ts"],
+                        )
+                    except Exception:
+                        pass
 
                 # Accumulate text
                 chunk = event_data.text
@@ -635,6 +646,18 @@ async def _download_files(
                 logger.exception(f"Failed to download file {name}")
 
     return downloaded
+
+
+def _has_git_commit(event: ClaudeEvent) -> bool:
+    """Check if an assistant event contains a Bash tool_use running git commit."""
+    message = event.raw.get("message", {})
+    for block in message.get("content", []):
+        if block.get("type") != "tool_use" or block.get("name") != "Bash":
+            continue
+        cmd = block.get("input", {}).get("command", "")
+        if re.search(r"\bgit\s+commit\b", cmd):
+            return True
+    return False
 
 
 def _summarize_tool_input(tool_input: dict, max_params: int = 6) -> str:
