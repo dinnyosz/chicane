@@ -2170,8 +2170,7 @@ class TestFormatCompletionSummary:
             },
         )
         result = _format_completion_summary(event)
-        assert result == ":checkered_flag: 5 turns took 12s"
-        assert "$" not in result
+        assert result == ":checkered_flag: 5 turns took 12s · $0.03"
 
     def test_single_turn_with_duration(self):
         event = ClaudeEvent(
@@ -2184,7 +2183,7 @@ class TestFormatCompletionSummary:
             },
         )
         result = _format_completion_summary(event)
-        assert result == ":checkered_flag: 1 turn took 3s"
+        assert result == ":checkered_flag: 1 turn took 3s · $0.01"
 
     def test_long_duration_shows_minutes(self):
         event = ClaudeEvent(
@@ -2210,7 +2209,7 @@ class TestFormatCompletionSummary:
             },
         )
         result = _format_completion_summary(event)
-        assert result == ":x: 2 turns took 8s"
+        assert result == ":x: 2 turns took 8s · $0.05"
 
     def test_error_max_turns_subtype(self):
         event = ClaudeEvent(
@@ -2276,6 +2275,49 @@ class TestFormatCompletionSummary:
         )
         result = _format_completion_summary(event)
         assert result == ":checkered_flag: Done — 3 turns"
+
+    def test_cost_displayed_when_present(self):
+        """Cost is appended when total_cost_usd > 0 (API users only)."""
+        event = ClaudeEvent(
+            type="result",
+            raw={
+                "type": "result",
+                "num_turns": 8,
+                "duration_ms": 45000,
+                "total_cost_usd": 1.23,
+            },
+        )
+        result = _format_completion_summary(event)
+        assert result == ":checkered_flag: 8 turns took 45s · $1.23"
+
+    def test_cost_not_displayed_when_zero(self):
+        """Zero cost (CLI users) should not show cost."""
+        event = ClaudeEvent(
+            type="result",
+            raw={
+                "type": "result",
+                "num_turns": 3,
+                "duration_ms": 5000,
+                "total_cost_usd": 0.0,
+            },
+        )
+        result = _format_completion_summary(event)
+        assert result == ":checkered_flag: 3 turns took 5s"
+        assert "$" not in result
+
+    def test_cost_not_displayed_when_absent(self):
+        """No cost field (CLI users) should not show cost."""
+        event = ClaudeEvent(
+            type="result",
+            raw={
+                "type": "result",
+                "num_turns": 3,
+                "duration_ms": 5000,
+            },
+        )
+        result = _format_completion_summary(event)
+        assert result == ":checkered_flag: 3 turns took 5s"
+        assert "$" not in result
 
     def test_no_turns_returns_none(self):
         event = ClaudeEvent(

@@ -747,6 +747,11 @@ def _format_completion_summary(event: ClaudeEvent) -> str | None:
         if label:
             reason = f" ({label})"
 
+    # Cost reporting (tracked for all users — subscription and API)
+    cost = ""
+    if event.cost_usd is not None and event.cost_usd > 0:
+        cost = f" · ${event.cost_usd:.2f}"
+
     if event.duration_ms is not None:
         secs = event.duration_ms / 1000
         if secs >= 60:
@@ -755,8 +760,8 @@ def _format_completion_summary(event: ClaudeEvent) -> str | None:
             duration = f"{mins}m{remaining}s"
         else:
             duration = f"{int(secs)}s"
-        return f"{emoji} {turns} took {duration}{reason}"
-    return f"{emoji} Done — {turns}{reason}"
+        return f"{emoji} {turns} took {duration}{reason}{cost}"
+    return f"{emoji} Done — {turns}{reason}{cost}"
 
 
 def _split_message(text: str) -> list[str]:
