@@ -214,14 +214,6 @@ async def _process_message(
     )
     session = session_info.session
 
-    # If the session is already streaming (user sent a new message while
-    # Claude was thinking/working), abort the active stream so we can
-    # start fresh.  The previous _process_message task will detect the
-    # abort flag and clean up without posting final results.
-    if session.is_streaming:
-        logger.info(f"Aborting active stream for thread {thread_ts} — new message arrived")
-        session.abort()
-
     # On reconnect (no session_id found), fall back to rebuilding context
     # from Slack thread history.
     if is_reconnect:
@@ -373,30 +365,6 @@ async def _process_message(
                 else:
                     logger.debug(f"Event type={event_data.type} subtype={event_data.subtype}")
 
-            # -- Stream finished. Check if we were aborted by a newer message. --
-            if session.was_aborted:
-                logger.info(f"Stream aborted for thread {thread_ts}, skipping final posting")
-                # Delete the placeholder message — the newer task will post its own.
-                try:
-                    await client.chat_delete(channel=channel, ts=message_ts)
-                except Exception:
-                    # Fallback: update it instead (bots can't always delete)
-                    try:
-                        await client.chat_update(
-                            channel=channel, ts=message_ts,
-                            text=":fast_forward: Interrupted — processing new message...",
-                        )
-                    except Exception:
-                        pass
-                # Remove eyes reaction silently
-                try:
-                    await client.reactions_remove(
-                        channel=channel, name="eyes", timestamp=event["ts"],
-                    )
-                except Exception:
-                    pass
-                return
-
             # Final: send remaining text
             if full_text:
                 mrkdwn = _markdown_to_mrkdwn(full_text)
@@ -477,27 +445,6 @@ async def _process_message(
                 pass
 
         except Exception as exc:
-            # Don't post error messages for aborted streams
-            if session.was_aborted:
-                logger.info(f"Stream aborted (with exception) for thread {thread_ts}")
-                try:
-                    await client.chat_delete(channel=channel, ts=message_ts)
-                except Exception:
-                    try:
-                        await client.chat_update(
-                            channel=channel, ts=message_ts,
-                            text=":fast_forward: Interrupted — processing new message...",
-                        )
-                    except Exception:
-                        pass
-                try:
-                    await client.reactions_remove(
-                        channel=channel, name="eyes", timestamp=event["ts"],
-                    )
-                except Exception:
-                    pass
-                return
-
             logger.exception(f"Error processing message: {exc}")
             await client.chat_update(
                 channel=channel,
