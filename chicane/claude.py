@@ -271,6 +271,7 @@ class ClaudeSession:
         self._client: ClaudeSDKClient | None = None
         self._connected = False
         self._is_streaming = False
+        self._interrupted = False
 
     def _build_options(self) -> ClaudeAgentOptions:
         """Build SDK options from session config."""
@@ -317,10 +318,15 @@ class ClaudeSession:
     def is_streaming(self) -> bool:
         return self._is_streaming
 
-    def interrupt(self) -> None:
+    @property
+    def was_interrupted(self) -> bool:
+        return self._interrupted
+
+    async def interrupt(self) -> None:
         """Interrupt the current stream (sends interrupt signal via SDK)."""
         if self._client and self._is_streaming:
-            self._client.interrupt()
+            self._interrupted = True
+            await self._client.interrupt()
             logger.info("Interrupted active stream")
 
     async def stream(self, prompt: str) -> AsyncIterator[ClaudeEvent]:
@@ -332,6 +338,7 @@ class ClaudeSession:
         """
         client = await self._ensure_connected()
         self._is_streaming = True
+        self._interrupted = False
 
         event_count = 0
         try:
@@ -374,10 +381,10 @@ class ClaudeSession:
             self._client = None
             self._connected = False
 
-    def kill(self) -> None:
+    async def kill(self) -> None:
         """Kill the active session. For backward compatibility."""
         if self._client:
             try:
-                self._client.interrupt()
+                await self._client.interrupt()
             except Exception:
                 pass
