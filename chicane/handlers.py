@@ -19,6 +19,47 @@ logger = logging.getLogger(__name__)
 # Max message length for Slack
 SLACK_MAX_LENGTH = 3900
 
+
+# ---------------------------------------------------------------------------
+# Thread-root reaction helpers — track state in SessionInfo to skip no-ops
+# ---------------------------------------------------------------------------
+
+
+async def _add_thread_reaction(
+    client: AsyncWebClient,
+    channel: str,
+    session_info: SessionInfo,
+    name: str,
+) -> None:
+    """Add a reaction to the thread root, skipping if already present."""
+    if name in session_info.thread_reactions:
+        return
+    try:
+        await client.reactions_add(
+            channel=channel, name=name, timestamp=session_info.thread_ts,
+        )
+        session_info.thread_reactions.add(name)
+    except Exception:
+        pass
+
+
+async def _remove_thread_reaction(
+    client: AsyncWebClient,
+    channel: str,
+    session_info: SessionInfo,
+    name: str,
+) -> None:
+    """Remove a reaction from the thread root, skipping if not present."""
+    if name not in session_info.thread_reactions:
+        return
+    try:
+        await client.reactions_remove(
+            channel=channel, name=name, timestamp=session_info.thread_ts,
+        )
+        session_info.thread_reactions.discard(name)
+    except Exception:
+        session_info.thread_reactions.discard(name)
+
 # Threshold above which we upload a snippet instead of splitting into
 # multiple messages.  Set slightly above SLACK_MAX_LENGTH so short
 # overflows still get a simple two-message split.
@@ -220,24 +261,6 @@ async def _process_message(
     except Exception:
         pass  # Reaction may already exist or we lack permission
 
-    # Thread-root status: clear any previous state → add eyes so the channel
-    # list shows this thread is actively being worked on.
-    if thread_ts != event["ts"]:
-        for old_emoji in ("white_check_mark", "x", "octagonal_sign",
-                         "speech_balloon", "warning", "zap", "hourglass"):
-            try:
-                await client.reactions_remove(
-                    channel=channel, name=old_emoji, timestamp=thread_ts
-                )
-            except Exception:
-                pass
-        try:
-            await client.reactions_add(
-                channel=channel, name="eyes", timestamp=thread_ts
-            )
-        except Exception:
-            pass
-
     # Resolve working directory from channel name
     cwd = await _resolve_channel_cwd(channel, client, config)
 
@@ -268,6 +291,14 @@ async def _process_message(
         session_id=handoff_session_id,
     )
     session = session_info.session
+
+    # Thread-root status: clear any previous state → add eyes so the channel
+    # list shows this thread is actively being worked on.
+    if thread_ts != event["ts"]:
+        for old_emoji in ("white_check_mark", "x", "octagonal_sign",
+                         "speech_balloon", "warning", "hourglass"):
+            await _remove_thread_reaction(client, channel, session_info, old_emoji)
+        await _add_thread_reaction(client, channel, session_info, "eyes")
 
     # On reconnect (no session_id found), fall back to rebuilding context
     # from Slack thread history.
@@ -319,24 +350,14 @@ async def _process_message(
 
     # Show hourglass on thread root while waiting for the lock
     if queued:
-        try:
-            await client.reactions_add(
-                channel=channel, name="hourglass", timestamp=thread_ts,
-            )
-        except Exception:
-            pass
+        await _add_thread_reaction(client, channel, session_info, "hourglass")
 
     # Stream Claude's response — hold the session lock so only one
     # _process_message streams at a time per thread.
     async with session_info.lock:
         # Clear hourglass now that we have the lock
         if queued:
-            try:
-                await client.reactions_remove(
-                    channel=channel, name="hourglass", timestamp=thread_ts,
-                )
-            except Exception:
-                pass
+            await _remove_thread_reaction(client, channel, session_info, "hourglass")
         full_text = ""
         event_count = 0
         first_activity = True  # track whether to update placeholder or post new
@@ -344,19 +365,6 @@ async def _process_message(
         git_committed = False  # track whether a git commit happened (since last edit)
         files_changed = False  # track uncommitted file changes
         tool_id_to_name: dict[str, str] = {}  # tool_use_id → tool name
-
-        # Background task: after 60s of streaming, add :zap: to thread root
-        # to signal "still going, be patient".
-        async def _long_running_indicator():
-            await asyncio.sleep(60)
-            try:
-                await client.reactions_add(
-                    channel=channel, name="zap", timestamp=thread_ts,
-                )
-            except Exception:
-                pass
-
-        zap_task = asyncio.create_task(_long_running_indicator())
 
         try:
             async for event_data in session.stream(prompt):
@@ -400,53 +408,35 @@ async def _process_message(
                     # Detect file edits — add pencil reaction to thread root
                     if not files_changed and _has_file_edit(event_data):
                         files_changed = True
-                        try:
-                            await client.reactions_add(
-                                channel=channel, name="pencil2", timestamp=thread_ts,
-                            )
-                        except Exception:
-                            pass
+                        await _add_thread_reaction(client, channel, session_info, "pencil2")
                         # Remove package if editing after a commit (uncommitted changes again)
                         if git_committed:
                             git_committed = False
-                            try:
-                                await client.reactions_remove(
-                                    channel=channel, name="package", timestamp=thread_ts,
-                                )
-                            except Exception:
-                                pass
+                            await _remove_thread_reaction(client, channel, session_info, "package")
 
                     # Detect git commits from Bash tool use
                     if _has_git_commit(event_data):
                         # Remove pencil reaction — changes are committed
                         if files_changed:
                             files_changed = False
-                            try:
-                                await client.reactions_remove(
-                                    channel=channel, name="pencil2", timestamp=thread_ts,
-                                )
-                            except Exception:
-                                pass
+                            await _remove_thread_reaction(client, channel, session_info, "pencil2")
                         # Add package reaction (only if not already showing)
                         if not git_committed:
                             git_committed = True
-                            for ts in dict.fromkeys([thread_ts, event["ts"]]):
+                            session_info.total_commits += 1
+                            await _add_thread_reaction(client, channel, session_info, "package")
+                            # Also add to user's message (not tracked)
+                            if event["ts"] != thread_ts:
                                 try:
                                     await client.reactions_add(
-                                        channel=channel, name="package", timestamp=ts,
+                                        channel=channel, name="package", timestamp=event["ts"],
                                     )
                                 except Exception:
                                     pass
 
                     # Detect AskUserQuestion — add speech balloon to thread root
                     if _has_question(event_data):
-                        try:
-                            await client.reactions_add(
-                                channel=channel, name="speech_balloon",
-                                timestamp=thread_ts,
-                            )
-                        except Exception:
-                            pass
+                        await _add_thread_reaction(client, channel, session_info, "speech_balloon")
 
                     # Accumulate text
                     chunk = event_data.text
@@ -513,9 +503,6 @@ async def _process_message(
                 else:
                     logger.debug(f"Event type={event_data.type} subtype={event_data.subtype}")
 
-            # Cancel the long-running indicator task
-            zap_task.cancel()
-
             # Handle interrupted stream — skip normal completion flow
             if session.was_interrupted:
                 if session.interrupt_source == "new_message":
@@ -576,21 +563,11 @@ async def _process_message(
                         )
                     except Exception:
                         pass
-                    # Thread-root: swap eyes/zap/speech_balloon → stop sign
+                    # Thread-root: swap eyes/speech_balloon → stop sign
                     if thread_ts != event["ts"]:
-                        for int_emoji in ("eyes", "speech_balloon", "zap"):
-                            try:
-                                await client.reactions_remove(
-                                    channel=channel, name=int_emoji, timestamp=thread_ts
-                                )
-                            except Exception:
-                                pass
-                        try:
-                            await client.reactions_add(
-                                channel=channel, name="octagonal_sign", timestamp=thread_ts
-                            )
-                        except Exception:
-                            pass
+                        for int_emoji in ("eyes", "speech_balloon"):
+                            await _remove_thread_reaction(client, channel, session_info, int_emoji)
+                        await _add_thread_reaction(client, channel, session_info, "octagonal_sign")
                 return
 
             # Final: send remaining text
@@ -661,12 +638,7 @@ async def _process_message(
                         channel=channel, thread_ts=thread_ts, text=note,
                     )
                     # Thread-root: :warning: signals "completed but something was blocked"
-                    try:
-                        await client.reactions_add(
-                            channel=channel, name="warning", timestamp=thread_ts,
-                        )
-                    except Exception:
-                        pass
+                    await _add_thread_reaction(client, channel, session_info, "warning")
 
             # Swap eyes for checkmark on the user's message
             try:
@@ -682,22 +654,11 @@ async def _process_message(
             # Thread-root status: swap eyes → checkmark so the channel list
             # shows this thread has new results to review.
             if thread_ts != event["ts"]:
-                for done_emoji in ("eyes", "speech_balloon", "zap"):
-                    try:
-                        await client.reactions_remove(
-                            channel=channel, name=done_emoji, timestamp=thread_ts
-                        )
-                    except Exception:
-                        pass
-                try:
-                    await client.reactions_add(
-                        channel=channel, name="white_check_mark", timestamp=thread_ts
-                    )
-                except Exception:
-                    pass
+                for done_emoji in ("eyes", "speech_balloon"):
+                    await _remove_thread_reaction(client, channel, session_info, done_emoji)
+                await _add_thread_reaction(client, channel, session_info, "white_check_mark")
 
         except Exception as exc:
-            zap_task.cancel()
             logger.exception(f"Error processing message: {exc}")
             try:
                 await client.chat_update(
@@ -717,21 +678,11 @@ async def _process_message(
                 )
             except Exception:
                 pass
-            # Thread-root status: swap eyes/zap/speech_balloon → x on error
+            # Thread-root status: swap eyes/speech_balloon → x on error
             if thread_ts != event["ts"]:
-                for err_emoji in ("eyes", "speech_balloon", "zap"):
-                    try:
-                        await client.reactions_remove(
-                            channel=channel, name=err_emoji, timestamp=thread_ts
-                        )
-                    except Exception:
-                        pass
-                try:
-                    await client.reactions_add(
-                        channel=channel, name="x", timestamp=thread_ts
-                    )
-                except Exception:
-                    pass
+                for err_emoji in ("eyes", "speech_balloon"):
+                    await _remove_thread_reaction(client, channel, session_info, err_emoji)
+                await _add_thread_reaction(client, channel, session_info, "x")
 
 
 async def _fetch_thread_history(

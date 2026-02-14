@@ -10,7 +10,6 @@ visible from the channel's message list:
   :speech_balloon:   — Claude is asking the user a question
   :hourglass:        — message queued behind active stream lock
   :warning:          — completed but permissions were denied
-  :zap:              — long-running task (>60s)
 
 Transitions:
   new message → clear old state, add :eyes:
@@ -20,7 +19,6 @@ Transitions:
   question    → add :speech_balloon: (alongside :eyes:)
   queued      → add :hourglass: while waiting for lock
   denials     → add :warning: alongside :white_check_mark:
-  long run    → add :zap: after 60s
 
 These reactions only apply when thread_ts != event["ts"] (follow-up messages
 in an existing thread). For the first message, the per-message reactions serve
@@ -40,11 +38,6 @@ from tests.conftest import (
     mock_session_info,
     tool_block,
 )
-
-# Save a reference to the real asyncio.sleep before conftest patches it.
-# The conftest patches chicane.handlers.asyncio.sleep which mutates the
-# global asyncio module, so we need to capture the original here.
-_real_sleep = asyncio.sleep
 
 
 def _reactions_by_name(client: AsyncMock, method: str, name: str, ts: str) -> int:
@@ -128,8 +121,11 @@ class TestThreadRootClearsPreviousState:
         mock_session.session_id = "s1"
 
         client = mock_client()
+        info = mock_session_info(mock_session)
+        # Simulate that checkmark was left from a previous completion
+        info.thread_reactions.add("white_check_mark")
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+        with patch.object(sessions, "get_or_create", return_value=info):
             event = {
                 "ts": "2000.0",
                 "thread_ts": "1000.0",
@@ -151,8 +147,10 @@ class TestThreadRootClearsPreviousState:
         mock_session.session_id = "s1"
 
         client = mock_client()
+        info = mock_session_info(mock_session)
+        info.thread_reactions.add("x")
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+        with patch.object(sessions, "get_or_create", return_value=info):
             event = {
                 "ts": "2000.0",
                 "thread_ts": "1000.0",
@@ -174,8 +172,10 @@ class TestThreadRootClearsPreviousState:
         mock_session.session_id = "s1"
 
         client = mock_client()
+        info = mock_session_info(mock_session)
+        info.thread_reactions.add("octagonal_sign")
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+        with patch.object(sessions, "get_or_create", return_value=info):
             event = {
                 "ts": "2000.0",
                 "thread_ts": "1000.0",
@@ -197,8 +197,10 @@ class TestThreadRootClearsPreviousState:
         mock_session.session_id = "s1"
 
         client = mock_client()
+        info = mock_session_info(mock_session)
+        info.thread_reactions.add("speech_balloon")
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+        with patch.object(sessions, "get_or_create", return_value=info):
             event = {
                 "ts": "2000.0",
                 "thread_ts": "1000.0",
@@ -220,8 +222,10 @@ class TestThreadRootClearsPreviousState:
         mock_session.session_id = "s1"
 
         client = mock_client()
+        info = mock_session_info(mock_session)
+        info.thread_reactions.add("warning")
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+        with patch.object(sessions, "get_or_create", return_value=info):
             event = {
                 "ts": "2000.0",
                 "thread_ts": "1000.0",
@@ -232,28 +236,6 @@ class TestThreadRootClearsPreviousState:
 
         assert _reactions_by_name(client, "reactions_remove", "warning", "1000.0") >= 1
 
-    @pytest.mark.asyncio
-    async def test_zap_removed_on_new_message(self, config, sessions):
-        """Previous :zap: is removed when a new message arrives."""
-        async def fake_stream(prompt):
-            yield make_event("result", text="done")
-
-        mock_session = MagicMock()
-        mock_session.stream = fake_stream
-        mock_session.session_id = "s1"
-
-        client = mock_client()
-
-        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
-            event = {
-                "ts": "2000.0",
-                "thread_ts": "1000.0",
-                "channel": "C_CHAN",
-                "user": "UHUMAN1",
-            }
-            await _process_message(event, "retry", client, config, sessions)
-
-        assert _reactions_by_name(client, "reactions_remove", "zap", "1000.0") >= 1
 
 
 class TestThreadRootCheckmarkOnCompletion:
@@ -393,14 +375,11 @@ class TestThreadRootInterruptState:
         mock_session = MagicMock()
         mock_session.stream = fake_stream
         mock_session.session_id = "s1"
+
+        info = mock_session_info(mock_session)
+        # Override defaults *after* mock_session_info sets them
         mock_session.was_interrupted = True
         mock_session.interrupt_source = "reaction"
-        mock_session.is_streaming = False
-        mock_session.interrupt = AsyncMock()
-
-        info = MagicMock()
-        info.session = mock_session
-        info.lock = asyncio.Lock()
 
         client = mock_client()
 
@@ -583,9 +562,7 @@ class TestThreadRootHourglass:
         mock_session.interrupt_source = None
         mock_session.interrupt = AsyncMock()
 
-        info = MagicMock()
-        info.session = mock_session
-        info.lock = asyncio.Lock()
+        info = mock_session_info(mock_session)
 
         client = mock_client()
 
@@ -717,92 +694,3 @@ class TestThreadRootWarning:
 
         assert _reactions_by_name(client, "reactions_add", "warning", "1000.0") == 0
 
-
-# ---------------------------------------------------------------------------
-# :zap: — long-running task (>60s)
-# ---------------------------------------------------------------------------
-
-
-class TestThreadRootZap:
-    """Zap emoji for long-running tasks."""
-
-    @pytest.mark.asyncio
-    async def test_zap_added_after_timeout(self, config, sessions):
-        """After 60s the background task fires :zap: on thread root.
-
-        The conftest patches asyncio.sleep (globally) to be instant, so
-        the zap background task's 60s sleep resolves immediately. But we
-        need the stream to yield *real* control to the event loop so the
-        zap task actually runs — hence ``_real_sleep(0)``.
-        """
-        async def slow_stream(prompt):
-            # Real yield point lets the zap background task run
-            await _real_sleep(0)
-            yield make_event("result", text="done")
-
-        mock_session = MagicMock()
-        mock_session.stream = slow_stream
-        mock_session.session_id = "s1"
-
-        client = mock_client()
-
-        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
-            event = {
-                "ts": "2000.0",
-                "thread_ts": "1000.0",
-                "channel": "C_CHAN",
-                "user": "UHUMAN1",
-            }
-            await _process_message(event, "slow task", client, config, sessions)
-
-        assert _reactions_by_name(client, "reactions_add", "zap", "1000.0") >= 1
-
-    @pytest.mark.asyncio
-    async def test_zap_cleaned_up_on_completion(self, config, sessions):
-        """Zap reaction is removed during completion cleanup."""
-        async def slow_stream(prompt):
-            await _real_sleep(0)
-            yield make_event("result", text="done")
-
-        mock_session = MagicMock()
-        mock_session.stream = slow_stream
-        mock_session.session_id = "s1"
-
-        client = mock_client()
-
-        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
-            event = {
-                "ts": "2000.0",
-                "thread_ts": "1000.0",
-                "channel": "C_CHAN",
-                "user": "UHUMAN1",
-            }
-            await _process_message(event, "go", client, config, sessions)
-
-        assert _reactions_by_name(client, "reactions_remove", "zap", "1000.0") >= 1
-
-    @pytest.mark.asyncio
-    async def test_zap_task_cancelled_on_error(self, config, sessions):
-        """Zap background task is cancelled when an error occurs."""
-        async def exploding_stream(prompt):
-            yield make_event("system", subtype="init", session_id="s1")
-            raise RuntimeError("boom")
-
-        mock_session = MagicMock()
-        mock_session.stream = exploding_stream
-        mock_session.session_id = "s1"
-
-        client = mock_client()
-
-        # No errors should propagate from the cancelled zap task
-        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
-            event = {
-                "ts": "2000.0",
-                "thread_ts": "1000.0",
-                "channel": "C_CHAN",
-                "user": "UHUMAN1",
-            }
-            await _process_message(event, "fail", client, config, sessions)
-
-        # Error emoji should be on thread root, not zap
-        assert _reactions_by_name(client, "reactions_add", "x", "1000.0") >= 1

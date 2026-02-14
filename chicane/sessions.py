@@ -119,6 +119,16 @@ class SessionInfo:
     last_used: datetime = field(default_factory=datetime.now)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
+    # Thread-root reaction tracking — avoids redundant Slack API calls.
+    # Stores the set of emoji names currently on the thread root message.
+    thread_reactions: set[str] = field(default_factory=set)
+
+    # Cumulative session stats updated after each completion.
+    total_requests: int = 0
+    total_turns: int = 0
+    total_cost_usd: float = 0.0
+    total_commits: int = 0
+
     def touch(self) -> None:
         self.last_used = datetime.now()
 

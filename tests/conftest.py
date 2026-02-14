@@ -78,6 +78,10 @@ def mock_client():
     client = AsyncMock()
     client.chat_postMessage.return_value = {"ts": "9999.0"}
     client.conversations_info.return_value = {"channel": {"name": "general"}}
+    # conversations_replies / conversations_history used by reconnect scanning.
+    client.conversations_replies.return_value = {"messages": []}
+    client.conversations_history.return_value = {"messages": []}
+    client.auth_test.return_value = {"user_id": "UBOT"}
     # Support the 3-step file upload flow used by _send_snippet.
     client.files_getUploadURLExternal.return_value = {
         "upload_url": "https://files.slack.com/upload/v1/fake",
@@ -98,7 +102,7 @@ def make_user_event_with_results(results: list[dict]) -> ClaudeEvent:
     )
 
 
-def mock_session_info(mock_session):
+def mock_session_info(mock_session, thread_ts="1000.0"):
     """Wrap a mock ClaudeSession in a mock SessionInfo with a real asyncio.Lock.
 
     Since ``SessionStore.get_or_create`` now returns a ``SessionInfo`` object
@@ -116,6 +120,12 @@ def mock_session_info(mock_session):
     info = MagicMock()
     info.session = mock_session
     info.lock = asyncio.Lock()
+    info.thread_ts = thread_ts
+    info.thread_reactions = set()
+    info.total_requests = 0
+    info.total_turns = 0
+    info.total_cost_usd = 0.0
+    info.total_commits = 0
     return info
 
 
