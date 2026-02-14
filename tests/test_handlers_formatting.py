@@ -1,10 +1,13 @@
 """Tests for message formatting: split_message, markdown_to_mrkdwn, completion_summary."""
 
+from unittest.mock import MagicMock
+
 from chicane.claude import ClaudeEvent
 from chicane.handlers import (
     _format_completion_summary,
     _markdown_to_mrkdwn,
 )
+from chicane.sessions import SessionInfo
 
 
 class TestFormatCompletionSummary:
@@ -184,6 +187,63 @@ class TestFormatCompletionSummary:
             raw={"type": "result"},
         )
         assert _format_completion_summary(event) is None
+
+
+class TestCumulativeStats:
+    """Cumulative session stats appended after 1st request."""
+
+    def _make_session_info(self, requests=1, turns=0, cost=0.0):
+        mock_session = MagicMock()
+        info = MagicMock(spec=SessionInfo)
+        info.total_requests = requests
+        info.total_turns = turns
+        info.total_cost_usd = cost
+        info.total_commits = 0
+        return info
+
+    def test_no_stats_on_first_request(self):
+        """First request (total_requests=1) should not show cumulative stats."""
+        event = ClaudeEvent(
+            type="result",
+            raw={"type": "result", "num_turns": 5, "duration_ms": 12000, "total_cost_usd": 0.03},
+        )
+        info = self._make_session_info(requests=1, turns=5, cost=0.03)
+        result = _format_completion_summary(event, info)
+        assert ":bar_chart:" not in result
+
+    def test_stats_shown_on_second_request(self):
+        """After 2+ requests, cumulative stats line is appended."""
+        event = ClaudeEvent(
+            type="result",
+            raw={"type": "result", "num_turns": 3, "duration_ms": 8000, "total_cost_usd": 0.05},
+        )
+        info = self._make_session_info(requests=2, turns=8, cost=0.08)
+        result = _format_completion_summary(event, info)
+        assert ":bar_chart:" in result
+        assert "2 requests" in result
+        assert "8 turns total" in result
+        assert "$0.08 session total" in result
+
+    def test_stats_no_cost_when_zero(self):
+        """Cumulative cost is omitted when zero (CLI/subscription users)."""
+        event = ClaudeEvent(
+            type="result",
+            raw={"type": "result", "num_turns": 2, "duration_ms": 5000},
+        )
+        info = self._make_session_info(requests=3, turns=10, cost=0.0)
+        result = _format_completion_summary(event, info)
+        assert ":bar_chart:" in result
+        assert "3 requests" in result
+        assert "session total" not in result
+
+    def test_stats_not_shown_without_session_info(self):
+        """Without session_info, no cumulative stats line."""
+        event = ClaudeEvent(
+            type="result",
+            raw={"type": "result", "num_turns": 5, "duration_ms": 12000},
+        )
+        result = _format_completion_summary(event)
+        assert ":bar_chart:" not in result
 
 
 class TestMarkdownToMrkdwn:

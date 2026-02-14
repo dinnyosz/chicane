@@ -813,3 +813,75 @@ class TestThreadRootQuestionCompletion:
         # speech_balloon from previous turn should be removed during cleanup
         assert _reactions_by_name(client, "reactions_remove", "speech_balloon", "1000.0") >= 1
 
+
+# ---------------------------------------------------------------------------
+# Cumulative session stats — tracked per request
+# ---------------------------------------------------------------------------
+
+
+class TestCumulativeStatsAccumulation:
+    """Stats (requests, turns, cost) accumulate across multiple messages."""
+
+    @pytest.mark.asyncio
+    async def test_stats_updated_on_completion(self, config, sessions):
+        """total_requests, total_turns, total_cost_usd are updated from result event."""
+        async def fake_stream(prompt):
+            yield make_event("result", text="done", num_turns=5, duration_ms=8000,
+                             total_cost_usd=0.10)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        info = mock_session_info(mock_session)
+
+        with patch.object(sessions, "get_or_create", return_value=info):
+            event = {
+                "ts": "2000.0",
+                "thread_ts": "1000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event, "do stuff", client, config, sessions)
+
+        assert info.total_requests == 1
+        assert info.total_turns == 5
+        assert info.total_cost_usd == 0.10
+
+    @pytest.mark.asyncio
+    async def test_stats_accumulate_across_requests(self, config, sessions):
+        """Running two messages accumulates stats."""
+        call_count = 0
+
+        async def fake_stream(prompt):
+            nonlocal call_count
+            call_count += 1
+            turns = 5 if call_count == 1 else 3
+            cost = 0.10 if call_count == 1 else 0.05
+            yield make_event("result", text="done", num_turns=turns,
+                             duration_ms=8000, total_cost_usd=cost)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        info = mock_session_info(mock_session)
+
+        with patch.object(sessions, "get_or_create", return_value=info):
+            for i in range(2):
+                event = {
+                    "ts": f"200{i}.0",
+                    "thread_ts": "1000.0",
+                    "channel": "C_CHAN",
+                    "user": "UHUMAN1",
+                }
+                await _process_message(event, f"msg {i}", client, config, sessions)
+
+        assert info.total_requests == 2
+        assert info.total_turns == 8
+        assert abs(info.total_cost_usd - 0.15) < 0.001
+

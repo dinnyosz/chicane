@@ -617,9 +617,15 @@ async def _process_message(
                     text=msg,
                 )
 
-            # Post completion summary from result event
+            # Update cumulative session stats and post completion summary
             if result_event:
-                summary = _format_completion_summary(result_event)
+                session_info.total_requests += 1
+                if result_event.num_turns is not None:
+                    session_info.total_turns += result_event.num_turns
+                if result_event.cost_usd is not None:
+                    session_info.total_cost_usd += result_event.cost_usd
+
+                summary = _format_completion_summary(result_event, session_info)
                 if summary:
                     await client.chat_postMessage(
                         channel=channel, thread_ts=thread_ts, text=summary,
@@ -1121,8 +1127,15 @@ _ERROR_SUBTYPE_LABELS = {
 }
 
 
-def _format_completion_summary(event: ClaudeEvent) -> str | None:
-    """Format a completion footer from a result event."""
+def _format_completion_summary(
+    event: ClaudeEvent,
+    session_info: SessionInfo | None = None,
+) -> str | None:
+    """Format a completion footer from a result event.
+
+    When *session_info* is provided and the session has handled more than one
+    request, a cumulative stats line is appended (total turns, cost, requests).
+    """
     if event.num_turns is None:
         return None
     turns = f"{event.num_turns} turn{'s' if event.num_turns != 1 else ''}"
@@ -1148,8 +1161,19 @@ def _format_completion_summary(event: ClaudeEvent) -> str | None:
             duration = f"{mins}m{remaining}s"
         else:
             duration = f"{int(secs)}s"
-        return f"{emoji} {turns} took {duration}{reason}{cost}"
-    return f"{emoji} Done — {turns}{reason}{cost}"
+        line = f"{emoji} {turns} took {duration}{reason}{cost}"
+    else:
+        line = f"{emoji} Done — {turns}{reason}{cost}"
+
+    # Append cumulative session stats after the 1st request
+    if session_info and session_info.total_requests > 1:
+        parts = [f"{session_info.total_requests} requests"]
+        parts.append(f"{session_info.total_turns} turns total")
+        if session_info.total_cost_usd > 0:
+            parts.append(f"${session_info.total_cost_usd:.2f} session total")
+        line += f"\n:bar_chart: {' · '.join(parts)}"
+
+    return line
 
 
 def _markdown_to_mrkdwn(text: str) -> str:
