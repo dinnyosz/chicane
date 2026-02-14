@@ -371,40 +371,34 @@ class TestConfigDir:
 
 
 class TestGenerateSessionAlias:
-    def test_returns_three_word_alias(self):
+    def test_returns_hyphenated_alias(self):
         from chicane.config import generate_session_alias
         alias = generate_session_alias()
         parts = alias.split("-")
-        assert len(parts) == 3
+        assert len(parts) >= 3
         assert all(part.isalpha() for part in parts)
 
     def test_avoids_collision_with_existing(self, tmp_path, monkeypatch):
-        from chicane.config import (
-            _HANDOFF_MAP_FILE,
-            _random_alias,
-            generate_session_alias,
-            save_handoff_session,
-        )
-        # Point the map file to a temp location
+        from coolname import generate as real_generate
+        from chicane.config import generate_session_alias, save_handoff_session
         map_file = tmp_path / "handoff_sessions.json"
         monkeypatch.setattr("chicane.config._HANDOFF_MAP_FILE", map_file)
 
         # Pre-fill the map with a known alias
-        first = _random_alias()
+        first = generate_session_alias()
         save_handoff_session(first, "existing-session-id")
 
-        # Patch _random_alias to return the colliding name first, then a fresh one
+        # Patch coolname.generate to return the colliding name first, then fresh
         call_count = 0
-        original = _random_alias
 
-        def _patched():
+        def _patched(n):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return first  # collision
-            return original()  # should be different
+                return first.split("-")  # collision
+            return real_generate(n)
 
-        monkeypatch.setattr("chicane.config._random_alias", _patched)
+        monkeypatch.setattr("coolname.generate", _patched)
         result = generate_session_alias()
         assert result != first
         assert call_count >= 2
@@ -414,8 +408,7 @@ class TestGenerateSessionAlias:
         map_file = tmp_path / "handoff_sessions.json"
         monkeypatch.setattr("chicane.config._HANDOFF_MAP_FILE", map_file)
 
-        # Make _random_alias always return the same thing
-        monkeypatch.setattr("chicane.config._random_alias", lambda: "same-alias-always")
+        monkeypatch.setattr("coolname.generate", lambda n: ["same", "alias", "always"])
         save_handoff_session("same-alias-always", "some-id")
 
         # Should still return after 50 retries (fallback)

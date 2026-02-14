@@ -76,7 +76,8 @@ MAX_FILE_SIZE = 10 * 1024 * 1024
 _HANDOFF_RE = re.compile(r"_?\(session_id:\s*([a-f0-9\-]+)\)_?\s*$")
 
 # Regex for the new alias format: _(session: funky-name-here)_
-_SESSION_ALIAS_RE = re.compile(r"_?\(session:\s*([a-z]+-[a-z]+-[a-z]+)\)_?\s*$")
+# Coolname may produce 3+ words (e.g. "offbeat-grouse-of-plenty").
+_SESSION_ALIAS_RE = re.compile(r"_?\(session:\s*([a-z]+(?:-[a-z]+){2,})\)_?\s*$")
 
 # Tools whose output is too noisy for Slack (file contents).
 # Their tool_result blocks are silently dropped even in verbose mode.

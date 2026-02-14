@@ -3,7 +3,6 @@
 import json
 import logging
 import os
-import random
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -236,45 +235,18 @@ class Config:
 # Handoff session aliases — funky names that map to real session IDs
 # ---------------------------------------------------------------------------
 
-_ADJECTIVES = [
-    "wild", "lazy", "sneaky", "cosmic", "fuzzy", "grumpy", "bouncy", "turbo",
-    "mega", "hyper", "dizzy", "wobbly", "spicy", "sleepy", "zippy", "funky",
-    "jolly", "cheeky", "swift", "bold", "zany", "wacky", "peppy", "nerdy",
-    "goofy",
-]
-_ANIMALS = [
-    "monkey", "penguin", "octopus", "dragon", "panda", "llama", "walrus",
-    "badger", "falcon", "parrot", "koala", "sloth", "otter", "gecko", "moose",
-    "yak", "narwhal", "dingo", "toucan", "meerkat", "platypus", "lemur",
-    "puffin", "wombat", "axolotl",
-]
-_NOUNS = [
-    "banana", "rocket", "pizza", "taco", "waffle", "donut", "pretzel",
-    "muffin", "tornado", "comet", "ninja", "pirate", "wizard", "pickle",
-    "noodle", "biscuit", "pancake", "thunder", "volcano", "blizzard",
-    "cupcake", "burrito", "sushi", "nugget", "chimney",
-]
-
-
-def _random_alias() -> str:
-    """Return a single random adjective-animal-noun alias."""
-    return (
-        f"{random.choice(_ADJECTIVES)}-"
-        f"{random.choice(_ANIMALS)}-"
-        f"{random.choice(_NOUNS)}"
-    )
-
 
 def generate_session_alias() -> str:
-    """Generate a memorable alias like ``sneaky-octopus-pizza``.
+    """Generate a memorable alias like ``imposing-steadfast-meerkat``.
 
-    Retries until the alias doesn't collide with an existing handoff
-    mapping.  With ~15k combinations and a max of 200 stored sessions
-    this should almost never need more than one attempt.
+    Uses the ``coolname`` library (~295M 3-word combinations) and retries
+    until the alias doesn't collide with an existing handoff mapping.
     """
+    from coolname import generate as _coolname_generate
+
     existing = _load_handoff_map()
     for _ in range(50):
-        alias = _random_alias()
+        alias = "-".join(_coolname_generate(3))
         if alias not in existing:
             return alias
     # Extremely unlikely fallback — just return whatever we got

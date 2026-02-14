@@ -369,7 +369,7 @@ class TestProcessMessageEdgeCases:
             assert len(alias_posts) == 1
             alias_text = alias_posts[0].kwargs["text"]
             # Extract alias from the message
-            m = re.search(r"_([a-z]+-[a-z]+-[a-z]+)_", alias_text)
+            m = re.search(r"_([a-z]+(?:-[a-z]+){2,})_", alias_text)
             assert m, f"No alias found in: {alias_text}"
             alias = m.group(1)
 
