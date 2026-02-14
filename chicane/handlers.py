@@ -562,9 +562,12 @@ async def _process_message(
                                 )
 
                 elif event_data.type == "system" and event_data.subtype == "init":
-                    # New session started — save alias so it survives restarts
+                    # New session started — save alias so it survives restarts.
+                    # Only generate an alias on the *first* init event for this
+                    # session.  The SDK may emit init on every query() call, so
+                    # guard with session_alias to avoid overwriting.
                     sid = event_data.session_id
-                    if sid and not handoff_session_id:
+                    if sid and not handoff_session_id and not session_info.session_alias:
                         alias = generate_session_alias()
                         save_handoff_session(alias, sid)
                         session_info.session_alias = alias

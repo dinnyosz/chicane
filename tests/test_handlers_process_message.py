@@ -406,3 +406,60 @@ class TestProcessMessageEdgeCases:
                 if ":link:" in c.kwargs.get("text", "")
             ]
             assert len(alias_posts) == 0
+
+    @pytest.mark.asyncio
+    async def test_repeated_init_events_do_not_generate_new_alias(
+        self, config, sessions, tmp_path
+    ):
+        """When the SDK emits init on every query(), only the first should
+        generate an alias.  Regression test for duplicate session aliases."""
+
+        call_count = 0
+
+        async def fake_stream(prompt):
+            nonlocal call_count
+            call_count += 1
+            yield make_event("system", subtype="init", session_id="same-sess-id")
+            yield make_event("result", text=f"response {call_count}")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "same-sess-id"
+
+        client = mock_client()
+        info = mock_session_info(mock_session)
+
+        with (
+            patch("chicane.config._HANDOFF_MAP_FILE", tmp_path / "sessions.json"),
+            patch.object(sessions, "get_or_create", return_value=info),
+        ):
+            # First message — should generate alias
+            event1 = {"ts": "9200.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event1, "hello", client, config, sessions)
+
+            alias_posts_1 = [
+                c for c in client.chat_postMessage.call_args_list
+                if ":link:" in c.kwargs.get("text", "")
+            ]
+            assert len(alias_posts_1) == 1
+            first_alias = info.session_alias
+
+            client.reset_mock()
+            client.chat_postMessage.return_value = {"ts": "9999.0"}
+
+            # Second message in same session — should NOT generate a new alias
+            event2 = {
+                "ts": "9201.0",
+                "thread_ts": "9200.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event2, "follow up", client, config, sessions)
+
+            alias_posts_2 = [
+                c for c in client.chat_postMessage.call_args_list
+                if ":link:" in c.kwargs.get("text", "")
+            ]
+            assert len(alias_posts_2) == 0
+            # Alias should not have changed
+            assert info.session_alias == first_alias

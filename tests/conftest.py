@@ -124,6 +124,7 @@ def mock_session_info(mock_session, thread_ts="1000.0"):
     info.lock = asyncio.Lock()
     info.thread_ts = thread_ts
     info.thread_reactions = set()
+    info.session_alias = None
     info.total_requests = 0
     info.total_turns = 0
     info.total_cost_usd = 0.0
