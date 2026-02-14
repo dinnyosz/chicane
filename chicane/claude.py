@@ -257,6 +257,8 @@ class ClaudeSession:
         permission_mode: str = "default",
         system_prompt: str | None = None,
         allowed_tools: list[str] | None = None,
+        disallowed_tools: list[str] | None = None,
+        setting_sources: list[str] | None = None,
         max_turns: int | None = None,
         max_budget_usd: float | None = None,
     ):
@@ -266,6 +268,8 @@ class ClaudeSession:
         self.permission_mode = permission_mode
         self.system_prompt = system_prompt
         self.allowed_tools = allowed_tools or []
+        self.disallowed_tools = disallowed_tools or []
+        self.setting_sources = setting_sources or ["user", "project", "local"]
         self.max_turns = max_turns
         self.max_budget_usd = max_budget_usd
         self._client: ClaudeSDKClient | None = None
@@ -279,7 +283,8 @@ class ClaudeSession:
         opts = ClaudeAgentOptions(
             cwd=self.cwd,
             allowed_tools=list(self.allowed_tools),
-            setting_sources=["user", "project", "local"],
+            disallowed_tools=list(self.disallowed_tools),
+            setting_sources=list(self.setting_sources),
         )
 
         if self.session_id:

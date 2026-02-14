@@ -164,6 +164,8 @@ class SessionStore:
             model=config.claude_model,
             permission_mode=config.claude_permission_mode,
             allowed_tools=config.claude_allowed_tools,
+            disallowed_tools=config.claude_disallowed_tools,
+            setting_sources=config.claude_setting_sources,
             max_turns=config.claude_max_turns,
             max_budget_usd=config.claude_max_budget_usd,
             system_prompt=SLACK_SYSTEM_PROMPT,

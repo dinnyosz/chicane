@@ -24,10 +24,12 @@ from chicane.setup import (
     _step_app_token,
     _step_channel_dirs,
     _step_claude_model,
+    _step_disallowed_tools,
     _step_logging,
     _step_max_budget,
     _step_max_turns,
     _step_permission_mode,
+    _step_setting_sources,
     _step_verbosity,
     _write_env,
     setup_command,
@@ -555,6 +557,94 @@ class TestStepAllowedTools:
             assert _step_allowed_tools() == "Read"
 
 
+class TestStepDisallowedTools:
+    def test_no_defaults_done_immediately(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["d"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_disallowed_tools() == ""
+
+    def test_add_one_tool(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["a", "Bash", "d"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_disallowed_tools() == "Bash"
+
+    def test_add_multiple_tools(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["a", "Bash", "a", "WebFetch", "d"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_disallowed_tools() == "Bash,WebFetch"
+
+    def test_add_and_remove(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["a", "Bash", "a", "Edit", "r", "Bash", "d"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_disallowed_tools() == "Edit"
+
+    def test_existing_tools_kept(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["d"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_disallowed_tools("Bash,WebFetch") == "Bash,WebFetch"
+
+    def test_duplicate_not_added(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["a", "Bash", "a", "Bash", "d"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_disallowed_tools() == "Bash"
+
+    def test_remove_nonexistent(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["a", "Bash", "r", "Edit", "d"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_disallowed_tools() == "Bash"
+
+
+class TestStepSettingSources:
+    def test_default_all_sources(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["d"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_setting_sources() == "user,project,local"
+
+    def test_remove_one_source(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["r", "local", "d"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_setting_sources() == "user,project"
+
+    def test_remove_all_and_add_one(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["r", "user", "r", "project", "r", "local", "a", "project", "d"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_setting_sources() == "project"
+
+    def test_invalid_source_rejected(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["a", "global", "d"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_setting_sources() == "user,project,local"
+
+    def test_duplicate_not_added(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["a", "user", "d"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_setting_sources() == "user,project,local"
+
+    def test_existing_value_kept(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["d"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_setting_sources("user,project") == "user,project"
+
+    def test_remove_nonexistent(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["r", "nope", "d"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_setting_sources() == "user,project,local"
+
+
 class TestStepMaxTurns:
     def test_empty_returns_empty(self):
         with patch("chicane.setup.Prompt.ask", return_value=""), \
@@ -777,8 +867,8 @@ class TestSetupCommand:
 
     def test_fresh_setup_writes_env(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CHICANE_CONFIG_DIR", str(tmp_path))
-        # Prompt.ask: base dir, done(channels), done(users), model, permission, done(tools), max_turns, max_budget, log_dir, log_level, verbosity
-        prompt_values = ["", "d", "d", "", "", "d", "", "", "", "INFO", "normal"]
+        # Prompt.ask: base dir, done(channels), done(users), model, permission, done(tools), done(disallowed), done(sources), max_turns, max_budget, log_dir, log_level, verbosity
+        prompt_values = ["", "d", "d", "", "", "d", "d", "d", "", "", "", "INFO", "normal"]
         # console.input: press Enter (step1), bot token, app token
         input_values = [
             "",              # Step 1: press Enter
@@ -804,8 +894,8 @@ class TestSetupCommand:
         (tmp_path / ".env").write_text(
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nBASE_DIRECTORY=/old\n"
         )
-        # Prompt.ask: base dir (keep), done(channels), done(users), model, permission, done(tools), max_turns, max_budget, log_dir, log_level, verbosity
-        prompt_values = ["/old", "d", "d", "", "", "d", "", "", "", "INFO", "normal"]
+        # Prompt.ask: base dir (keep), done(channels), done(users), model, permission, done(tools), done(disallowed), done(sources), max_turns, max_budget, log_dir, log_level, verbosity
+        prompt_values = ["/old", "d", "d", "", "", "d", "d", "d", "", "", "", "INFO", "normal"]
         # Confirm.ask: skip step1=True
         confirm_values = [True]
         # console.input: bot token (empty=keep), app token (empty=keep)
@@ -832,8 +922,8 @@ class TestSetupCommand:
         (tmp_path / ".env").write_text(
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nCHANNEL_DIRS=old-proj\n"
         )
-        # Prompt.ask: base dir, add channels, done(users), model, permission, done(tools), max_turns, max_budget, log_dir, log_level, verbosity
-        prompt_values = ["", "a", "new-proj", "new-proj", "a", "extra", "extra", "d", "d", "", "", "d", "", "", "", "INFO", "normal"]
+        # Prompt.ask: base dir, add channels, done(users), model, permission, done(tools), done(disallowed), done(sources), max_turns, max_budget, log_dir, log_level, verbosity
+        prompt_values = ["", "a", "new-proj", "new-proj", "a", "extra", "extra", "d", "d", "", "", "d", "d", "d", "", "", "", "INFO", "normal"]
         # Confirm.ask: skip step1=True
         confirm_values = [True]
         # console.input: bot token override, app token keep
@@ -858,8 +948,8 @@ class TestSetupCommand:
 
     def test_token_validation_reprompts(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CHICANE_CONFIG_DIR", str(tmp_path))
-        # Prompt.ask: base dir, done (channels), done (users), model, permission, done (tools), max_turns, max_budget, log_dir, log_level, verbosity
-        prompt_values = ["", "d", "d", "", "", "d", "", "", "", "INFO", "normal"]
+        # Prompt.ask: base dir, done (channels), done (users), model, permission, done (tools), done(disallowed), done(sources), max_turns, max_budget, log_dir, log_level, verbosity
+        prompt_values = ["", "d", "d", "", "", "d", "d", "d", "", "", "", "INFO", "normal"]
         # console.input: press Enter (step1), bad bot, good bot, bad app, good app
         input_values = [
             "",              # Step 1: press Enter

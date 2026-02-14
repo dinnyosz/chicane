@@ -138,6 +138,59 @@ class TestConfig:
             Config.from_env()
 
 
+class TestDisallowedToolsConfig:
+    def test_disallowed_tools_from_env(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("CLAUDE_DISALLOWED_TOOLS", "Bash,WebFetch")
+        config = Config.from_env()
+        assert config.claude_disallowed_tools == ["Bash", "WebFetch"]
+
+    def test_disallowed_tools_default_empty(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.delenv("CLAUDE_DISALLOWED_TOOLS", raising=False)
+        config = Config.from_env()
+        assert config.claude_disallowed_tools == []
+
+    def test_disallowed_tools_whitespace(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("CLAUDE_DISALLOWED_TOOLS", " Bash , Edit(./secrets/**) ")
+        config = Config.from_env()
+        assert config.claude_disallowed_tools == ["Bash", "Edit(./secrets/**)"]
+
+
+class TestSettingSourcesConfig:
+    def test_setting_sources_from_env(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("CLAUDE_SETTING_SOURCES", "user,project")
+        config = Config.from_env()
+        assert config.claude_setting_sources == ["user", "project"]
+
+    def test_setting_sources_default_all(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.delenv("CLAUDE_SETTING_SOURCES", raising=False)
+        config = Config.from_env()
+        assert config.claude_setting_sources == ["user", "project", "local"]
+
+    def test_setting_sources_single(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("CLAUDE_SETTING_SOURCES", "local")
+        config = Config.from_env()
+        assert config.claude_setting_sources == ["local"]
+
+    def test_invalid_setting_source_rejected(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("CLAUDE_SETTING_SOURCES", "user,global")
+        with pytest.raises(ValueError, match="Invalid CLAUDE_SETTING_SOURCES"):
+            Config.from_env()
+
+
 class TestChannelDirs:
     def test_simple_channel_dirs(self, monkeypatch):
         monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")

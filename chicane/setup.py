@@ -139,7 +139,7 @@ def _show_channel_table(mappings: dict[str, str]) -> None:
 
 def _step_create_app(has_tokens: bool) -> None:
     """Step 1: Print manifest and wait for user to create the app."""
-    console.rule("Step 1 of 13: Create Slack App")
+    console.rule("Step 1 of 15: Create Slack App")
 
     if has_tokens:
         console.print("\n  Tokens found in config — Slack app likely already configured.")
@@ -171,7 +171,7 @@ def _step_create_app(has_tokens: bool) -> None:
 
 def _step_bot_token(default: str = "") -> str:
     """Step 2: Get Bot Token."""
-    console.rule("Step 2 of 13: Get Bot Token")
+    console.rule("Step 2 of 15: Get Bot Token")
 
     if default:
         console.print("\n  Bot token found in config. Press Enter to keep it,")
@@ -189,7 +189,7 @@ def _step_bot_token(default: str = "") -> str:
 
 def _step_app_token(default: str = "") -> str:
     """Step 3: Get App Token."""
-    console.rule("Step 3 of 13: Get App Token")
+    console.rule("Step 3 of 15: Get App Token")
 
     if default:
         console.print("\n  App token found in config. Press Enter to keep it,")
@@ -212,7 +212,7 @@ def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
 
     Returns (base_directory, channel_dirs_string).
     """
-    console.rule("Step 4 of 13: Directory Settings")
+    console.rule("Step 4 of 15: Directory Settings")
     console.print("\n  [yellow]Note:[/yellow] Chicane will run Claude Code in these directories remotely.")
     console.print("  Only add directories you trust and are okay to tinker with.\n")
 
@@ -270,7 +270,7 @@ def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
 
 def _step_allowed_users(defaults: dict[str, str]) -> str:
     """Step 5: Configure allowed users interactively. Returns comma-separated IDs or empty."""
-    console.rule("Step 5 of 13: Allowed Users")
+    console.rule("Step 5 of 15: Allowed Users")
     console.print("\n  Restrict who can use the bot by Slack member ID.")
     console.print("  (Find yours: Slack profile -> ⋮ menu -> Copy member ID)\n")
 
@@ -313,7 +313,7 @@ def _step_allowed_users(defaults: dict[str, str]) -> str:
 
 def _step_claude_model(default: str = "") -> str:
     """Step 6: Configure Claude model."""
-    console.rule("Step 6 of 13: Claude Model")
+    console.rule("Step 6 of 15: Claude Model")
     console.print("\n  Override the Claude model used for tasks.")
     console.print("  Options: sonnet, opus, haiku (or any Claude model ID).")
     console.print("  Leave empty to use the Claude CLI default.")
@@ -322,7 +322,7 @@ def _step_claude_model(default: str = "") -> str:
 
 def _step_permission_mode(default: str = "acceptEdits") -> str:
     """Step 7: Configure permission mode."""
-    console.rule("Step 7 of 13: Permission Mode")
+    console.rule("Step 7 of 15: Permission Mode")
     console.print("\n  Controls what Claude Code can do autonomously.")
     console.print("  [dim]acceptEdits[/dim]       — auto-accepts file edits, use allowed tools for shell")
     console.print("  [dim]dontAsk[/dim]           — auto-denies everything except allowed tools")
@@ -355,7 +355,7 @@ def _show_allowed_tools(tools: list[str]) -> None:
 
 def _step_allowed_tools(default: str = "") -> str:
     """Step 8: Configure allowed tools interactively. Returns comma-separated rules."""
-    console.rule("Step 8 of 13: Allowed Tools")
+    console.rule("Step 8 of 15: Allowed Tools")
     console.print("\n  Pre-approve specific tools so Claude doesn't prompt for them.")
     console.print("  [yellow]Warning:[/yellow] This overrides your Claude settings.json permissions.")
     console.print("  Leave empty to use your existing Claude config as-is.")
@@ -398,9 +398,135 @@ def _step_allowed_tools(default: str = "") -> str:
     return ",".join(tools)
 
 
+def _show_disallowed_tools(tools: list[str]) -> None:
+    """Display current disallowed tools."""
+    if not tools:
+        console.print("  [dim]No blocked tools — Claude can use any tool allowed by permissions.[/dim]\n")
+        return
+    table = Table(show_header=True, padding=(0, 2))
+    table.add_column("Blocked Tool", style="bold")
+    for tool in tools:
+        table.add_row(tool)
+    console.print(table)
+    console.print()
+
+
+def _step_disallowed_tools(default: str = "") -> str:
+    """Step 9: Configure disallowed tools interactively. Returns comma-separated rules."""
+    console.rule("Step 9 of 15: Disallowed Tools")
+    console.print("\n  Block specific tools so Claude cannot use them.")
+    console.print("  Complement to allowed tools — these are always denied.")
+    console.print("  Patterns: [dim]Bash[/dim], [dim]Edit(./secrets/**)[/dim], [dim]WebFetch[/dim]\n")
+
+    tools = _parse_allowed_tools(default)
+    _show_disallowed_tools(tools)
+
+    while True:
+        action = Prompt.ask(
+            "  \\[a]dd / \\[r]emove / \\[d]one",
+            choices=["a", "r", "d"],
+            default="d",
+            console=console,
+        )
+        if action == "d":
+            break
+        elif action == "a":
+            rule = Prompt.ask("  Tool rule", console=console).strip()
+            if not rule:
+                continue
+            if rule in tools:
+                console.print(f"  [dim]{rule} already in list.[/dim]\n")
+                continue
+            tools.append(rule)
+            console.print(f"  [green]✓[/green] Added {rule}\n")
+            _show_disallowed_tools(tools)
+        elif action == "r":
+            if not tools:
+                console.print("  [dim]Nothing to remove.[/dim]\n")
+                continue
+            rule = Prompt.ask("  Tool rule to remove", console=console).strip()
+            if rule in tools:
+                tools.remove(rule)
+                console.print(f"  [green]✓[/green] Removed {rule}\n")
+                _show_disallowed_tools(tools)
+            else:
+                console.print(f"  [red]{rule} not found.[/red]\n")
+
+    return ",".join(tools)
+
+
+def _show_setting_sources(sources: list[str]) -> None:
+    """Display current setting sources."""
+    if not sources:
+        console.print("  [dim]No setting sources — Claude won't load any config files.[/dim]\n")
+        return
+    table = Table(show_header=True, padding=(0, 2))
+    table.add_column("Source", style="bold")
+    table.add_column("Description")
+    descriptions = {
+        "user": "~/.claude/settings.json (global user preferences)",
+        "project": ".claude/settings.json (project-level, checked into git)",
+        "local": ".claude/settings.local.json (local overrides, gitignored)",
+    }
+    for source in sources:
+        table.add_row(source, descriptions.get(source, ""))
+    console.print(table)
+    console.print()
+
+
+def _step_setting_sources(default: str = "user,project,local") -> str:
+    """Step 10: Configure which Claude config scopes are loaded. Returns comma-separated sources."""
+    console.rule("Step 10 of 15: Setting Sources")
+    console.print("\n  Which Claude config scopes to load.")
+    console.print("  [dim]user[/dim]     — ~/.claude/settings.json (global user preferences)")
+    console.print("  [dim]project[/dim]  — .claude/settings.json (project-level, checked into git)")
+    console.print("  [dim]local[/dim]    — .claude/settings.local.json (local overrides, gitignored)")
+    console.print("  Default loads all three.\n")
+
+    valid = {"user", "project", "local"}
+    sources = [s.strip() for s in default.split(",") if s.strip()]
+    _show_setting_sources(sources)
+
+    while True:
+        action = Prompt.ask(
+            "  \\[a]dd / \\[r]emove / \\[d]one",
+            choices=["a", "r", "d"],
+            default="d",
+            console=console,
+        )
+        if action == "d":
+            break
+        elif action == "a":
+            source = Prompt.ask("  Source (user/project/local)", console=console).strip()
+            if not source:
+                continue
+            if source not in valid:
+                console.print(f"  [red]Invalid source '{source}'. Must be: user, project, or local.[/red]\n")
+                continue
+            if source in sources:
+                console.print(f"  [dim]{source} already in list.[/dim]\n")
+                continue
+            sources.append(source)
+            console.print(f"  [green]✓[/green] Added {source}\n")
+            _show_setting_sources(sources)
+        elif action == "r":
+            if not sources:
+                console.print("  [dim]Nothing to remove.[/dim]\n")
+                continue
+            source = Prompt.ask("  Source to remove", console=console).strip()
+            if source in sources:
+                sources.remove(source)
+                console.print(f"  [green]✓[/green] Removed {source}\n")
+                _show_setting_sources(sources)
+            else:
+                console.print(f"  [red]{source} not found.[/red]\n")
+
+    return ",".join(sources)
+
+
 def _step_max_turns(default: str = "") -> str:
-    """Step 9: Configure max turns per message."""
-    console.rule("Step 9 of 13: Max Turns")
+    """Step 11: Configure max turns per message."""
+    console.rule("Step 11 of 15: Max Turns")
     console.print("\n  Maximum number of agentic turns Claude can take per message.")
     console.print("  Each turn is one API call; complex tasks may need 20-50+ turns.")
     console.print("  Leave empty for unlimited (Claude decides when to stop).")
@@ -419,8 +545,8 @@ def _step_max_turns(default: str = "") -> str:
 
 
 def _step_max_budget(default: str = "") -> str:
-    """Step 10: Configure max budget per message."""
-    console.rule("Step 10 of 13: Max Budget")
+    """Step 12: Configure max budget per message."""
+    console.rule("Step 12 of 15: Max Budget")
     console.print("\n  Maximum cost in USD that Claude can spend per message.")
     console.print("  Prevents runaway spending on long-running tasks.")
     console.print("  Leave empty for no budget limit.")
@@ -439,8 +565,8 @@ def _step_max_budget(default: str = "") -> str:
 
 
 def _step_logging(defaults: dict[str, str]) -> tuple[str, str]:
-    """Step 9: Configure log directory and log level. Returns (log_dir, log_level)."""
-    console.rule("Step 11 of 13: Logging")
+    """Step 13: Configure log directory and log level. Returns (log_dir, log_level)."""
+    console.rule("Step 13 of 15: Logging")
     from platformdirs import user_log_dir
 
     default_log_dir = defaults.get("LOG_DIR", "") or user_log_dir("chicane", appauthor=False)
@@ -469,8 +595,8 @@ def _step_logging(defaults: dict[str, str]) -> tuple[str, str]:
 
 
 def _step_verbosity(default: str = "verbose") -> str:
-    """Step 10: Configure verbosity level."""
-    console.rule("Step 12 of 13: Verbosity")
+    """Step 14: Configure verbosity level."""
+    console.rule("Step 14 of 15: Verbosity")
     console.print("\n  Controls how much detail is shown in Slack during Claude sessions.")
     console.print("  [dim]minimal[/dim]  — Only final text responses and completion summaries")
     console.print("  [dim]normal[/dim]   — Text + tool call summaries and errors")
@@ -562,26 +688,34 @@ def _run_wizard(args) -> None:
     _set_or_clear("CLAUDE_ALLOWED_TOOLS", _step_allowed_tools(existing.get("CLAUDE_ALLOWED_TOOLS", "")))
     _save()
 
-    # Step 9: Max Turns
+    # Step 9: Disallowed Tools
+    _set_or_clear("CLAUDE_DISALLOWED_TOOLS", _step_disallowed_tools(existing.get("CLAUDE_DISALLOWED_TOOLS", "")))
+    _save()
+
+    # Step 10: Setting Sources
+    _set_or_clear("CLAUDE_SETTING_SOURCES", _step_setting_sources(existing.get("CLAUDE_SETTING_SOURCES", "user,project,local")))
+    _save()
+
+    # Step 11: Max Turns
     _set_or_clear("CLAUDE_MAX_TURNS", _step_max_turns(existing.get("CLAUDE_MAX_TURNS", "")))
     _save()
 
-    # Step 10: Max Budget
+    # Step 12: Max Budget
     _set_or_clear("CLAUDE_MAX_BUDGET_USD", _step_max_budget(existing.get("CLAUDE_MAX_BUDGET_USD", "")))
     _save()
 
-    # Step 11: Logging
+    # Step 13: Logging
     log_dir, log_level = _step_logging(existing)
     _set_or_clear("LOG_DIR", log_dir)
     _set_or_clear("LOG_LEVEL", log_level if log_level != "INFO" else "")
     _save()
 
-    # Step 12: Verbosity
+    # Step 14: Verbosity
     _set_or_clear("VERBOSITY", _step_verbosity(existing.get("VERBOSITY", "normal")))
     _save()
 
-    # Step 13: Done
-    console.rule("Step 13 of 13: Done")
+    # Step 15: Done
+    console.rule("Step 15 of 15: Done")
     console.print()
     console.print(Panel(
         f"[green]✓[/green] Config saved to {env_path}\n"

@@ -32,6 +32,7 @@ load_dotenv(env_file())
 
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
 VALID_VERBOSITY_LEVELS = {"minimal", "normal", "verbose"}
+VALID_SETTING_SOURCES = {"user", "project", "local"}
 
 
 def _validate_log_level(value: str) -> str:
@@ -68,6 +69,8 @@ class Config:
     claude_model: str | None = None
     claude_permission_mode: str = "acceptEdits"
     claude_allowed_tools: list[str] = field(default_factory=list)
+    claude_disallowed_tools: list[str] = field(default_factory=list)
+    claude_setting_sources: list[str] = field(default_factory=lambda: ["user", "project", "local"])
     claude_max_turns: int | None = None
     claude_max_budget_usd: float | None = None
     verbosity: str = "verbose"
@@ -130,6 +133,21 @@ class Config:
                 f"Must be one of: {', '.join(sorted(valid_perm_modes))}"
             )
         raw_tools = os.environ.get("CLAUDE_ALLOWED_TOOLS", "")
+        raw_disallowed = os.environ.get("CLAUDE_DISALLOWED_TOOLS", "")
+
+        # Parse setting sources
+        raw_sources = os.environ.get("CLAUDE_SETTING_SOURCES", "")
+        if raw_sources:
+            setting_sources = [s.strip() for s in raw_sources.split(",") if s.strip()]
+            invalid = set(setting_sources) - VALID_SETTING_SOURCES
+            if invalid:
+                raise ValueError(
+                    f"Invalid CLAUDE_SETTING_SOURCES: {', '.join(sorted(invalid))}. "
+                    f"Must be from: {', '.join(sorted(VALID_SETTING_SOURCES))}"
+                )
+        else:
+            setting_sources = ["user", "project", "local"]
+
         raw_max_turns = os.environ.get("CLAUDE_MAX_TURNS")
         raw_max_budget = os.environ.get("CLAUDE_MAX_BUDGET_USD")
         max_turns: int | None = None
@@ -169,6 +187,8 @@ class Config:
             claude_model=model,
             claude_permission_mode=perm_mode,
             claude_allowed_tools=[t.strip() for t in raw_tools.split(",") if t.strip()],
+            claude_disallowed_tools=[t.strip() for t in raw_disallowed.split(",") if t.strip()],
+            claude_setting_sources=setting_sources,
             claude_max_turns=max_turns,
             claude_max_budget_usd=max_budget,
             verbosity=verbosity,
