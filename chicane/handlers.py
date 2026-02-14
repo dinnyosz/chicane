@@ -76,6 +76,17 @@ _HANDOFF_RE = re.compile(r"_?\(session_id:\s*([a-f0-9\-]+)\)_?\s*$")
 # Their tool_result blocks are silently dropped even in verbose mode.
 _QUIET_TOOLS = frozenset({"Read"})
 
+# Emoji legend posted once per thread (after first completion).
+_EMOJI_LEGEND = (
+    ":eyes: working · "
+    ":white_check_mark: done · "
+    ":speech_balloon: needs your input · "
+    ":x: error · "
+    ":octagonal_sign: interrupted · "
+    ":hourglass: queued · "
+    ":warning: permissions blocked"
+)
+
 
 def _should_show(event_type: str, verbosity: str) -> bool:
     """Check whether an event type should be displayed at the given verbosity level.
@@ -629,6 +640,15 @@ async def _process_message(
                 if summary:
                     await client.chat_postMessage(
                         channel=channel, thread_ts=thread_ts, text=summary,
+                    )
+
+                # Post emoji legend on the first completion in a thread
+                # (only for follow-up messages where thread-root emojis are used)
+                if session_info.total_requests == 1 and thread_ts != event["ts"]:
+                    await client.chat_postMessage(
+                        channel=channel,
+                        thread_ts=thread_ts,
+                        text=_EMOJI_LEGEND,
                     )
 
                 # Surface permission denials so users know why tools were blocked

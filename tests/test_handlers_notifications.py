@@ -334,7 +334,7 @@ class TestVerbosityFiltering:
             await _process_message(event, "run cmd", client, config, sessions)
 
         all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
-        assert not any(":warning:" in t for t in all_texts)
+        assert not any(":warning: Tool error:" in t for t in all_texts)
 
     @pytest.mark.asyncio
     async def test_normal_shows_tool_activities(self):
@@ -466,10 +466,10 @@ class TestVerbosityFiltering:
             await _process_message(event, "show log", client, config, sessions)
 
         # Should upload as snippet, not post inline
-        client.files_upload_v2.assert_called_once()
-        upload_kwargs = client.files_upload_v2.call_args.kwargs
-        assert upload_kwargs["content"] == long_output
-        assert "snippet" in upload_kwargs.get("initial_comment", "").lower()
+        client.files_getUploadURLExternal.assert_called_once()
+        client.files_completeUploadExternal.assert_called_once()
+        complete_kwargs = client.files_completeUploadExternal.call_args.kwargs
+        assert complete_kwargs["channel_id"] == "C_CHAN"
 
         # No inline tool output messages
         all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
@@ -500,7 +500,7 @@ class TestVerbosityFiltering:
 
         all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
         assert any(":clipboard: Tool output:\n```\nhi\n```" in t for t in all_texts)
-        client.files_upload_v2.assert_not_called()
+        client.files_getUploadURLExternal.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_verbose_shows_compact_boundary(self):
