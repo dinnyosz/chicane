@@ -1,7 +1,33 @@
 .env
+.env.*
+!.env.example
 messages.json
 __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
 *.egg-info/
+
+# Secrets & credentials
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+
+# Build artifacts
+dist/
+build/
+*.whl
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+.coverage
+htmlcov/
