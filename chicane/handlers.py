@@ -223,7 +223,8 @@ async def _process_message(
     # Thread-root status: clear any previous state → add eyes so the channel
     # list shows this thread is actively being worked on.
     if thread_ts != event["ts"]:
-        for old_emoji in ("white_check_mark", "x", "octagonal_sign"):
+        for old_emoji in ("white_check_mark", "x", "octagonal_sign",
+                         "speech_balloon", "warning", "zap", "hourglass"):
             try:
                 await client.reactions_remove(
                     channel=channel, name=old_emoji, timestamp=thread_ts
@@ -311,13 +312,31 @@ async def _process_message(
 
     # If another stream is active for this thread, interrupt it so we
     # can acquire the lock quickly instead of waiting minutes.
+    queued = session_info.lock.locked()
     if session_info.session.is_streaming:
         logger.info(f"New message in {thread_ts} — interrupting active stream")
         await session_info.session.interrupt(source="new_message")
 
+    # Show hourglass on thread root while waiting for the lock
+    if queued:
+        try:
+            await client.reactions_add(
+                channel=channel, name="hourglass", timestamp=thread_ts,
+            )
+        except Exception:
+            pass
+
     # Stream Claude's response — hold the session lock so only one
     # _process_message streams at a time per thread.
     async with session_info.lock:
+        # Clear hourglass now that we have the lock
+        if queued:
+            try:
+                await client.reactions_remove(
+                    channel=channel, name="hourglass", timestamp=thread_ts,
+                )
+            except Exception:
+                pass
         full_text = ""
         event_count = 0
         first_activity = True  # track whether to update placeholder or post new
@@ -325,6 +344,19 @@ async def _process_message(
         git_committed = False  # track whether a git commit happened (since last edit)
         files_changed = False  # track uncommitted file changes
         tool_id_to_name: dict[str, str] = {}  # tool_use_id → tool name
+
+        # Background task: after 60s of streaming, add :zap: to thread root
+        # to signal "still going, be patient".
+        async def _long_running_indicator():
+            await asyncio.sleep(60)
+            try:
+                await client.reactions_add(
+                    channel=channel, name="zap", timestamp=thread_ts,
+                )
+            except Exception:
+                pass
+
+        zap_task = asyncio.create_task(_long_running_indicator())
 
         try:
             async for event_data in session.stream(prompt):
@@ -406,6 +438,16 @@ async def _process_message(
                                 except Exception:
                                     pass
 
+                    # Detect AskUserQuestion — add speech balloon to thread root
+                    if _has_question(event_data):
+                        try:
+                            await client.reactions_add(
+                                channel=channel, name="speech_balloon",
+                                timestamp=thread_ts,
+                            )
+                        except Exception:
+                            pass
+
                     # Accumulate text
                     chunk = event_data.text
                     if chunk:
@@ -471,6 +513,9 @@ async def _process_message(
                 else:
                     logger.debug(f"Event type={event_data.type} subtype={event_data.subtype}")
 
+            # Cancel the long-running indicator task
+            zap_task.cancel()
+
             # Handle interrupted stream — skip normal completion flow
             if session.was_interrupted:
                 if session.interrupt_source == "new_message":
@@ -531,14 +576,15 @@ async def _process_message(
                         )
                     except Exception:
                         pass
-                    # Thread-root: swap eyes → stop sign
+                    # Thread-root: swap eyes/zap/speech_balloon → stop sign
                     if thread_ts != event["ts"]:
-                        try:
-                            await client.reactions_remove(
-                                channel=channel, name="eyes", timestamp=thread_ts
-                            )
-                        except Exception:
-                            pass
+                        for int_emoji in ("eyes", "speech_balloon", "zap"):
+                            try:
+                                await client.reactions_remove(
+                                    channel=channel, name=int_emoji, timestamp=thread_ts
+                                )
+                            except Exception:
+                                pass
                         try:
                             await client.reactions_add(
                                 channel=channel, name="octagonal_sign", timestamp=thread_ts
@@ -614,6 +660,13 @@ async def _process_message(
                     await client.chat_postMessage(
                         channel=channel, thread_ts=thread_ts, text=note,
                     )
+                    # Thread-root: :warning: signals "completed but something was blocked"
+                    try:
+                        await client.reactions_add(
+                            channel=channel, name="warning", timestamp=thread_ts,
+                        )
+                    except Exception:
+                        pass
 
             # Swap eyes for checkmark on the user's message
             try:
@@ -629,12 +682,13 @@ async def _process_message(
             # Thread-root status: swap eyes → checkmark so the channel list
             # shows this thread has new results to review.
             if thread_ts != event["ts"]:
-                try:
-                    await client.reactions_remove(
-                        channel=channel, name="eyes", timestamp=thread_ts
-                    )
-                except Exception:
-                    pass
+                for done_emoji in ("eyes", "speech_balloon", "zap"):
+                    try:
+                        await client.reactions_remove(
+                            channel=channel, name=done_emoji, timestamp=thread_ts
+                        )
+                    except Exception:
+                        pass
                 try:
                     await client.reactions_add(
                         channel=channel, name="white_check_mark", timestamp=thread_ts
@@ -643,6 +697,7 @@ async def _process_message(
                     pass
 
         except Exception as exc:
+            zap_task.cancel()
             logger.exception(f"Error processing message: {exc}")
             try:
                 await client.chat_update(
@@ -662,14 +717,15 @@ async def _process_message(
                 )
             except Exception:
                 pass
-            # Thread-root status: swap eyes → x on error
+            # Thread-root status: swap eyes/zap/speech_balloon → x on error
             if thread_ts != event["ts"]:
-                try:
-                    await client.reactions_remove(
-                        channel=channel, name="eyes", timestamp=thread_ts
-                    )
-                except Exception:
-                    pass
+                for err_emoji in ("eyes", "speech_balloon", "zap"):
+                    try:
+                        await client.reactions_remove(
+                            channel=channel, name=err_emoji, timestamp=thread_ts
+                        )
+                    except Exception:
+                        pass
                 try:
                     await client.reactions_add(
                         channel=channel, name="x", timestamp=thread_ts
@@ -922,6 +978,17 @@ def _has_file_edit(event: ClaudeEvent) -> bool:
         if block.get("type") != "tool_use":
             continue
         if block.get("name") in _FILE_EDIT_TOOLS:
+            return True
+    return False
+
+
+def _has_question(event: ClaudeEvent) -> bool:
+    """Check if an assistant event contains an AskUserQuestion tool_use."""
+    message = event.raw.get("message", {})
+    for block in message.get("content", []):
+        if block.get("type") != "tool_use":
+            continue
+        if block.get("name") == "AskUserQuestion":
             return True
     return False
 
