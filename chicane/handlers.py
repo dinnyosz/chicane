@@ -978,7 +978,7 @@ async def _download_files(
                 # Sanitize filename: strip directory components to prevent
                 # path traversal (e.g. "../../etc/passwd" → "passwd").
                 safe_name = Path(name).name
-                if not safe_name:
+                if not safe_name or safe_name.strip(".") == "":
                     safe_name = "attachment"
 
                 local_path = target_dir / safe_name

@@ -1,11 +1,12 @@
 """Tests for security-related handler behavior."""
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from chicane.config import Config
-from chicane.handlers import register_handlers, _should_ignore
+from chicane.config import Config, save_handoff_session, load_handoff_session
+from chicane.handlers import register_handlers, _should_ignore, _download_files
 from chicane.sessions import SessionStore
 from tests.conftest import (
     capture_app_handlers,
@@ -286,6 +287,97 @@ class TestSecurityLogging:
             _should_ignore({"user": "U_ANYONE"}, config)
         assert "BLOCKED" in caplog.text
         assert "ALLOWED_USERS" in caplog.text
+
+
+class TestFileDownloadSanitization:
+    """Tests that file downloads sanitize filenames to prevent path traversal."""
+
+    @staticmethod
+    def _make_fake_download(data: bytes = b"safe content", content_type: str = "text/plain"):
+        """Create fake aiohttp session that returns given data for downloads."""
+        class _FakeResp:
+            status = 200
+            async def read(self):
+                return data
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                pass
+        _FakeResp.content_type = content_type
+
+        class _FakeHttp:
+            def get(self, url, **kw):
+                return _FakeResp()
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                pass
+
+        return _FakeHttp()
+
+    @pytest.mark.asyncio
+    async def test_traversal_filename_stripped(self, tmp_path):
+        """A filename like ../../etc/passwd should be sanitized to 'passwd'."""
+        event = {
+            "files": [{
+                "name": "../../etc/passwd",
+                "mimetype": "text/plain",
+                "url_private_download": "https://files.slack.com/fake",
+                "size": 100,
+            }],
+        }
+
+        with patch("chicane.handlers.aiohttp.ClientSession", return_value=self._make_fake_download()):
+            result = await _download_files(event, "xoxb-test", tmp_path)
+
+        assert len(result) == 1
+        name, local_path, mime = result[0]
+        # Path should be inside tmp_path, not traversed
+        assert local_path.parent == tmp_path
+        assert local_path.name == "passwd"
+        assert not str(local_path).startswith("/etc")
+
+    @pytest.mark.asyncio
+    async def test_empty_filename_gets_default(self, tmp_path):
+        """A filename that resolves to empty after sanitization gets a default."""
+        event = {
+            "files": [{
+                "name": "../../",
+                "mimetype": "application/octet-stream",
+                "url_private_download": "https://files.slack.com/fake",
+                "size": 100,
+            }],
+        }
+
+        with patch("chicane.handlers.aiohttp.ClientSession", return_value=self._make_fake_download(b"data", "application/octet-stream")):
+            result = await _download_files(event, "xoxb-test", tmp_path)
+
+        assert len(result) == 1
+        _, local_path, _ = result[0]
+        assert local_path.name == "attachment"
+
+
+class TestHandoffSessionMap:
+    """Tests for persistent handoff session_id storage."""
+
+    def test_save_and_load(self, tmp_path):
+        with patch("chicane.config._HANDOFF_MAP_FILE", tmp_path / "sessions.json"):
+            save_handoff_session("1000.0", "abc-def-123")
+            assert load_handoff_session("1000.0") == "abc-def-123"
+            assert load_handoff_session("9999.0") is None
+
+    def test_load_missing_file(self, tmp_path):
+        with patch("chicane.config._HANDOFF_MAP_FILE", tmp_path / "nope.json"):
+            assert load_handoff_session("1000.0") is None
+
+    def test_trims_old_entries(self, tmp_path):
+        with patch("chicane.config._HANDOFF_MAP_FILE", tmp_path / "sessions.json"):
+            with patch("chicane.config._HANDOFF_MAP_MAX", 5):
+                for i in range(10):
+                    save_handoff_session(f"{i}.0", f"sess-{i}")
+                # Only last 5 should remain
+                assert load_handoff_session("0.0") is None
+                assert load_handoff_session("9.0") == "sess-9"
 
 
 # Helper for async iteration in tests
