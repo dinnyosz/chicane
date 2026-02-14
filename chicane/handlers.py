@@ -13,7 +13,7 @@ from platformdirs import user_cache_dir
 from slack_bolt.async_app import AsyncApp
 from slack_sdk.web.async_client import AsyncWebClient
 
-from .config import Config
+from .config import Config, load_handoff_session
 from .sessions import SessionInfo, SessionStore
 
 logger = logging.getLogger(__name__)
@@ -828,10 +828,16 @@ async def _find_session_id_in_thread(
     """Scan thread messages for a handoff session_id.
 
     Returns the session_id if found in any message, otherwise None.
-    Checks both thread replies and the thread starter message explicitly.
-    Used on reconnect to resume the original Claude session instead of
-    rebuilding context from scratch.
+    Checks the local handoff session map first (session_id is no longer
+    posted in message text), then falls back to scanning thread text
+    for backward compatibility with older handoff messages.
     """
+    # Check local persistent map first (new format: session_id not in text)
+    sid = load_handoff_session(thread_ts)
+    if sid:
+        logger.debug(f"Found session_id in local handoff map: {sid[:8]}...")
+        return sid
+
     try:
         replies = await client.conversations_replies(
             channel=channel, ts=thread_ts, limit=100

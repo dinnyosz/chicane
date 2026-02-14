@@ -1,11 +1,15 @@
 """Configuration loaded from environment variables."""
 
+import json
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
 from platformdirs import user_config_dir
+
+logger = logging.getLogger(__name__)
 
 
 def config_dir() -> Path:
@@ -225,3 +229,42 @@ class Config:
             rate_limit=rate_limit,
             verbosity=verbosity,
         )
+
+
+# ---------------------------------------------------------------------------
+# Handoff session map — persists thread_ts → session_id across restarts
+# ---------------------------------------------------------------------------
+
+_HANDOFF_MAP_FILE = config_dir() / "handoff_sessions.json"
+_HANDOFF_MAP_MAX = 200
+
+
+def save_handoff_session(thread_ts: str, session_id: str) -> None:
+    """Persist a handoff session_id so it doesn't need to appear in message text."""
+    data: dict[str, str] = {}
+    if _HANDOFF_MAP_FILE.exists():
+        try:
+            data = json.loads(_HANDOFF_MAP_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    data[thread_ts] = session_id
+    # Trim oldest entries to keep the file bounded
+    if len(data) > _HANDOFF_MAP_MAX:
+        keys = sorted(data.keys())
+        for k in keys[: len(data) - _HANDOFF_MAP_MAX]:
+            del data[k]
+    _HANDOFF_MAP_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _HANDOFF_MAP_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data))
+    tmp.rename(_HANDOFF_MAP_FILE)
+
+
+def load_handoff_session(thread_ts: str) -> str | None:
+    """Look up a handoff session_id from the persistent map."""
+    if not _HANDOFF_MAP_FILE.exists():
+        return None
+    try:
+        data = json.loads(_HANDOFF_MAP_FILE.read_text())
+        return data.get(thread_ts)
+    except (json.JSONDecodeError, OSError):
+        return None

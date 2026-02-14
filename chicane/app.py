@@ -18,7 +18,7 @@ os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_bolt.async_app import AsyncApp
 
-from .config import Config, config_dir
+from .config import Config, config_dir, save_handoff_session
 from .handlers import register_handlers
 from .sessions import SessionStore
 
@@ -307,10 +307,16 @@ async def _handoff(args: argparse.Namespace) -> None:
     parts = [args.summary]
     if args.questions:
         parts.append(f"\n{args.questions}")
-    parts.append(f"\n_(session_id: {args.session_id})_")
+    parts.append(f"\n_(session: {args.session_id[:8]}…)_")
     text = "\n".join(parts)
 
-    await client.chat_postMessage(channel=channel_id, text=text)
+    result = await client.chat_postMessage(channel=channel_id, text=text)
+
+    # Persist session_id locally so it doesn't need to be in message text
+    thread_ts = result.get("ts", "")
+    if thread_ts:
+        save_handoff_session(thread_ts, args.session_id)
+
     print(f"Handoff posted to #{channel_name}")
 
 
