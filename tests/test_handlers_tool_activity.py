@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from chicane.claude import ClaudeEvent
-from chicane.handlers import _format_tool_activity, _has_file_edit, _process_message
+from chicane.handlers import _format_edit_diff, _format_tool_activity, _has_file_edit, _process_message
 from tests.conftest import make_event, make_tool_event, mock_client, mock_session_info, tool_block
 
 
@@ -33,7 +33,46 @@ class TestFormatToolActivity:
         assert len(result) == 1
         assert result[0] == f":computer: Running `{long_cmd}`"
 
-    def test_edit_tool(self):
+    def test_edit_tool_with_diff(self):
+        event = make_tool_event(
+            tool_block(
+                "Edit",
+                file_path="/src/handlers.py",
+                old_string="def foo():",
+                new_string="def bar():",
+            )
+        )
+        result = _format_tool_activity(event)
+        assert len(result) == 1
+        item = result[0]
+        assert isinstance(item, dict)
+        assert item["text"] == ":pencil2: Editing `handlers.py`"
+        diff = item["diff"]
+        assert "--- a/handlers.py" in diff
+        assert "+++ b/handlers.py" in diff
+        assert "-def foo():" in diff
+        assert "+def bar():" in diff
+
+    def test_edit_tool_multiline_diff(self):
+        event = make_tool_event(
+            tool_block(
+                "Edit",
+                file_path="/src/app.py",
+                old_string="x = 1\ny = 2",
+                new_string="x = 1\ny = 3\nz = 4",
+            )
+        )
+        result = _format_tool_activity(event)
+        assert len(result) == 1
+        item = result[0]
+        assert isinstance(item, dict)
+        diff = item["diff"]
+        assert "-y = 2" in diff
+        assert "+y = 3" in diff
+        assert "+z = 4" in diff
+
+    def test_edit_tool_no_strings_fallback(self):
+        """Edit with no old/new strings falls back to simple message."""
         event = make_tool_event(
             tool_block("Edit", file_path="/src/handlers.py")
         )
@@ -251,6 +290,46 @@ class TestFormatToolActivity:
             raw={"type": "assistant", "message": {"content": []}},
         )
         assert _format_tool_activity(event) == []
+
+
+class TestFormatEditDiff:
+    """Test _format_edit_diff returns a unified diff string."""
+
+    def test_simple_replacement(self):
+        result = _format_edit_diff("def foo():", "def bar():")
+        assert isinstance(result, str)
+        assert "--- a/edit" in result
+        assert "+++ b/edit" in result
+        assert "-def foo():" in result
+        assert "+def bar():" in result
+
+    def test_addition_only(self):
+        result = _format_edit_diff("import os", "import os\nimport sys")
+        assert "+import sys" in result
+
+    def test_context_lines_shown(self):
+        result = _format_edit_diff("a\nb\nc", "a\nX\nc")
+        assert "-b" in result
+        assert "+X" in result
+        # Context lines present
+        assert " a" in result
+        assert " c" in result
+
+    def test_custom_filename(self):
+        result = _format_edit_diff("a", "b", file_path="config.py")
+        assert "--- a/config.py" in result
+        assert "+++ b/config.py" in result
+
+    def test_truncation(self):
+        old = "\n".join(f"line {i}" for i in range(50))
+        new = "\n".join(f"mod {i}" for i in range(50))
+        result = _format_edit_diff(old, new, max_lines=10)
+        assert "more lines" in result
+
+    def test_empty_strings_returns_empty(self):
+        """Identical strings → empty string (nothing to show)."""
+        result = _format_edit_diff("", "")
+        assert result == ""
 
 
 class TestCatchAllToolDisplay:

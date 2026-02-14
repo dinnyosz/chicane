@@ -471,16 +471,34 @@ async def _process_message(
                     # Post tool activity
                     if show_activities:
                         for activity in activities:
+                            # Activities are plain strings or dicts with
+                            # ``text`` + ``diff`` (uploaded as snippet).
+                            if isinstance(activity, dict):
+                                act_text = activity["text"]
+                                act_diff = activity.get("diff")
+                            else:
+                                act_text = activity
+                                act_diff = None
+
                             if first_activity:
                                 await client.chat_update(
-                                    channel=channel, ts=message_ts, text=activity,
+                                    channel=channel, ts=message_ts, text=act_text,
                                 )
                                 first_activity = False
                             else:
                                 r = await client.chat_postMessage(
-                                    channel=channel, thread_ts=thread_ts, text=activity,
+                                    channel=channel, thread_ts=thread_ts, text=act_text,
                                 )
                                 sessions.register_bot_message(r["ts"], thread_ts)
+
+                            # Upload diff as a syntax-highlighted snippet
+                            if act_diff:
+                                await _send_snippet(
+                                    client, channel, thread_ts,
+                                    act_diff,
+                                    filename="edit.diff",
+                                    snippet_type="diff",
+                                )
 
                     # Detect file edits — add pencil reaction to thread root
                     if not files_changed and _has_file_edit(event_data):
@@ -1116,8 +1134,55 @@ def _summarize_tool_input(tool_input: dict, max_params: int = 6) -> str:
     return "\n".join(lines)
 
 
-def _format_tool_activity(event: ClaudeEvent) -> list[str]:
-    """Extract tool_use blocks from an assistant event and return human-readable one-liners."""
+def _format_edit_diff(
+    old_string: str,
+    new_string: str,
+    file_path: str = "edit",
+    max_lines: int = 40,
+) -> str:
+    """Build a unified-diff string from an Edit tool's old/new strings.
+
+    The output looks like ``git diff`` and is intended to be uploaded as
+    a Slack snippet with ``filetype=diff`` so Slack applies red/green
+    syntax highlighting.
+    """
+    import difflib
+
+    old_lines = old_string.splitlines(keepends=True)
+    new_lines = new_string.splitlines(keepends=True)
+
+    diff = list(difflib.unified_diff(
+        old_lines,
+        new_lines,
+        fromfile=f"a/{file_path}",
+        tofile=f"b/{file_path}",
+        n=3,
+    ))
+
+    if not diff:
+        # Identical strings — shouldn't happen but be safe
+        return ""
+
+    # Ensure every line ends with a newline for clean display
+    result = "".join(l if l.endswith("\n") else l + "\n" for l in diff)
+
+    # Truncate if very large
+    lines = result.splitlines(keepends=True)
+    if len(lines) > max_lines:
+        result = "".join(lines[:max_lines])
+        result += f"\n… {len(lines) - max_lines} more lines\n"
+
+    return result
+
+
+def _format_tool_activity(event: ClaudeEvent) -> list[str | dict]:
+    """Extract tool_use blocks from an assistant event and return display items.
+
+    Each item is either a plain string (posted as ``text``) or a dict
+    with ``text`` and ``diff`` keys.  When ``diff`` is present the
+    caller uploads it as a Slack snippet with ``filetype=diff`` for
+    red/green syntax highlighting.
+    """
     message = event.raw.get("message", {})
     content = message.get("content", [])
 
@@ -1138,7 +1203,17 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
         elif tool_name == "Edit":
             file_path = tool_input.get("file_path", "")
             basename = Path(file_path).name if file_path else "file"
-            activities.append(f":pencil2: Editing `{basename}`")
+            old_string = tool_input.get("old_string", "")
+            new_string = tool_input.get("new_string", "")
+            header = f":pencil2: Editing `{basename}`"
+            if old_string or new_string:
+                diff = _format_edit_diff(old_string, new_string, basename)
+                if diff:
+                    activities.append({"text": header, "diff": diff})
+                else:
+                    activities.append(header)
+            else:
+                activities.append(header)
         elif tool_name == "Write":
             file_path = tool_input.get("file_path", "")
             basename = Path(file_path).name if file_path else "file"
@@ -1435,6 +1510,8 @@ async def _send_snippet(
     text: str,
     initial_comment: str = "",
     *,
+    filename: str = "response.md",
+    snippet_type: str | None = None,
     _max_attempts: int = 2,
     _retry_delay: float = 2.0,
     _step_delay: float = 0.5,
@@ -1446,15 +1523,20 @@ async def _send_snippet(
     between each step to avoid racing Slack's backend, and the whole
     sequence is retried once on failure before falling back to split
     messages.
+
+    Pass *snippet_type* (e.g. ``"diff"``) to request Slack syntax
+    highlighting for that file type.
     """
     last_exc: BaseException | None = None
     for attempt in range(1, _max_attempts + 1):
         try:
             # Step 1 – obtain an upload URL and file id.
             size = len(text.encode("utf-8"))
+            upload_kwargs: dict = dict(filename=filename, length=size)
+            if snippet_type:
+                upload_kwargs["snippet_type"] = snippet_type
             url_resp = await client.files_getUploadURLExternal(
-                filename="response.md",
-                length=size,
+                **upload_kwargs,
             )
             upload_url: str = url_resp["upload_url"]
             file_id: str = url_resp["file_id"]
@@ -1474,7 +1556,7 @@ async def _send_snippet(
 
             # Step 3 – finalise the upload and share it in the thread.
             await client.files_completeUploadExternal(
-                files=[{"id": file_id, "title": "Full response"}],
+                files=[{"id": file_id, "title": Path(filename).stem or "snippet"}],
                 channel_id=channel,
                 thread_ts=thread_ts,
                 initial_comment=initial_comment or None,
