@@ -135,6 +135,19 @@ async def start(config: Config | None = None) -> None:
         for noisy in ("slack_bolt", "slack_sdk", "aiohttp", "websocket"):
             logging.getLogger(noisy).setLevel(max(log_level, logging.INFO))
 
+        # Security warnings
+        if config.claude_permission_mode == "bypassPermissions":
+            logger.warning(
+                "SECURITY: bypassPermissions is active — Claude has unrestricted "
+                "tool access. All allowed users effectively have shell access to "
+                "this machine."
+            )
+        if not config.allowed_users:
+            logger.warning(
+                "SECURITY: ALLOWED_USERS is not set — the bot will reject all "
+                "messages. Configure ALLOWED_USERS or run 'chicane setup'."
+            )
+
         app = create_app(config)
         sessions: SessionStore = app._chicane_sessions  # type: ignore[attr-defined]
 
