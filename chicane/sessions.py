@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import shutil
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -123,6 +124,9 @@ class SessionInfo:
     # Stores the set of emoji names currently on the thread root message.
     thread_reactions: set[str] = field(default_factory=set)
 
+    # True when cwd is a temporary directory created by SessionStore.
+    is_temp_dir: bool = False
+
     # Cumulative session stats updated after each completion.
     total_requests: int = 0
     total_turns: int = 0
@@ -162,11 +166,13 @@ class SessionStore:
             logger.debug(f"Reusing session for thread {thread_ts}")
             return info
 
+        is_temp = False
         if cwd:
             work_dir = cwd
         else:
             # Fallback: random temp directory so Claude doesn't run in the project dir
             work_dir = Path(tempfile.mkdtemp(prefix="chicane-"))
+            is_temp = True
 
         session = ClaudeSession(
             cwd=work_dir,
@@ -185,6 +191,7 @@ class SessionStore:
             session=session,
             thread_ts=thread_ts,
             cwd=work_dir,
+            is_temp_dir=is_temp,
         )
         self._sessions[thread_ts] = info
 
@@ -221,6 +228,7 @@ class SessionStore:
         info = self._sessions.pop(thread_ts, None)
         if info:
             await info.session.disconnect()
+            _cleanup_temp_dir(info)
         # Remove associated message-to-thread entries
         orphaned = [
             msg_ts
@@ -236,6 +244,8 @@ class SessionStore:
             *(info.session.disconnect() for info in self._sessions.values()),
             return_exceptions=True,
         )
+        for info in self._sessions.values():
+            _cleanup_temp_dir(info)
         self._sessions.clear()
         self._message_to_thread.clear()
 
@@ -250,6 +260,7 @@ class SessionStore:
         for ts in expired:
             info = self._sessions.pop(ts)
             await info.session.disconnect()
+            _cleanup_temp_dir(info)
         if expired:
             # Remove orphaned message-to-thread entries
             active_threads = set(self._sessions.keys())
@@ -262,3 +273,15 @@ class SessionStore:
                 del self._message_to_thread[msg_ts]
             logger.info(f"Cleaned up {len(expired)} expired sessions")
         return len(expired)
+
+
+def _cleanup_temp_dir(info: SessionInfo) -> None:
+    """Remove a session's temporary working directory if applicable."""
+    if not info.is_temp_dir:
+        return
+    try:
+        if info.cwd.exists():
+            shutil.rmtree(info.cwd)
+            logger.debug("Removed temp dir %s", info.cwd)
+    except OSError:
+        logger.warning("Failed to remove temp dir %s", info.cwd, exc_info=True)

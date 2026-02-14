@@ -91,6 +91,53 @@ class TestSessionStore:
         store = SessionStore()
         info = store.get_or_create("thread-1", config)
         assert str(info.session.cwd).startswith("/tmp/chicane-") or "chicane-" in str(info.session.cwd)
+        assert info.is_temp_dir is True
+
+    def test_explicit_cwd_not_temp(self, store, config):
+        info = store.get_or_create("thread-1", config, cwd=Path("/tmp/projects"))
+        assert info.is_temp_dir is False
+
+    @pytest.mark.asyncio
+    async def test_remove_cleans_up_temp_dir(self):
+        from unittest.mock import AsyncMock
+        config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+        )
+        store = SessionStore()
+        info = store.get_or_create("thread-1", config)
+        info.session.disconnect = AsyncMock()
+        temp_path = info.cwd
+        assert temp_path.exists()
+
+        await store.remove("thread-1")
+        assert not temp_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_remove_preserves_non_temp_dir(self, store, config, tmp_path):
+        from unittest.mock import AsyncMock
+        work_dir = tmp_path / "myproject"
+        work_dir.mkdir()
+        info = store.get_or_create("thread-1", config, cwd=work_dir)
+        info.session.disconnect = AsyncMock()
+
+        await store.remove("thread-1")
+        assert work_dir.exists()  # Should NOT be deleted
+
+    @pytest.mark.asyncio
+    async def test_shutdown_cleans_up_temp_dirs(self):
+        from unittest.mock import AsyncMock
+        config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+        )
+        store = SessionStore()
+        info = store.get_or_create("thread-1", config)
+        info.session.disconnect = AsyncMock()
+        temp_path = info.cwd
+
+        await store.shutdown()
+        assert not temp_path.exists()
 
     def test_sessions_include_slack_system_prompt(self, store, config):
         info = store.get_or_create("thread-1", config)
