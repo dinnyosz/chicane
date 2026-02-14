@@ -232,8 +232,10 @@ class SessionStore:
 
     async def shutdown(self) -> None:
         """Disconnect all active Claude SDK sessions."""
-        for info in self._sessions.values():
-            await info.session.disconnect()
+        await asyncio.gather(
+            *(info.session.disconnect() for info in self._sessions.values()),
+            return_exceptions=True,
+        )
         self._sessions.clear()
         self._message_to_thread.clear()
 

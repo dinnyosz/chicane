@@ -396,10 +396,26 @@ class ClaudeSession:
         return result_text
 
     async def disconnect(self) -> None:
-        """Disconnect the SDK client."""
+        """Disconnect the SDK client.
+
+        The SDK uses anyio task groups internally.  When ``disconnect()``
+        is called from a *different* asyncio task than the one that created
+        the connection (e.g. during shutdown), anyio raises
+        ``RuntimeError("Attempted to exit cancel scope in a different task
+        …")``.  This is harmless — the subprocess is cleaned up when the
+        event loop exits — so we suppress it silently.
+        """
         if self._client:
             try:
                 await self._client.disconnect()
+            except RuntimeError as exc:
+                if "cancel scope" in str(exc):
+                    # Expected during cross-task shutdown; nothing to do.
+                    pass
+                else:
+                    logger.debug(
+                        "Error disconnecting SDK client", exc_info=True
+                    )
             except Exception:
                 logger.debug("Error disconnecting SDK client", exc_info=True)
             self._client = None

@@ -720,6 +720,36 @@ class TestClaudeSessionDisconnect:
         assert not session._connected
 
     @pytest.mark.asyncio
+    async def test_disconnect_suppresses_anyio_cancel_scope_error(self):
+        """Cross-task disconnect (e.g. during shutdown) should not log."""
+        session = ClaudeSession()
+        mock_client = AsyncMock()
+        mock_client.disconnect.side_effect = RuntimeError(
+            "Attempted to exit cancel scope in a different task"
+        )
+        session._client = mock_client
+        session._connected = True
+
+        await session.disconnect()  # Should not raise or log
+
+        assert session._client is None
+        assert not session._connected
+
+    @pytest.mark.asyncio
+    async def test_disconnect_logs_non_cancel_scope_runtime_error(self):
+        """Other RuntimeErrors should still be logged."""
+        session = ClaudeSession()
+        mock_client = AsyncMock()
+        mock_client.disconnect.side_effect = RuntimeError("something else")
+        session._client = mock_client
+        session._connected = True
+
+        await session.disconnect()
+
+        assert session._client is None
+        assert not session._connected
+
+    @pytest.mark.asyncio
     async def test_kill_calls_interrupt_then_disconnects(self):
         session = ClaudeSession()
         mock_client = AsyncMock()
