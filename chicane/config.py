@@ -256,13 +256,29 @@ _NOUNS = [
 ]
 
 
-def generate_session_alias() -> str:
-    """Generate a memorable alias like ``sneaky-octopus-pizza``."""
+def _random_alias() -> str:
+    """Return a single random adjective-animal-noun alias."""
     return (
         f"{random.choice(_ADJECTIVES)}-"
         f"{random.choice(_ANIMALS)}-"
         f"{random.choice(_NOUNS)}"
     )
+
+
+def generate_session_alias() -> str:
+    """Generate a memorable alias like ``sneaky-octopus-pizza``.
+
+    Retries until the alias doesn't collide with an existing handoff
+    mapping.  With ~15k combinations and a max of 200 stored sessions
+    this should almost never need more than one attempt.
+    """
+    existing = _load_handoff_map()
+    for _ in range(50):
+        alias = _random_alias()
+        if alias not in existing:
+            return alias
+    # Extremely unlikely fallback — just return whatever we got
+    return alias
 
 
 # ---------------------------------------------------------------------------
@@ -273,14 +289,19 @@ _HANDOFF_MAP_FILE = config_dir() / "handoff_sessions.json"
 _HANDOFF_MAP_MAX = 200
 
 
+def _load_handoff_map() -> dict[str, str]:
+    """Load the handoff alias → session_id map from disk."""
+    if not _HANDOFF_MAP_FILE.exists():
+        return {}
+    try:
+        return json.loads(_HANDOFF_MAP_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
 def save_handoff_session(alias: str, session_id: str) -> None:
     """Persist a handoff alias → session_id mapping."""
-    data: dict[str, str] = {}
-    if _HANDOFF_MAP_FILE.exists():
-        try:
-            data = json.loads(_HANDOFF_MAP_FILE.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
+    data = _load_handoff_map()
     data[alias] = session_id
     # Trim oldest entries to keep the file bounded
     if len(data) > _HANDOFF_MAP_MAX:
@@ -295,10 +316,4 @@ def save_handoff_session(alias: str, session_id: str) -> None:
 
 def load_handoff_session(alias: str) -> str | None:
     """Look up a handoff session_id by its alias."""
-    if not _HANDOFF_MAP_FILE.exists():
-        return None
-    try:
-        data = json.loads(_HANDOFF_MAP_FILE.read_text())
-        return data.get(alias)
-    except (json.JSONDecodeError, OSError):
-        return None
+    return _load_handoff_map().get(alias)

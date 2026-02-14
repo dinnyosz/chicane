@@ -368,3 +368,56 @@ class TestConfigDir:
     def test_env_file_inside_config_dir(self, monkeypatch):
         monkeypatch.setenv("CHICANE_CONFIG_DIR", "/custom/path")
         assert env_file() == Path("/custom/path/.env")
+
+
+class TestGenerateSessionAlias:
+    def test_returns_three_word_alias(self):
+        from chicane.config import generate_session_alias
+        alias = generate_session_alias()
+        parts = alias.split("-")
+        assert len(parts) == 3
+        assert all(part.isalpha() for part in parts)
+
+    def test_avoids_collision_with_existing(self, tmp_path, monkeypatch):
+        from chicane.config import (
+            _HANDOFF_MAP_FILE,
+            _random_alias,
+            generate_session_alias,
+            save_handoff_session,
+        )
+        # Point the map file to a temp location
+        map_file = tmp_path / "handoff_sessions.json"
+        monkeypatch.setattr("chicane.config._HANDOFF_MAP_FILE", map_file)
+
+        # Pre-fill the map with a known alias
+        first = _random_alias()
+        save_handoff_session(first, "existing-session-id")
+
+        # Patch _random_alias to return the colliding name first, then a fresh one
+        call_count = 0
+        original = _random_alias
+
+        def _patched():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return first  # collision
+            return original()  # should be different
+
+        monkeypatch.setattr("chicane.config._random_alias", _patched)
+        result = generate_session_alias()
+        assert result != first
+        assert call_count >= 2
+
+    def test_fallback_after_max_retries(self, tmp_path, monkeypatch):
+        from chicane.config import generate_session_alias, save_handoff_session
+        map_file = tmp_path / "handoff_sessions.json"
+        monkeypatch.setattr("chicane.config._HANDOFF_MAP_FILE", map_file)
+
+        # Make _random_alias always return the same thing
+        monkeypatch.setattr("chicane.config._random_alias", lambda: "same-alias-always")
+        save_handoff_session("same-alias-always", "some-id")
+
+        # Should still return after 50 retries (fallback)
+        result = generate_session_alias()
+        assert result == "same-alias-always"
