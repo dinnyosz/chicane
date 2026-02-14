@@ -969,11 +969,17 @@ async def _download_files(
                         continue
                     data = await resp.read()
 
-                local_path = target_dir / name
+                # Sanitize filename: strip directory components to prevent
+                # path traversal (e.g. "../../etc/passwd" → "passwd").
+                safe_name = Path(name).name
+                if not safe_name:
+                    safe_name = "attachment"
+
+                local_path = target_dir / safe_name
                 counter = 1
                 while local_path.exists():
-                    stem = Path(name).stem
-                    suffix = Path(name).suffix
+                    stem = Path(safe_name).stem
+                    suffix = Path(safe_name).suffix
                     local_path = target_dir / f"{stem}_{counter}{suffix}"
                     counter += 1
 
