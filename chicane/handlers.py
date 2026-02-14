@@ -75,6 +75,9 @@ MAX_FILE_SIZE = 10 * 1024 * 1024
 # Matches both plain  (session_id: uuid)  and Slack-italicised  _(session_id: uuid)_
 _HANDOFF_RE = re.compile(r"_?\(session_id:\s*([a-f0-9\-]+)\)_?\s*$")
 
+# Regex for the new alias format: _(session: funky-name-here)_
+_SESSION_ALIAS_RE = re.compile(r"_?\(session:\s*([a-z]+-[a-z]+-[a-z]+)\)_?\s*$")
+
 # Tools whose output is too noisy for Slack (file contents).
 # Their tool_result blocks are silently dropped even in verbose mode.
 _QUIET_TOOLS = frozenset({"Read"})
@@ -828,46 +831,51 @@ async def _find_session_id_in_thread(
     """Scan thread messages for a handoff session_id.
 
     Returns the session_id if found in any message, otherwise None.
-    Checks the local handoff session map first (session_id is no longer
-    posted in message text), then falls back to scanning thread text
-    for backward compatibility with older handoff messages.
+    Checks for session aliases first (``_(session: funky-name)_``),
+    looking up the real session_id from the local map. Falls back to
+    the old ``_(session_id: uuid)_`` format for backward compatibility.
     """
-    # Check local persistent map first (new format: session_id not in text)
-    sid = load_handoff_session(thread_ts)
-    if sid:
-        logger.debug(f"Found session_id in local handoff map: {sid[:8]}...")
-        return sid
+
+    def _extract_session_id(text: str) -> str | None:
+        """Try alias lookup first, then old UUID format."""
+        # New format: _(session: alias)_ → look up real session_id
+        alias_match = _SESSION_ALIAS_RE.search(text)
+        if alias_match:
+            alias = alias_match.group(1)
+            sid = load_handoff_session(alias)
+            if sid:
+                logger.debug(f"Resolved alias {alias} → {sid[:8]}...")
+                return sid
+            logger.debug(f"Alias {alias} not in local map")
+        # Old format: _(session_id: uuid)_ → use directly
+        uuid_match = _HANDOFF_RE.search(text)
+        if uuid_match:
+            logger.debug(f"Found session_id in text: {uuid_match.group(1)[:8]}...")
+            return uuid_match.group(1)
+        return None
 
     try:
         replies = await client.conversations_replies(
             channel=channel, ts=thread_ts, limit=100
         )
         for msg in replies.get("messages", []):
-            text = msg.get("text", "")
-            m = _HANDOFF_RE.search(text)
-            if m:
-                logger.debug(f"Found session_id in thread reply: {m.group(1)}")
-                return m.group(1)
+            sid = _extract_session_id(msg.get("text", ""))
+            if sid:
+                return sid
     except Exception:
         logger.warning(
             f"Could not scan thread {thread_ts} for session_id", exc_info=True
         )
 
     # Fallback: fetch the thread starter message directly.
-    # conversations_replies should include it, but fetch it explicitly
-    # in case the thread is new or the API didn't return it above.
     try:
         resp = await client.conversations_history(
             channel=channel, latest=thread_ts, inclusive=True, limit=1
         )
         for msg in resp.get("messages", []):
-            text = msg.get("text", "")
-            m = _HANDOFF_RE.search(text)
-            if m:
-                logger.debug(
-                    f"Found session_id in thread starter message: {m.group(1)}"
-                )
-                return m.group(1)
+            sid = _extract_session_id(msg.get("text", ""))
+            if sid:
+                return sid
     except Exception:
         logger.warning(
             f"Could not fetch thread starter {thread_ts} for session_id",

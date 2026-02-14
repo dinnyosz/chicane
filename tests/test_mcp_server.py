@@ -1,6 +1,7 @@
 """Tests for chicane.mcp_server — MCP tool functions."""
 
 import json
+import re
 from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
 
@@ -58,10 +59,13 @@ class TestChicaneHandoff:
         assert "Handoff posted to #my-channel" in result
         mock_client.chat_postMessage.assert_awaited_once()
         call_kwargs = mock_client.chat_postMessage.call_args
-        # Full session_id should NOT be in text (only truncated hint)
-        assert "_(session_id:" not in call_kwargs.kwargs["text"]
-        assert "_(session: sess-abc" in call_kwargs.kwargs["text"]
-        assert "Working on auth flow" in call_kwargs.kwargs["text"]
+        text = call_kwargs.kwargs["text"]
+        # Full session_id should NOT be in text — only a funky alias
+        assert "sess-abc" not in text
+        assert "_(session:" in text
+        # Alias format: adjective-animal-noun
+        assert re.search(r"\(session: [a-z]+-[a-z]+-[a-z]+\)", text)
+        assert "Working on auth flow" in text
 
     @pytest.mark.asyncio
     async def test_handoff_with_questions(self, config, mock_client):

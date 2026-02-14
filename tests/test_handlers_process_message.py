@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from chicane.config import save_handoff_session
 from chicane.handlers import _process_message
 from tests.conftest import make_event, mock_client, mock_session_info
 
@@ -300,3 +301,40 @@ class TestProcessMessageEdgeCases:
             await _process_message(event, "continue", client, config, sessions)
 
             assert mock_create.call_args.kwargs["session_id"] == "abc-123-def"
+
+    @pytest.mark.asyncio
+    async def test_reconnect_finds_session_alias(self, config, sessions, tmp_path):
+        """Reconnect resolves a funky alias to the real session_id."""
+        async def fake_stream(prompt):
+            yield make_event("result", text="ok")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "real-uuid-here"
+
+        client = mock_client()
+        client.conversations_replies.return_value = {
+            "messages": [
+                {
+                    "user": "UBOT123",
+                    "ts": "8000.0",
+                    "text": "Handoff _(session: sneaky-octopus-pizza)_",
+                },
+            ]
+        }
+
+        with (
+            patch("chicane.config._HANDOFF_MAP_FILE", tmp_path / "sessions.json"),
+            patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)) as mock_create,
+        ):
+            save_handoff_session("sneaky-octopus-pizza", "real-uuid-here")
+
+            event = {
+                "ts": "8001.0",
+                "thread_ts": "8000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event, "continue", client, config, sessions)
+
+            assert mock_create.call_args.kwargs["session_id"] == "real-uuid-here"

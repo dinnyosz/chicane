@@ -9,7 +9,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
 from .app import resolve_channel_id, resolve_session_id
-from .config import Config, save_handoff_session
+from .config import Config, generate_session_alias, save_handoff_session
 
 # Shared annotation presets.
 _SLACK_ANNOTATIONS = ToolAnnotations(
@@ -106,19 +106,17 @@ async def chicane_handoff(
     except ValueError as exc:
         return f"Error: {exc}"
 
+    alias = generate_session_alias()
+    save_handoff_session(alias, sid)
+
     parts = [summary]
     if questions:
         parts.append(f"\n{questions}")
-    parts.append(f"\n_(session: {sid[:8]}…)_")
+    parts.append(f"\n_(session: {alias})_")
     text = "\n".join(parts)
 
     client = await _get_client()
-    result = await client.chat_postMessage(channel=channel_id, text=text)
-
-    # Persist session_id locally so it doesn't need to be in message text
-    thread_ts = result.get("ts", "")
-    if thread_ts:
-        save_handoff_session(thread_ts, sid)
+    await client.chat_postMessage(channel=channel_id, text=text)
 
     return (
         f"Handoff posted to #{channel_name}. "

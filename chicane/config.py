@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import random
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -232,25 +233,58 @@ class Config:
 
 
 # ---------------------------------------------------------------------------
-# Handoff session map — persists thread_ts → session_id across restarts
+# Handoff session aliases — funky names that map to real session IDs
+# ---------------------------------------------------------------------------
+
+_ADJECTIVES = [
+    "wild", "lazy", "sneaky", "cosmic", "fuzzy", "grumpy", "bouncy", "turbo",
+    "mega", "hyper", "dizzy", "wobbly", "spicy", "sleepy", "zippy", "funky",
+    "jolly", "cheeky", "swift", "bold", "zany", "wacky", "peppy", "nerdy",
+    "goofy",
+]
+_ANIMALS = [
+    "monkey", "penguin", "octopus", "dragon", "panda", "llama", "walrus",
+    "badger", "falcon", "parrot", "koala", "sloth", "otter", "gecko", "moose",
+    "yak", "narwhal", "dingo", "toucan", "meerkat", "platypus", "lemur",
+    "puffin", "wombat", "axolotl",
+]
+_NOUNS = [
+    "banana", "rocket", "pizza", "taco", "waffle", "donut", "pretzel",
+    "muffin", "tornado", "comet", "ninja", "pirate", "wizard", "pickle",
+    "noodle", "biscuit", "pancake", "thunder", "volcano", "blizzard",
+    "cupcake", "burrito", "sushi", "nugget", "chimney",
+]
+
+
+def generate_session_alias() -> str:
+    """Generate a memorable alias like ``sneaky-octopus-pizza``."""
+    return (
+        f"{random.choice(_ADJECTIVES)}-"
+        f"{random.choice(_ANIMALS)}-"
+        f"{random.choice(_NOUNS)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Handoff session map — persists alias → session_id across restarts
 # ---------------------------------------------------------------------------
 
 _HANDOFF_MAP_FILE = config_dir() / "handoff_sessions.json"
 _HANDOFF_MAP_MAX = 200
 
 
-def save_handoff_session(thread_ts: str, session_id: str) -> None:
-    """Persist a handoff session_id so it doesn't need to appear in message text."""
+def save_handoff_session(alias: str, session_id: str) -> None:
+    """Persist a handoff alias → session_id mapping."""
     data: dict[str, str] = {}
     if _HANDOFF_MAP_FILE.exists():
         try:
             data = json.loads(_HANDOFF_MAP_FILE.read_text())
         except (json.JSONDecodeError, OSError):
             pass
-    data[thread_ts] = session_id
+    data[alias] = session_id
     # Trim oldest entries to keep the file bounded
     if len(data) > _HANDOFF_MAP_MAX:
-        keys = sorted(data.keys())
+        keys = list(data.keys())
         for k in keys[: len(data) - _HANDOFF_MAP_MAX]:
             del data[k]
     _HANDOFF_MAP_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -259,12 +293,12 @@ def save_handoff_session(thread_ts: str, session_id: str) -> None:
     tmp.rename(_HANDOFF_MAP_FILE)
 
 
-def load_handoff_session(thread_ts: str) -> str | None:
-    """Look up a handoff session_id from the persistent map."""
+def load_handoff_session(alias: str) -> str | None:
+    """Look up a handoff session_id by its alias."""
     if not _HANDOFF_MAP_FILE.exists():
         return None
     try:
         data = json.loads(_HANDOFF_MAP_FILE.read_text())
-        return data.get(thread_ts)
+        return data.get(alias)
     except (json.JSONDecodeError, OSError):
         return None
