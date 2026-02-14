@@ -139,7 +139,7 @@ def _show_channel_table(mappings: dict[str, str]) -> None:
 
 def _step_create_app(has_tokens: bool) -> None:
     """Step 1: Print manifest and wait for user to create the app."""
-    console.rule("Step 1 of 11: Create Slack App")
+    console.rule("Step 1 of 13: Create Slack App")
 
     if has_tokens:
         console.print("\n  Tokens found in config — Slack app likely already configured.")
@@ -171,7 +171,7 @@ def _step_create_app(has_tokens: bool) -> None:
 
 def _step_bot_token(default: str = "") -> str:
     """Step 2: Get Bot Token."""
-    console.rule("Step 2 of 11: Get Bot Token")
+    console.rule("Step 2 of 13: Get Bot Token")
 
     if default:
         console.print("\n  Bot token found in config. Press Enter to keep it,")
@@ -189,7 +189,7 @@ def _step_bot_token(default: str = "") -> str:
 
 def _step_app_token(default: str = "") -> str:
     """Step 3: Get App Token."""
-    console.rule("Step 3 of 11: Get App Token")
+    console.rule("Step 3 of 13: Get App Token")
 
     if default:
         console.print("\n  App token found in config. Press Enter to keep it,")
@@ -212,7 +212,7 @@ def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
 
     Returns (base_directory, channel_dirs_string).
     """
-    console.rule("Step 4 of 11: Directory Settings")
+    console.rule("Step 4 of 13: Directory Settings")
     console.print("\n  [yellow]Note:[/yellow] Chicane will run Claude Code in these directories remotely.")
     console.print("  Only add directories you trust and are okay to tinker with.\n")
 
@@ -270,7 +270,7 @@ def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
 
 def _step_allowed_users(defaults: dict[str, str]) -> str:
     """Step 5: Configure allowed users interactively. Returns comma-separated IDs or empty."""
-    console.rule("Step 5 of 11: Allowed Users")
+    console.rule("Step 5 of 13: Allowed Users")
     console.print("\n  Restrict who can use the bot by Slack member ID.")
     console.print("  (Find yours: Slack profile -> ⋮ menu -> Copy member ID)\n")
 
@@ -313,7 +313,7 @@ def _step_allowed_users(defaults: dict[str, str]) -> str:
 
 def _step_claude_model(default: str = "") -> str:
     """Step 6: Configure Claude model."""
-    console.rule("Step 6 of 11: Claude Model")
+    console.rule("Step 6 of 13: Claude Model")
     console.print("\n  Override the Claude model used for tasks.")
     console.print("  Options: sonnet, opus, haiku (or any Claude model ID).")
     console.print("  Leave empty to use the Claude CLI default.")
@@ -322,7 +322,7 @@ def _step_claude_model(default: str = "") -> str:
 
 def _step_permission_mode(default: str = "acceptEdits") -> str:
     """Step 7: Configure permission mode."""
-    console.rule("Step 7 of 11: Permission Mode")
+    console.rule("Step 7 of 13: Permission Mode")
     console.print("\n  Controls what Claude Code can do autonomously.")
     console.print("  [dim]acceptEdits[/dim]       — auto-accepts file edits, use allowed tools for shell")
     console.print("  [dim]dontAsk[/dim]           — auto-denies everything except allowed tools")
@@ -355,7 +355,7 @@ def _show_allowed_tools(tools: list[str]) -> None:
 
 def _step_allowed_tools(default: str = "") -> str:
     """Step 8: Configure allowed tools interactively. Returns comma-separated rules."""
-    console.rule("Step 8 of 11: Allowed Tools")
+    console.rule("Step 8 of 13: Allowed Tools")
     console.print("\n  Pre-approve specific tools so Claude doesn't prompt for them.")
     console.print("  [yellow]Warning:[/yellow] This overrides your Claude settings.json permissions.")
     console.print("  Leave empty to use your existing Claude config as-is.")
@@ -398,9 +398,49 @@ def _step_allowed_tools(default: str = "") -> str:
     return ",".join(tools)
 
 
+def _step_max_turns(default: str = "") -> str:
+    """Step 9: Configure max turns per message."""
+    console.rule("Step 9 of 13: Max Turns")
+    console.print("\n  Maximum number of agentic turns Claude can take per message.")
+    console.print("  Each turn is one API call; complex tasks may need 20-50+ turns.")
+    console.print("  Leave empty for unlimited (Claude decides when to stop).")
+    while True:
+        val = _prompt_with_default("Max turns", default)
+        if not val:
+            return ""
+        try:
+            n = int(val)
+            if n < 1:
+                console.print("  [red]Must be a positive integer.[/red]\n")
+                continue
+            return str(n)
+        except ValueError:
+            console.print("  [red]Must be a positive integer.[/red]\n")
+
+
+def _step_max_budget(default: str = "") -> str:
+    """Step 10: Configure max budget per message."""
+    console.rule("Step 10 of 13: Max Budget")
+    console.print("\n  Maximum cost in USD that Claude can spend per message.")
+    console.print("  Prevents runaway spending on long-running tasks.")
+    console.print("  Leave empty for no budget limit.")
+    while True:
+        val = _prompt_with_default("Max budget (USD)", default)
+        if not val:
+            return ""
+        try:
+            n = float(val)
+            if n <= 0:
+                console.print("  [red]Must be a positive number.[/red]\n")
+                continue
+            return val
+        except ValueError:
+            console.print("  [red]Must be a positive number (e.g. 1.50).[/red]\n")
+
+
 def _step_logging(defaults: dict[str, str]) -> tuple[str, str]:
     """Step 9: Configure log directory and log level. Returns (log_dir, log_level)."""
-    console.rule("Step 9 of 11: Logging")
+    console.rule("Step 11 of 13: Logging")
     from platformdirs import user_log_dir
 
     default_log_dir = defaults.get("LOG_DIR", "") or user_log_dir("chicane", appauthor=False)
@@ -430,7 +470,7 @@ def _step_logging(defaults: dict[str, str]) -> tuple[str, str]:
 
 def _step_verbosity(default: str = "verbose") -> str:
     """Step 10: Configure verbosity level."""
-    console.rule("Step 10 of 11: Verbosity")
+    console.rule("Step 12 of 13: Verbosity")
     console.print("\n  Controls how much detail is shown in Slack during Claude sessions.")
     console.print("  [dim]minimal[/dim]  — Only final text responses and completion summaries")
     console.print("  [dim]normal[/dim]   — Text + tool call summaries and errors")
@@ -522,18 +562,26 @@ def _run_wizard(args) -> None:
     _set_or_clear("CLAUDE_ALLOWED_TOOLS", _step_allowed_tools(existing.get("CLAUDE_ALLOWED_TOOLS", "")))
     _save()
 
-    # Step 9: Logging
+    # Step 9: Max Turns
+    _set_or_clear("CLAUDE_MAX_TURNS", _step_max_turns(existing.get("CLAUDE_MAX_TURNS", "")))
+    _save()
+
+    # Step 10: Max Budget
+    _set_or_clear("CLAUDE_MAX_BUDGET_USD", _step_max_budget(existing.get("CLAUDE_MAX_BUDGET_USD", "")))
+    _save()
+
+    # Step 11: Logging
     log_dir, log_level = _step_logging(existing)
     _set_or_clear("LOG_DIR", log_dir)
     _set_or_clear("LOG_LEVEL", log_level if log_level != "INFO" else "")
     _save()
 
-    # Step 10: Verbosity
+    # Step 12: Verbosity
     _set_or_clear("VERBOSITY", _step_verbosity(existing.get("VERBOSITY", "normal")))
     _save()
 
-    # Step 11: Done
-    console.rule("Step 11 of 11: Done")
+    # Step 13: Done
+    console.rule("Step 13 of 13: Done")
     console.print()
     console.print(Panel(
         f"[green]✓[/green] Config saved to {env_path}\n"

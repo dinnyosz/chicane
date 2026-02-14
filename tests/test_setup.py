@@ -25,6 +25,8 @@ from chicane.setup import (
     _step_channel_dirs,
     _step_claude_model,
     _step_logging,
+    _step_max_budget,
+    _step_max_turns,
     _step_permission_mode,
     _step_verbosity,
     _write_env,
@@ -553,6 +555,102 @@ class TestStepAllowedTools:
             assert _step_allowed_tools() == "Read"
 
 
+class TestStepMaxTurns:
+    def test_empty_returns_empty(self):
+        with patch("chicane.setup.Prompt.ask", return_value=""), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_max_turns() == ""
+
+    def test_valid_integer(self):
+        with patch("chicane.setup.Prompt.ask", return_value="50"), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_max_turns() == "50"
+
+    def test_keeps_default(self):
+        with patch("chicane.setup.Prompt.ask", return_value="25"), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_max_turns("25") == "25"
+
+    def test_invalid_reprompts(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["abc", "10"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_max_turns() == "10"
+
+    def test_zero_reprompts(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["0", "5"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_max_turns() == "5"
+
+    def test_negative_reprompts(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["-3", "1"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_max_turns() == "1"
+
+    def test_empty_clears_existing(self):
+        """Empty input when there's an existing value clears it."""
+        with patch("chicane.setup.Prompt.ask", return_value="-"), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_max_turns("25") == ""
+
+
+class TestStepMaxBudget:
+    def test_empty_returns_empty(self):
+        with patch("chicane.setup.Prompt.ask", return_value=""), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_max_budget() == ""
+
+    def test_valid_float(self):
+        with patch("chicane.setup.Prompt.ask", return_value="1.50"), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_max_budget() == "1.50"
+
+    def test_valid_integer(self):
+        with patch("chicane.setup.Prompt.ask", return_value="5"), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_max_budget() == "5"
+
+    def test_keeps_default(self):
+        with patch("chicane.setup.Prompt.ask", return_value="2.00"), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_max_budget("2.00") == "2.00"
+
+    def test_invalid_reprompts(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["abc", "3.50"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_max_budget() == "3.50"
+
+    def test_zero_reprompts(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["0", "1.00"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_max_budget() == "1.00"
+
+    def test_negative_reprompts(self):
+        with patch("chicane.setup.Prompt.ask", side_effect=["-5", "0.50"]), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_max_budget() == "0.50"
+
+    def test_empty_clears_existing(self):
+        """Dash clears existing default."""
+        with patch("chicane.setup.Prompt.ask", return_value="-"), \
+             patch("chicane.setup.console.print"), \
+             patch("chicane.setup.console.rule"):
+            assert _step_max_budget("2.00") == ""
+
+
 class TestStepLogging:
     def test_accepts_suggested_default(self):
         """Accepting the platformdirs default by pressing Enter."""
@@ -679,8 +777,8 @@ class TestSetupCommand:
 
     def test_fresh_setup_writes_env(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CHICANE_CONFIG_DIR", str(tmp_path))
-        # Prompt.ask: base dir, done(channels), done(users), model, permission, done(tools), log_dir, log_level, verbosity
-        prompt_values = ["", "d", "d", "", "", "d", "", "INFO", "normal"]
+        # Prompt.ask: base dir, done(channels), done(users), model, permission, done(tools), max_turns, max_budget, log_dir, log_level, verbosity
+        prompt_values = ["", "d", "d", "", "", "d", "", "", "", "INFO", "normal"]
         # console.input: press Enter (step1), bot token, app token
         input_values = [
             "",              # Step 1: press Enter
@@ -706,8 +804,8 @@ class TestSetupCommand:
         (tmp_path / ".env").write_text(
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nBASE_DIRECTORY=/old\n"
         )
-        # Prompt.ask: base dir (keep), done(channels), done(users), model, permission, done(tools), log_dir, log_level, verbosity
-        prompt_values = ["/old", "d", "d", "", "", "d", "", "INFO", "normal"]
+        # Prompt.ask: base dir (keep), done(channels), done(users), model, permission, done(tools), max_turns, max_budget, log_dir, log_level, verbosity
+        prompt_values = ["/old", "d", "d", "", "", "d", "", "", "", "INFO", "normal"]
         # Confirm.ask: skip step1=True
         confirm_values = [True]
         # console.input: bot token (empty=keep), app token (empty=keep)
@@ -734,8 +832,8 @@ class TestSetupCommand:
         (tmp_path / ".env").write_text(
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nCHANNEL_DIRS=old-proj\n"
         )
-        # Prompt.ask: base dir, add channels, done(users), model, permission, done(tools), log_dir, log_level, verbosity
-        prompt_values = ["", "a", "new-proj", "new-proj", "a", "extra", "extra", "d", "d", "", "", "d", "", "INFO", "normal"]
+        # Prompt.ask: base dir, add channels, done(users), model, permission, done(tools), max_turns, max_budget, log_dir, log_level, verbosity
+        prompt_values = ["", "a", "new-proj", "new-proj", "a", "extra", "extra", "d", "d", "", "", "d", "", "", "", "INFO", "normal"]
         # Confirm.ask: skip step1=True
         confirm_values = [True]
         # console.input: bot token override, app token keep
@@ -760,8 +858,8 @@ class TestSetupCommand:
 
     def test_token_validation_reprompts(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CHICANE_CONFIG_DIR", str(tmp_path))
-        # Prompt.ask: base dir, done (channels), done (users), model, permission, done (tools), log_dir, log_level, verbosity
-        prompt_values = ["", "d", "d", "", "", "d", "", "INFO", "normal"]
+        # Prompt.ask: base dir, done (channels), done (users), model, permission, done (tools), max_turns, max_budget, log_dir, log_level, verbosity
+        prompt_values = ["", "d", "d", "", "", "d", "", "", "", "INFO", "normal"]
         # console.input: press Enter (step1), bad bot, good bot, bad app, good app
         input_values = [
             "",              # Step 1: press Enter
