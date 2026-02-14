@@ -73,6 +73,7 @@ class Config:
     claude_setting_sources: list[str] = field(default_factory=lambda: ["user", "project", "local"])
     claude_max_turns: int | None = None
     claude_max_budget_usd: float | None = None
+    rate_limit: int = 10
     verbosity: str = "verbose"
 
     def __repr__(self) -> str:
@@ -111,7 +112,8 @@ class Config:
 
         If the channel is in channel_dirs, use the mapped path (relative to
         base_directory if not absolute). Returns None if the channel isn't
-        whitelisted.
+        whitelisted or if the resolved path escapes base_directory via
+        traversal (e.g. ``../../../etc``).
         """
         if channel_name not in self.channel_dirs:
             return None
@@ -121,6 +123,15 @@ class Config:
 
         if not path.is_absolute() and self.base_directory:
             path = self.base_directory / mapped
+
+        # Guard against directory traversal: relative paths that resolve
+        # outside base_directory via ../ components are blocked.
+        # Absolute paths are intentionally configured and always allowed.
+        if self.base_directory and not Path(mapped).is_absolute():
+            resolved = path.resolve()
+            base_resolved = self.base_directory.resolve()
+            if not resolved.is_relative_to(base_resolved):
+                return None
 
         return path
 
@@ -174,6 +185,12 @@ class Config:
             max_budget = float(raw_max_budget)
             if max_budget <= 0:
                 raise ValueError("CLAUDE_MAX_BUDGET_USD must be a positive number")
+        raw_rate_limit = os.environ.get("RATE_LIMIT")
+        rate_limit = 10
+        if raw_rate_limit:
+            rate_limit = int(raw_rate_limit)
+            if rate_limit < 1:
+                raise ValueError("RATE_LIMIT must be a positive integer")
         # Parse CHANNEL_DIRS: "magaldi,slack-bot,frontend" or "magaldi=magaldi,web=frontend"
         channel_dirs: dict[str, str] = {}
         raw_dirs = os.environ.get("CHANNEL_DIRS", "")
@@ -205,5 +222,6 @@ class Config:
             claude_setting_sources=setting_sources,
             claude_max_turns=max_turns,
             claude_max_budget_usd=max_budget,
+            rate_limit=rate_limit,
             verbosity=verbosity,
         )

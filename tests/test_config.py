@@ -138,6 +138,27 @@ class TestConfig:
             Config.from_env()
 
 
+class TestRateLimitConfig:
+    def test_rate_limit_default(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.delenv("RATE_LIMIT", raising=False)
+        assert Config.from_env().rate_limit == 10
+
+    def test_rate_limit_from_env(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("RATE_LIMIT", "5")
+        assert Config.from_env().rate_limit == 5
+
+    def test_invalid_rate_limit_rejected(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("RATE_LIMIT", "0")
+        with pytest.raises(ValueError, match="RATE_LIMIT must be a positive"):
+            Config.from_env()
+
+
 class TestDisallowedToolsConfig:
     def test_disallowed_tools_from_env(self, monkeypatch):
         monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
@@ -280,6 +301,27 @@ class TestChannelDirs:
             channel_dirs={},
         )
         assert config.resolve_dir_channel(tmp_path) is None
+
+    def test_resolve_traversal_blocked(self):
+        """Directory traversal via ../.. should be blocked when base_directory is set."""
+        config = Config(
+            slack_bot_token="t",
+            slack_app_token="t",
+            base_directory=Path("/home/user/code"),
+            channel_dirs={"evil": "../../etc"},
+        )
+        assert config.resolve_channel_dir("evil") is None
+
+    def test_resolve_traversal_allowed_when_inside_base(self):
+        """Paths that resolve inside base_directory should work."""
+        config = Config(
+            slack_bot_token="t",
+            slack_app_token="t",
+            base_directory=Path("/home/user/code"),
+            channel_dirs={"sub": "sub/../project"},
+        )
+        result = config.resolve_channel_dir("sub")
+        assert result is not None
 
     def test_empty_channel_dirs(self, monkeypatch):
         monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
