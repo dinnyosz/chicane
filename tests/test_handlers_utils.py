@@ -24,8 +24,19 @@ from tests.conftest import make_tool_event, tool_block
 
 
 class TestShouldIgnore:
-    def test_no_restrictions(self, config):
+    def test_empty_allowed_users_blocks_all(self):
+        """When allowed_users is empty, all messages are blocked."""
+        empty_config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            allowed_users=[],
+        )
         event = {"user": "U_ANYONE"}
+        assert _should_ignore(event, empty_config) is True
+
+    def test_allowed_user_in_list(self, config):
+        """Users in the config's allowed_users list are not ignored."""
+        event = {"user": "UHUMAN1"}
         assert _should_ignore(event, config) is False
 
     def test_allowed_user(self, config_restricted):

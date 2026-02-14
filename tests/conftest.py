@@ -19,6 +19,8 @@ def config():
     return Config(
         slack_bot_token="xoxb-test",
         slack_app_token="xapp-test",
+        allowed_users=["UHUMAN1", "U_HUMAN", "U_ALICE", "U_BOB", "U_ALLOWED"],
+        rate_limit=10000,  # High limit so tests don't trigger rate limiting
     )
 
 
