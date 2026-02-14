@@ -149,8 +149,10 @@ class TestProcessMessageEdgeCases:
             await _process_message(event, "hello", client, config, sessions)
 
         error_update = client.chat_update.call_args_list[-1]
-        assert ":x: Error:" in error_update.kwargs["text"]
-        assert "stream exploded" in error_update.kwargs["text"]
+        assert ":x: Error (RuntimeError)" in error_update.kwargs["text"]
+        assert "Check bot logs" in error_update.kwargs["text"]
+        # Ensure internal error message is NOT leaked to Slack
+        assert "stream exploded" not in error_update.kwargs["text"]
 
     @pytest.mark.asyncio
     async def test_long_response_uploaded_as_snippet(self, config, sessions):

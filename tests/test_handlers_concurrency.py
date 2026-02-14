@@ -171,10 +171,10 @@ class TestSessionLock:
         # Both should have been attempted
         assert call_count == 2
 
-        # First should show error
+        # First should show error (sanitized — no internal message leaked)
         error_updates = [
             c for c in client.chat_update.call_args_list
-            if ":x: Error:" in c.kwargs.get("text", "")
+            if ":x: Error (" in c.kwargs.get("text", "")
         ]
         assert len(error_updates) == 1
 
