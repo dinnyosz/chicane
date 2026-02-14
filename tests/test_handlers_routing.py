@@ -234,7 +234,8 @@ class TestHandlerRoutingEdgeCases:
             mock_process.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_mention_with_empty_text_ignored(self, app, config, sessions):
+    async def test_mention_with_empty_text_ignored_top_level(self, app, config, sessions):
+        """Top-level empty @mention (no thread) should be ignored."""
         register_handlers(app, config, sessions)
         mention_handler = self._handlers["app_mention"]
 
@@ -247,6 +248,25 @@ class TestHandlerRoutingEdgeCases:
             }
             await mention_handler(event=event, client=AsyncMock())
             mock_process.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_mention_in_thread_reply_is_processed(self, app, config, sessions):
+        """Empty @mention in a thread reply should still be processed (handoff pickup)."""
+        register_handlers(app, config, sessions)
+        mention_handler = self._handlers["app_mention"]
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            event = {
+                "ts": "2001.5",
+                "thread_ts": "2000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+                "text": "<@UBOT123>",
+            }
+            await mention_handler(event=event, client=AsyncMock())
+            mock_process.assert_called_once()
+            # Prompt should be empty string after stripping the @mention
+            assert mock_process.call_args[0][1] == ""
 
     @pytest.mark.asyncio
     async def test_message_subtype_ignored(self, app, config, sessions):

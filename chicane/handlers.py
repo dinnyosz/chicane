@@ -165,7 +165,8 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
             return
 
         text = re.sub(r"<@[A-Z0-9]+>\s*", "", event.get("text", "")).strip()
-        if not text and not event.get("files"):
+        is_thread_reply = bool(event.get("thread_ts"))
+        if not text and not event.get("files") and not is_thread_reply:
             return
 
         await _process_message(event, text or "", client, config, sessions)
@@ -373,6 +374,12 @@ async def _process_message(
                 "--- END THREAD HISTORY ---\n\n"
                 f"Now respond to the latest message:\n{prompt}"
             )
+
+    # If the user just @mentioned us without text (e.g. to wake up the bot
+    # in a handoff thread), provide a minimal prompt so Claude has something
+    # to respond to.
+    if not prompt and not is_reconnect:
+        prompt = "The user tagged you in this thread. Say hello and ask how you can help."
 
     # Download file attachments to a cache directory outside the git worktree
     attachments_dir = Path(user_cache_dir("chicane", appauthor=False)) / "attachments" / thread_ts
