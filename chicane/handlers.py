@@ -220,15 +220,16 @@ async def _process_message(
     except Exception:
         pass  # Reaction may already exist or we lack permission
 
-    # Thread-root status: swap checkmark → eyes so the channel list shows
-    # this thread is actively being worked on.
+    # Thread-root status: clear any previous state → add eyes so the channel
+    # list shows this thread is actively being worked on.
     if thread_ts != event["ts"]:
-        try:
-            await client.reactions_remove(
-                channel=channel, name="white_check_mark", timestamp=thread_ts
-            )
-        except Exception:
-            pass
+        for old_emoji in ("white_check_mark", "x", "octagonal_sign"):
+            try:
+                await client.reactions_remove(
+                    channel=channel, name=old_emoji, timestamp=thread_ts
+                )
+            except Exception:
+                pass
         try:
             await client.reactions_add(
                 channel=channel, name="eyes", timestamp=thread_ts
@@ -495,6 +496,8 @@ async def _process_message(
                         )
                     except Exception:
                         pass
+                    # Thread-root eyes will be re-added by the new message's
+                    # _process_message call, so no action needed here.
                 else:
                     # Reaction interrupt — show partial text + stop indicator
                     if full_text:
@@ -518,7 +521,7 @@ async def _process_message(
                             channel=channel, ts=message_ts,
                             text=":stop_sign: _Interrupted_",
                         )
-                    # Swap eyes → stop sign reaction
+                    # Swap eyes → stop sign reaction on user's message
                     try:
                         await client.reactions_remove(
                             channel=channel, name="eyes", timestamp=event["ts"]
@@ -528,6 +531,20 @@ async def _process_message(
                         )
                     except Exception:
                         pass
+                    # Thread-root: swap eyes → stop sign
+                    if thread_ts != event["ts"]:
+                        try:
+                            await client.reactions_remove(
+                                channel=channel, name="eyes", timestamp=thread_ts
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            await client.reactions_add(
+                                channel=channel, name="octagonal_sign", timestamp=thread_ts
+                            )
+                        except Exception:
+                            pass
                 return
 
             # Final: send remaining text
@@ -598,7 +615,7 @@ async def _process_message(
                         channel=channel, thread_ts=thread_ts, text=note,
                     )
 
-            # Swap eyes for checkmark
+            # Swap eyes for checkmark on the user's message
             try:
                 await client.reactions_remove(
                     channel=channel, name="eyes", timestamp=event["ts"]
@@ -608,6 +625,22 @@ async def _process_message(
                 )
             except Exception:
                 pass
+
+            # Thread-root status: swap eyes → checkmark so the channel list
+            # shows this thread has new results to review.
+            if thread_ts != event["ts"]:
+                try:
+                    await client.reactions_remove(
+                        channel=channel, name="eyes", timestamp=thread_ts
+                    )
+                except Exception:
+                    pass
+                try:
+                    await client.reactions_add(
+                        channel=channel, name="white_check_mark", timestamp=thread_ts
+                    )
+                except Exception:
+                    pass
 
         except Exception as exc:
             logger.exception(f"Error processing message: {exc}")
@@ -619,6 +652,7 @@ async def _process_message(
                 )
             except Exception:
                 logger.debug("Failed to post error message to Slack", exc_info=True)
+            # Error reactions on the user's message
             try:
                 await client.reactions_remove(
                     channel=channel, name="eyes", timestamp=event["ts"]
@@ -628,6 +662,20 @@ async def _process_message(
                 )
             except Exception:
                 pass
+            # Thread-root status: swap eyes → x on error
+            if thread_ts != event["ts"]:
+                try:
+                    await client.reactions_remove(
+                        channel=channel, name="eyes", timestamp=thread_ts
+                    )
+                except Exception:
+                    pass
+                try:
+                    await client.reactions_add(
+                        channel=channel, name="x", timestamp=thread_ts
+                    )
+                except Exception:
+                    pass
 
 
 async def _fetch_thread_history(
