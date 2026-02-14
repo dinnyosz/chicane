@@ -30,7 +30,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from chicane.handlers import _process_message, _has_question
+from chicane.handlers import _process_message, _has_question, _text_ends_with_question
 from tests.conftest import (
     make_event,
     make_tool_event,
@@ -693,4 +693,123 @@ class TestThreadRootWarning:
             await _process_message(event, "ok", client, config, sessions)
 
         assert _reactions_by_name(client, "reactions_add", "warning", "1000.0") == 0
+
+
+# ---------------------------------------------------------------------------
+# _text_ends_with_question — unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestTextEndsWithQuestion:
+    """Unit tests for the _text_ends_with_question helper."""
+
+    def test_simple_question(self):
+        assert _text_ends_with_question("What do you think?") is True
+
+    def test_trailing_whitespace(self):
+        assert _text_ends_with_question("What do you think?  \n") is True
+
+    def test_not_a_question(self):
+        assert _text_ends_with_question("Done — all tests pass.") is False
+
+    def test_empty_string(self):
+        assert _text_ends_with_question("") is False
+
+    def test_only_whitespace(self):
+        assert _text_ends_with_question("   \n  ") is False
+
+    def test_multiline_ending_with_question(self):
+        assert _text_ends_with_question("Here's the result.\n\nShould I continue?") is True
+
+    def test_multiline_not_ending_with_question(self):
+        assert _text_ends_with_question("Is this ok?\n\nDone.") is False
+
+
+# ---------------------------------------------------------------------------
+# :speech_balloon: on completion — question text gets balloon, not checkmark
+# ---------------------------------------------------------------------------
+
+
+class TestThreadRootQuestionCompletion:
+    """When Claude's final response ends with ?, speech_balloon is set instead of checkmark."""
+
+    @pytest.mark.asyncio
+    async def test_speech_balloon_on_question_text(self, config, sessions):
+        """Response ending with '?' gets speech_balloon, not white_check_mark."""
+        async def fake_stream(prompt):
+            yield make_event("assistant", text="Should I proceed with this approach?")
+            yield make_event("result", text="Should I proceed with this approach?")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {
+                "ts": "2000.0",
+                "thread_ts": "1000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event, "do stuff", client, config, sessions)
+
+        # Should have speech_balloon, NOT white_check_mark
+        assert _reactions_by_name(client, "reactions_add", "speech_balloon", "1000.0") >= 1
+        assert _reactions_by_name(client, "reactions_add", "white_check_mark", "1000.0") == 0
+
+    @pytest.mark.asyncio
+    async def test_checkmark_on_non_question_text(self, config, sessions):
+        """Response NOT ending with '?' gets white_check_mark as usual."""
+        async def fake_stream(prompt):
+            yield make_event("assistant", text="All done.")
+            yield make_event("result", text="All done.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {
+                "ts": "2000.0",
+                "thread_ts": "1000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event, "do stuff", client, config, sessions)
+
+        # Should have white_check_mark, NOT speech_balloon
+        assert _reactions_by_name(client, "reactions_add", "white_check_mark", "1000.0") >= 1
+        assert _reactions_by_name(client, "reactions_add", "speech_balloon", "1000.0") == 0
+
+    @pytest.mark.asyncio
+    async def test_speech_balloon_cleared_when_next_msg_arrives(self, config, sessions):
+        """When a new message arrives, old speech_balloon is cleared."""
+        async def fake_stream(prompt):
+            yield make_event("result", text="done")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        info = mock_session_info(mock_session)
+        # Simulate speech_balloon from a previous turn
+        info.thread_reactions.add("speech_balloon")
+
+        with patch.object(sessions, "get_or_create", return_value=info):
+            event = {
+                "ts": "2000.0",
+                "thread_ts": "1000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event, "here's my answer", client, config, sessions)
+
+        # speech_balloon from previous turn should be removed during cleanup
+        assert _reactions_by_name(client, "reactions_remove", "speech_balloon", "1000.0") >= 1
 

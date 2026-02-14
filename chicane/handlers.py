@@ -651,12 +651,18 @@ async def _process_message(
             except Exception:
                 pass
 
-            # Thread-root status: swap eyes → checkmark so the channel list
-            # shows this thread has new results to review.
+            # Thread-root status: swap eyes → checkmark (or speech_balloon
+            # if the response ends with a question needing user attention).
             if thread_ts != event["ts"]:
-                for done_emoji in ("eyes", "speech_balloon"):
-                    await _remove_thread_reaction(client, channel, session_info, done_emoji)
-                await _add_thread_reaction(client, channel, session_info, "white_check_mark")
+                ends_with_question = _text_ends_with_question(full_text)
+                await _remove_thread_reaction(client, channel, session_info, "eyes")
+                if ends_with_question:
+                    # Keep/add speech_balloon — user needs to respond
+                    await _add_thread_reaction(client, channel, session_info, "speech_balloon")
+                else:
+                    # Normal completion — checkmark
+                    await _remove_thread_reaction(client, channel, session_info, "speech_balloon")
+                    await _add_thread_reaction(client, channel, session_info, "white_check_mark")
 
         except Exception as exc:
             logger.exception(f"Error processing message: {exc}")
@@ -942,6 +948,18 @@ def _has_question(event: ClaudeEvent) -> bool:
         if block.get("name") == "AskUserQuestion":
             return True
     return False
+
+
+def _text_ends_with_question(text: str) -> bool:
+    """Check if the final non-empty line of text ends with a question mark."""
+    if not text:
+        return False
+    # Strip trailing whitespace/newlines and check last character
+    stripped = text.rstrip()
+    if not stripped:
+        return False
+    # Check last meaningful character (ignore trailing punctuation like ')' after '?')
+    return stripped.endswith("?")
 
 
 def _summarize_tool_input(tool_input: dict, max_params: int = 6) -> str:
