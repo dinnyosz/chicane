@@ -68,6 +68,11 @@ async def _resolve_channel(channel: str | None, cwd: Path | None = None) -> tupl
                 f"Could not resolve a Slack channel for {working_dir}. "
                 "Pass channel explicitly, or configure CHANNEL_DIRS."
             )
+    elif config.channel_dirs and channel_name not in config.channel_dirs:
+        raise ValueError(
+            f"Channel #{channel_name} is not in CHANNEL_DIRS. "
+            f"Allowed: {', '.join(sorted(config.channel_dirs))}"
+        )
 
     client = await _get_client()
     channel_id = await resolve_channel_id(client, channel_name)

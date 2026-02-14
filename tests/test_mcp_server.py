@@ -58,7 +58,9 @@ class TestChicaneHandoff:
         assert "Handoff posted to #my-channel" in result
         mock_client.chat_postMessage.assert_awaited_once()
         call_kwargs = mock_client.chat_postMessage.call_args
-        assert "sess-abc" in call_kwargs.kwargs["text"]
+        # Full session_id should NOT be in text (only truncated hint)
+        assert "_(session_id:" not in call_kwargs.kwargs["text"]
+        assert "_(session: sess-abc" in call_kwargs.kwargs["text"]
         assert "Working on auth flow" in call_kwargs.kwargs["text"]
 
     @pytest.mark.asyncio
@@ -91,10 +93,24 @@ class TestChicaneHandoff:
             result = await mcp_mod.chicane_handoff(
                 summary="Explicit test",
                 session_id="explicit-id",
-                channel="other-channel",
+                channel="my-channel",
             )
 
-        assert "Handoff posted to #other-channel" in result
+        assert "Handoff posted to #my-channel" in result
+
+    @pytest.mark.asyncio
+    async def test_handoff_rejects_unmapped_channel(self, config, mock_client):
+        with (
+            patch.object(mcp_mod, "_get_config", return_value=config),
+            patch("chicane.mcp_server.resolve_session_id", return_value="sess-1"),
+        ):
+            result = await mcp_mod.chicane_handoff(
+                summary="test",
+                channel="random-channel",
+            )
+
+        assert "Error:" in result
+        assert "not in CHANNEL_DIRS" in result
 
     @pytest.mark.asyncio
     async def test_handoff_session_id_error(self, config, mock_client):
@@ -156,31 +172,43 @@ class TestChicaneSendMessage:
         )
 
     @pytest.mark.asyncio
-    async def test_send_with_explicit_channel(self, config, mock_client):
+    async def test_send_with_explicit_mapped_channel(self, config, mock_client):
         with (
             patch.object(mcp_mod, "_get_config", return_value=config),
             patch.object(mcp_mod, "_get_client", return_value=mock_client),
             patch("chicane.mcp_server.resolve_channel_id", return_value="C789"),
         ):
             result = await mcp_mod.chicane_send_message(
-                text="Update", channel="alerts"
+                text="Update", channel="my-channel"
             )
 
-        assert "Message sent to #alerts" in result
+        assert "Message sent to #my-channel" in result
 
     @pytest.mark.asyncio
-    async def test_send_channel_not_found(self, config, mock_client):
+    async def test_send_rejects_unmapped_channel(self, config, mock_client):
+        with (
+            patch.object(mcp_mod, "_get_config", return_value=config),
+        ):
+            result = await mcp_mod.chicane_send_message(
+                text="test", channel="random-channel"
+            )
+
+        assert "Error:" in result
+        assert "not in CHANNEL_DIRS" in result
+
+    @pytest.mark.asyncio
+    async def test_send_channel_not_found_in_slack(self, config, mock_client):
         with (
             patch.object(mcp_mod, "_get_config", return_value=config),
             patch.object(mcp_mod, "_get_client", return_value=mock_client),
             patch("chicane.mcp_server.resolve_channel_id", return_value=None),
         ):
             result = await mcp_mod.chicane_send_message(
-                text="test", channel="nonexistent"
+                text="test", channel="my-channel"
             )
 
         assert "Error:" in result
-        assert "nonexistent" in result
+        assert "not found in Slack" in result
 
 
 class TestResolveChannel:
@@ -199,15 +227,15 @@ class TestResolveChannel:
         assert cid == "C123"
 
     @pytest.mark.asyncio
-    async def test_uses_explicit_channel(self, config, mock_client):
+    async def test_uses_explicit_mapped_channel(self, config, mock_client):
         with (
             patch.object(mcp_mod, "_get_config", return_value=config),
             patch.object(mcp_mod, "_get_client", return_value=mock_client),
             patch("chicane.mcp_server.resolve_channel_id", return_value="C999"),
         ):
-            name, cid = await mcp_mod._resolve_channel("explicit")
+            name, cid = await mcp_mod._resolve_channel("my-channel")
 
-        assert name == "explicit"
+        assert name == "my-channel"
         assert cid == "C999"
 
     @pytest.mark.asyncio
@@ -220,14 +248,39 @@ class TestResolveChannel:
                 await mcp_mod._resolve_channel(None, cwd=Path("/unknown"))
 
     @pytest.mark.asyncio
-    async def test_raises_when_channel_not_in_slack(self, config, mock_client):
+    async def test_raises_when_channel_not_in_channel_dirs(self, config, mock_client):
+        with (
+            patch.object(mcp_mod, "_get_config", return_value=config),
+        ):
+            with pytest.raises(ValueError, match="not in CHANNEL_DIRS"):
+                await mcp_mod._resolve_channel("ghost-channel")
+
+    @pytest.mark.asyncio
+    async def test_raises_when_mapped_channel_not_in_slack(self, config, mock_client):
         with (
             patch.object(mcp_mod, "_get_config", return_value=config),
             patch.object(mcp_mod, "_get_client", return_value=mock_client),
             patch("chicane.mcp_server.resolve_channel_id", return_value=None),
         ):
             with pytest.raises(ValueError, match="not found in Slack"):
-                await mcp_mod._resolve_channel("ghost-channel")
+                await mcp_mod._resolve_channel("my-channel")
+
+    @pytest.mark.asyncio
+    async def test_allows_any_channel_when_no_channel_dirs(self, mock_client):
+        """When CHANNEL_DIRS is not configured, any explicit channel is allowed."""
+        no_dirs_config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+        )
+        with (
+            patch.object(mcp_mod, "_get_config", return_value=no_dirs_config),
+            patch.object(mcp_mod, "_get_client", return_value=mock_client),
+            patch("chicane.mcp_server.resolve_channel_id", return_value="C999"),
+        ):
+            name, cid = await mcp_mod._resolve_channel("any-channel")
+
+        assert name == "any-channel"
+        assert cid == "C999"
 
 
 class TestChicaneInit:
