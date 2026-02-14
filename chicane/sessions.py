@@ -124,7 +124,7 @@ class SessionInfo:
 
 
 class SessionStore:
-    """Thread-safe store mapping Slack thread_ts to Claude sessions."""
+    """Coroutine-safe store mapping Slack thread_ts to Claude sessions."""
 
     def __init__(self) -> None:
         self._sessions: dict[str, SessionInfo] = {}
@@ -206,9 +206,11 @@ class SessionStore:
             return True
         return False
 
-    def remove(self, thread_ts: str) -> None:
-        """Remove a session."""
-        self._sessions.pop(thread_ts, None)
+    async def remove(self, thread_ts: str) -> None:
+        """Remove a session and disconnect its SDK client."""
+        info = self._sessions.pop(thread_ts, None)
+        if info:
+            await info.session.disconnect()
         # Remove associated message-to-thread entries
         orphaned = [
             msg_ts
@@ -225,7 +227,7 @@ class SessionStore:
         self._sessions.clear()
         self._message_to_thread.clear()
 
-    def cleanup(self, max_age_hours: int = 24) -> int:
+    async def cleanup(self, max_age_hours: int = 24) -> int:
         """Remove sessions older than max_age_hours. Returns count removed."""
         now = datetime.now()
         expired = [
@@ -234,7 +236,8 @@ class SessionStore:
             if (now - info.last_used).total_seconds() > max_age_hours * 3600
         ]
         for ts in expired:
-            del self._sessions[ts]
+            info = self._sessions.pop(ts)
+            await info.session.disconnect()
         if expired:
             # Remove orphaned message-to-thread entries
             active_threads = set(self._sessions.keys())

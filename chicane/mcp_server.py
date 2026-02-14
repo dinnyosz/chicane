@@ -195,7 +195,10 @@ async def chicane_init(
     if scope == "project":
         if not project_root:
             return "Error: project_root is required when scope is 'project'."
-        base = Path(project_root)
+        base = Path(project_root).resolve()
+        # Validate the path looks like a real project directory
+        if not base.is_dir():
+            return f"Error: project_root '{project_root}' is not an existing directory."
     elif scope == "global":
         base = Path.home()
     else:

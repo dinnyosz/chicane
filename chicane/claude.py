@@ -315,8 +315,14 @@ class ClaudeSession:
             return self._client
 
         opts = self._build_options()
-        self._client = ClaudeSDKClient(options=opts)
-        await self._client.connect()
+        client = ClaudeSDKClient(options=opts)
+        try:
+            await client.connect()
+        except Exception:
+            # Don't leave a half-initialised client reference
+            self._client = None
+            raise
+        self._client = client
         self._connected = True
         logger.info(f"SDK client connected (session_id={self.session_id}, cwd={self.cwd})")
         return self._client
@@ -398,11 +404,17 @@ class ClaudeSession:
                 logger.debug("Error disconnecting SDK client", exc_info=True)
             self._client = None
             self._connected = False
+            self._is_streaming = False
 
     async def kill(self) -> None:
-        """Kill the active session. For backward compatibility."""
+        """Kill the active session and clean up.
+
+        Interrupts first, then fully disconnects so a subsequent
+        ``_ensure_connected()`` creates a fresh client.
+        """
         if self._client:
             try:
                 await self._client.interrupt()
             except Exception:
                 pass
+            await self.disconnect()

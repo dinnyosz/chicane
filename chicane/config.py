@@ -75,6 +75,20 @@ class Config:
     claude_max_budget_usd: float | None = None
     verbosity: str = "verbose"
 
+    def __repr__(self) -> str:
+        """Mask sensitive tokens in repr to prevent accidental leakage."""
+        def _mask(val: str) -> str:
+            if len(val) <= 8:
+                return "***"
+            return val[:4] + "..." + val[-4:]
+
+        fields = []
+        for f in self.__dataclass_fields__:
+            val = getattr(self, f)
+            if f in ("slack_bot_token", "slack_app_token"):
+                val = _mask(val)
+            fields.append(f"{f}={val!r}")
+        return f"Config({', '.join(fields)})"
 
     def resolve_dir_channel(self, cwd: Path) -> str | None:
         """Reverse lookup: given a directory path, find the Slack channel name.

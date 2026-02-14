@@ -720,11 +720,16 @@ class TestClaudeSessionDisconnect:
         assert not session._connected
 
     @pytest.mark.asyncio
-    async def test_kill_calls_interrupt(self):
+    async def test_kill_calls_interrupt_then_disconnects(self):
         session = ClaudeSession()
-        session._client = AsyncMock()
+        mock_client = AsyncMock()
+        session._client = mock_client
+        session._connected = True
         await session.kill()
-        session._client.interrupt.assert_awaited_once()
+        mock_client.interrupt.assert_awaited_once()
+        mock_client.disconnect.assert_awaited_once()
+        assert session._client is None
+        assert not session._connected
 
     @pytest.mark.asyncio
     async def test_kill_noop_when_no_client(self):

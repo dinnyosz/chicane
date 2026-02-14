@@ -52,27 +52,35 @@ class TestSessionStore:
     def test_set_cwd_nonexistent_thread(self, store):
         assert store.set_cwd("nope", Path("/tmp")) is False
 
-    def test_remove(self, store, config):
-        store.get_or_create("thread-1", config)
-        store.remove("thread-1")
-        # Next call should create a new session
+    @pytest.mark.asyncio
+    async def test_remove(self, store, config):
+        from unittest.mock import AsyncMock
         info = store.get_or_create("thread-1", config)
-        assert info.session.session_id is None  # Fresh session
+        info.session.disconnect = AsyncMock()
+        await store.remove("thread-1")
+        info.session.disconnect.assert_awaited_once()
+        # Next call should create a new session
+        info2 = store.get_or_create("thread-1", config)
+        assert info2.session.session_id is None  # Fresh session
 
-    def test_cleanup_old_sessions(self, store, config):
+    @pytest.mark.asyncio
+    async def test_cleanup_old_sessions(self, store, config):
+        from unittest.mock import AsyncMock
         store.get_or_create("old-thread", config)
+        store._sessions["old-thread"].session.disconnect = AsyncMock()
         # Manually age the session
         store._sessions["old-thread"].last_used = datetime.now() - timedelta(hours=25)
         store.get_or_create("new-thread", config)
 
-        removed = store.cleanup(max_age_hours=24)
+        removed = await store.cleanup(max_age_hours=24)
         assert removed == 1
         assert "old-thread" not in store._sessions
         assert "new-thread" in store._sessions
 
-    def test_cleanup_keeps_recent(self, store, config):
+    @pytest.mark.asyncio
+    async def test_cleanup_keeps_recent(self, store, config):
         store.get_or_create("thread-1", config)
-        removed = store.cleanup(max_age_hours=24)
+        removed = await store.cleanup(max_age_hours=24)
         assert removed == 0
 
     def test_falls_back_to_temp_dir_when_no_cwd(self):
@@ -188,23 +196,29 @@ class TestSessionStore:
         assert store.thread_for_message("msg-2") == "thread-1"
         assert store.thread_for_message("msg-unknown") is None
 
-    def test_remove_cleans_up_message_entries(self, store, config):
-        store.get_or_create("thread-1", config)
+    @pytest.mark.asyncio
+    async def test_remove_cleans_up_message_entries(self, store, config):
+        from unittest.mock import AsyncMock
+        info = store.get_or_create("thread-1", config)
+        info.session.disconnect = AsyncMock()
         store.register_bot_message("msg-1", "thread-1")
         store.register_bot_message("msg-2", "thread-1")
-        store.remove("thread-1")
+        await store.remove("thread-1")
         assert store.thread_for_message("msg-1") is None
         assert store.thread_for_message("msg-2") is None
 
-    def test_cleanup_removes_orphaned_message_entries(self, store, config):
+    @pytest.mark.asyncio
+    async def test_cleanup_removes_orphaned_message_entries(self, store, config):
+        from unittest.mock import AsyncMock
         store.get_or_create("old-thread", config)
+        store._sessions["old-thread"].session.disconnect = AsyncMock()
         store.register_bot_message("msg-old", "old-thread")
         store._sessions["old-thread"].last_used = datetime.now() - timedelta(hours=25)
 
         store.get_or_create("new-thread", config)
         store.register_bot_message("msg-new", "new-thread")
 
-        store.cleanup(max_age_hours=24)
+        await store.cleanup(max_age_hours=24)
         assert store.thread_for_message("msg-old") is None
         assert store.thread_for_message("msg-new") == "new-thread"
 

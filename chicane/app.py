@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import signal
-import ssl
 import sys
 from pathlib import Path
 

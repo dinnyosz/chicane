@@ -53,16 +53,18 @@ def _should_show(event_type: str, verbosity: str) -> bool:
 def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> None:
     """Register all Slack event handlers on the app."""
     bot_user_id: str | None = None
-    processed_ts: set[str] = set()
+    processed_ts: dict[str, None] = {}  # ordered dict (insertion order) for LRU eviction
 
     def _mark_processed(ts: str) -> bool:
         """Mark a message as processed. Returns False if already seen."""
         if ts in processed_ts:
             return False
-        processed_ts.add(ts)
-        # Keep the set bounded
+        processed_ts[ts] = None
+        # Keep bounded: evict oldest half when limit is reached
         if len(processed_ts) > 500:
-            processed_ts.clear()
+            keys = list(processed_ts)
+            for k in keys[: len(keys) // 2]:
+                del processed_ts[k]
         return True
 
     @app.event("app_mention")
@@ -212,11 +214,27 @@ async def _process_message(
 
     logger.debug(f"Processing message from {user} in {channel}: {prompt[:80]}")
 
-    # Add eyes reaction to show we're working on it
+    # Add eyes reaction to user's message to show we've seen it
     try:
         await client.reactions_add(channel=channel, name="eyes", timestamp=event["ts"])
     except Exception:
         pass  # Reaction may already exist or we lack permission
+
+    # Thread-root status: swap checkmark → eyes so the channel list shows
+    # this thread is actively being worked on.
+    if thread_ts != event["ts"]:
+        try:
+            await client.reactions_remove(
+                channel=channel, name="white_check_mark", timestamp=thread_ts
+            )
+        except Exception:
+            pass
+        try:
+            await client.reactions_add(
+                channel=channel, name="eyes", timestamp=thread_ts
+            )
+        except Exception:
+            pass
 
     # Resolve working directory from channel name
     cwd = await _resolve_channel_cwd(channel, client, config)
@@ -278,13 +296,17 @@ async def _process_message(
         prompt = (prompt + file_note) if prompt else file_note.lstrip()
 
     # Post initial "thinking" message
-    result = await client.chat_postMessage(
-        channel=channel,
-        thread_ts=thread_ts,
-        text=":hourglass_flowing_sand: Working on it...",
-    )
-    message_ts = result["ts"]
-    sessions.register_bot_message(message_ts, thread_ts)
+    try:
+        result = await client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=":hourglass_flowing_sand: Working on it...",
+        )
+        message_ts = result["ts"]
+        sessions.register_bot_message(message_ts, thread_ts)
+    except Exception:
+        logger.exception("Failed to post placeholder message")
+        return
 
     # If another stream is active for this thread, interrupt it so we
     # can acquire the lock quickly instead of waiting minutes.
@@ -519,7 +541,7 @@ async def _process_message(
                             channel=channel, ts=message_ts,
                             text=":page_facing_up: Response uploaded as snippet (too long for a message).",
                         )
-                    await _send_snippet(client, channel, thread_ts, full_text)
+                    await _send_snippet(client, channel, thread_ts, mrkdwn)
                 else:
                     chunks = _split_message(mrkdwn)
                     if first_activity:
@@ -589,11 +611,14 @@ async def _process_message(
 
         except Exception as exc:
             logger.exception(f"Error processing message: {exc}")
-            await client.chat_update(
-                channel=channel,
-                ts=message_ts,
-                text=f":x: Error: {exc}",
-            )
+            try:
+                await client.chat_update(
+                    channel=channel,
+                    ts=message_ts,
+                    text=f":x: Error: {exc}",
+                )
+            except Exception:
+                logger.debug("Failed to post error message to Slack", exc_info=True)
             try:
                 await client.reactions_remove(
                     channel=channel, name="eyes", timestamp=event["ts"]
