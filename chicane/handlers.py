@@ -379,7 +379,15 @@ async def _process_message(
     # in a handoff thread), provide a minimal prompt so Claude has something
     # to respond to.
     if not prompt and not is_reconnect:
-        prompt = "The user tagged you in this thread. Say hello and ask how you can help."
+        if handoff_session_id:
+            prompt = (
+                "This session was handed off from a desktop Claude Code session. "
+                "The user tagged you to pick it up. Greet them briefly and ask "
+                "what they'd like you to work on — do NOT repeat or summarize "
+                "the previous session's context."
+            )
+        else:
+            prompt = "The user tagged you in this thread. Say hello and ask how you can help."
 
     # Download file attachments to a cache directory outside the git worktree
     attachments_dir = Path(user_cache_dir("chicane", appauthor=False)) / "attachments" / thread_ts
