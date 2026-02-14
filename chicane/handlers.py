@@ -13,7 +13,7 @@ from platformdirs import user_cache_dir
 from slack_bolt.async_app import AsyncApp
 from slack_sdk.web.async_client import AsyncWebClient
 
-from .config import Config, load_handoff_session
+from .config import Config, generate_session_alias, load_handoff_session, save_handoff_session
 from .sessions import SessionInfo, SessionStore
 
 logger = logging.getLogger(__name__)
@@ -545,6 +545,19 @@ async def _process_message(
                                     thread_ts=thread_ts,
                                     text=wrapped,
                                 )
+
+                elif event_data.type == "system" and event_data.subtype == "init":
+                    # New session started — save alias so it survives restarts
+                    sid = event_data.session_id
+                    if sid and not handoff_session_id:
+                        alias = generate_session_alias()
+                        save_handoff_session(alias, sid)
+                        session_info.session_alias = alias
+                        await client.chat_postMessage(
+                            channel=channel,
+                            thread_ts=thread_ts,
+                            text=f":link: _{alias}_",
+                        )
 
                 elif event_data.type == "system" and event_data.subtype == "compact_boundary":
                     if _should_show("compact_boundary", config.verbosity):

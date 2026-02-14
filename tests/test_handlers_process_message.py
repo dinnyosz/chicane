@@ -1,10 +1,11 @@
 """Tests for _process_message core logic: formatting, error paths, reconnection."""
 
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from chicane.config import save_handoff_session
+from chicane.config import save_handoff_session, load_handoff_session
 from chicane.handlers import _process_message
 from tests.conftest import make_event, mock_client, mock_session_info
 
@@ -338,3 +339,70 @@ class TestProcessMessageEdgeCases:
             await _process_message(event, "continue", client, config, sessions)
 
             assert mock_create.call_args.kwargs["session_id"] == "real-uuid-here"
+
+    @pytest.mark.asyncio
+    async def test_new_session_saves_alias_and_announces(self, config, sessions, tmp_path):
+        """When a new session starts (init event), an alias is generated,
+        saved to disk, and announced in the thread."""
+        async def fake_stream(prompt):
+            yield make_event("system", subtype="init", session_id="new-sess-id")
+            yield make_event("result", text="done")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "new-sess-id"
+
+        client = mock_client()
+
+        with (
+            patch("chicane.config._HANDOFF_MAP_FILE", tmp_path / "sessions.json"),
+            patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)),
+        ):
+            event = {"ts": "9000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions)
+
+            # Should have posted the alias announcement
+            alias_posts = [
+                c for c in client.chat_postMessage.call_args_list
+                if ":link:" in c.kwargs.get("text", "")
+            ]
+            assert len(alias_posts) == 1
+            alias_text = alias_posts[0].kwargs["text"]
+            # Extract alias from the message
+            m = re.search(r"_([a-z]+-[a-z]+-[a-z]+)_", alias_text)
+            assert m, f"No alias found in: {alias_text}"
+            alias = m.group(1)
+
+            # Alias should be saved to disk, mapping to the real session_id
+            assert load_handoff_session(alias) == "new-sess-id"
+
+    @pytest.mark.asyncio
+    async def test_handoff_session_does_not_generate_alias(self, config, sessions, tmp_path):
+        """When resuming a handoff session, no new alias should be generated."""
+        async def fake_stream(prompt):
+            yield make_event("system", subtype="init", session_id="abc-def-123")
+            yield make_event("result", text="done")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "abc-def-123"
+
+        client = mock_client()
+
+        with (
+            patch("chicane.config._HANDOFF_MAP_FILE", tmp_path / "sessions.json"),
+            patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)),
+        ):
+            event = {"ts": "9100.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(
+                event,
+                "continue (session_id: abc-def-123)",
+                client, config, sessions,
+            )
+
+            # Should NOT have posted an alias announcement
+            alias_posts = [
+                c for c in client.chat_postMessage.call_args_list
+                if ":link:" in c.kwargs.get("text", "")
+            ]
+            assert len(alias_posts) == 0

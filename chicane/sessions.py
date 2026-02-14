@@ -127,6 +127,9 @@ class SessionInfo:
     # True when cwd is a temporary directory created by SessionStore.
     is_temp_dir: bool = False
 
+    # Funky alias for this session (e.g. "sneaky-octopus-pizza").
+    session_alias: str | None = None
+
     # Cumulative session stats updated after each completion.
     total_requests: int = 0
     total_turns: int = 0
