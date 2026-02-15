@@ -83,7 +83,7 @@ def mock_client():
     # conversations_replies / conversations_history used by reconnect scanning.
     client.conversations_replies.return_value = {"messages": []}
     client.conversations_history.return_value = {"messages": []}
-    client.auth_test.return_value = {"user_id": "UBOT"}
+    client.auth_test.return_value = {"user_id": "UBOT123"}
     # Support the 3-step file upload flow used by _send_snippet.
     client.files_getUploadURLExternal.return_value = {
         "upload_url": "https://files.slack.com/upload/v1/fake",

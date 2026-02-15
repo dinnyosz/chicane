@@ -232,11 +232,11 @@ class TestReconnectHistorySanitization:
         client.conversations_replies.return_value = {
             "messages": [
                 {"user": "U_HUMAN", "ts": "1000.0", "text": "start"},
-                {"user": "UBOT", "ts": "1000.5", "text": "response"},
+                {"user": "UBOT123", "ts": "1000.5", "text": "response"},
             ]
         }
         client.conversations_history.return_value = {"messages": []}
-        client.auth_test.return_value = {"user_id": "UBOT"}
+        client.auth_test.return_value = {"user_id": "UBOT123"}
 
         mock_session = AsyncMock()
         mock_session.stream.return_value = aiter([

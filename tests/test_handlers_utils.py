@@ -294,6 +294,7 @@ class TestFindSessionIdInThread:
     @pytest.mark.asyncio
     async def test_finds_session_id_in_thread(self):
         client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
         client.conversations_replies.return_value = {
             "messages": [
                 {"user": "UHUMAN1", "ts": "1000.0", "text": "start a task"},
@@ -314,6 +315,7 @@ class TestFindSessionIdInThread:
     @pytest.mark.asyncio
     async def test_returns_none_when_no_session_id(self):
         client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
         client.conversations_replies.return_value = {
             "messages": [
                 {"user": "UHUMAN1", "ts": "1000.0", "text": "hello"},
@@ -331,6 +333,7 @@ class TestFindSessionIdInThread:
     async def test_returns_last_session_id_found(self):
         """When multiple session_ids exist, the last (most recent) wins."""
         client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
         client.conversations_replies.return_value = {
             "messages": [
                 {
@@ -354,6 +357,7 @@ class TestFindSessionIdInThread:
     @pytest.mark.asyncio
     async def test_returns_none_on_api_error(self):
         client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
         client.conversations_replies.side_effect = Exception("API error")
         client.conversations_history.return_value = {"messages": []}
 
@@ -364,6 +368,7 @@ class TestFindSessionIdInThread:
     @pytest.mark.asyncio
     async def test_handles_empty_thread(self):
         client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
         client.conversations_replies.return_value = {"messages": []}
         client.conversations_history.return_value = {"messages": []}
 
@@ -380,6 +385,7 @@ class TestFindSessionIdInThread:
         from chicane.config import save_handoff_session
 
         client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
         client.conversations_replies.return_value = {
             "messages": [
                 {
@@ -406,6 +412,7 @@ class TestFindSessionIdInThread:
         from chicane.config import save_handoff_session
 
         client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
         client.conversations_replies.return_value = {
             "messages": [
                 {
@@ -439,6 +446,7 @@ class TestFindSessionIdInThread:
         from chicane.config import save_handoff_session
 
         client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
         client.conversations_replies.return_value = {
             "messages": [
                 {
@@ -468,6 +476,7 @@ class TestFindSessionIdInThread:
         from unittest.mock import patch
 
         client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
         client.conversations_replies.return_value = {
             "messages": [
                 {
@@ -494,6 +503,7 @@ class TestFindSessionIdInThread:
         from chicane.config import save_handoff_session
 
         client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
         client.conversations_replies.return_value = {
             "messages": [
                 {
@@ -527,6 +537,7 @@ class TestFindSessionIdInThread:
         from unittest.mock import patch
 
         client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
         client.conversations_replies.return_value = {
             "messages": [
                 {
