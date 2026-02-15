@@ -30,7 +30,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from chicane.handlers import _process_message, _has_question, _text_ends_with_question, _EMOJI_LEGEND
+from chicane.handlers import (
+    _process_message,
+    _has_question,
+    _sync_thread_reactions,
+    _text_ends_with_question,
+    _EMOJI_LEGEND,
+)
 from tests.conftest import (
     make_event,
     make_tool_event,
@@ -980,4 +986,311 @@ class TestEmojiLegend:
         ]
         # Only once — on the first follow-up
         assert len(legend_posts) == 1
+
+
+# ---------------------------------------------------------------------------
+# _sync_thread_reactions — populates in-memory state from Slack
+# ---------------------------------------------------------------------------
+
+
+class TestSyncThreadReactions:
+    """Tests for _sync_thread_reactions which syncs emoji state from Slack."""
+
+    @pytest.mark.asyncio
+    async def test_populates_from_slack_state(self):
+        """Bot's own reactions are added to thread_reactions set."""
+        client = mock_client()
+        client.reactions_get.return_value = {
+            "message": {
+                "reactions": [
+                    {"name": "white_check_mark", "users": ["UBOT123", "UHUMAN1"]},
+                    {"name": "pencil2", "users": ["UBOT123"]},
+                    {"name": "thumbsup", "users": ["UHUMAN1"]},  # not ours
+                ],
+            },
+        }
+
+        mock_session = MagicMock()
+        mock_session.session_id = "s1"
+        info = mock_session_info(mock_session)
+
+        await _sync_thread_reactions(client, "C_CHAN", info)
+
+        assert info.thread_reactions == {"white_check_mark", "pencil2"}
+
+    @pytest.mark.asyncio
+    async def test_ignores_other_users_reactions(self):
+        """Reactions from other users are not added."""
+        client = mock_client()
+        client.reactions_get.return_value = {
+            "message": {
+                "reactions": [
+                    {"name": "eyes", "users": ["UHUMAN1"]},
+                ],
+            },
+        }
+
+        mock_session = MagicMock()
+        mock_session.session_id = "s1"
+        info = mock_session_info(mock_session)
+
+        await _sync_thread_reactions(client, "C_CHAN", info)
+
+        assert info.thread_reactions == set()
+
+    @pytest.mark.asyncio
+    async def test_handles_no_reactions(self):
+        """Message with no reactions doesn't break."""
+        client = mock_client()
+        client.reactions_get.return_value = {"message": {}}
+
+        mock_session = MagicMock()
+        mock_session.session_id = "s1"
+        info = mock_session_info(mock_session)
+
+        await _sync_thread_reactions(client, "C_CHAN", info)
+
+        assert info.thread_reactions == set()
+
+    @pytest.mark.asyncio
+    async def test_api_error_is_swallowed(self):
+        """If reactions.get fails, no exception propagates."""
+        client = mock_client()
+        client.reactions_get.side_effect = Exception("rate_limited")
+
+        mock_session = MagicMock()
+        mock_session.session_id = "s1"
+        info = mock_session_info(mock_session)
+
+        # Should not raise
+        await _sync_thread_reactions(client, "C_CHAN", info)
+
+        assert info.thread_reactions == set()
+
+
+# ---------------------------------------------------------------------------
+# Reconnect emoji sync — stale emojis cleaned after server restart
+# ---------------------------------------------------------------------------
+
+
+class TestReconnectEmojiSync:
+    """After restart, stale thread-root emojis are cleaned via sync."""
+
+    @pytest.mark.asyncio
+    async def test_stale_checkmark_removed_on_reconnect(self, config, sessions):
+        """After restart, old checkmark on thread root is synced and removed."""
+        async def fake_stream(prompt):
+            yield make_event("result", text="done")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        # Slack says there's a stale white_check_mark from the bot
+        client.reactions_get.return_value = {
+            "message": {
+                "reactions": [
+                    {"name": "white_check_mark", "users": ["UBOT123"]},
+                ],
+            },
+        }
+
+        # Brand new session (simulates restart — empty thread_reactions, total_requests=0)
+        info = mock_session_info(mock_session)
+
+        with patch.object(sessions, "get_or_create", return_value=info):
+            event = {
+                "ts": "2000.0",
+                "thread_ts": "1000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event, "follow up after restart", client, config, sessions)
+
+        # Sync should have been called (reactions_get)
+        client.reactions_get.assert_called_once()
+        # Stale checkmark should be removed
+        assert _reactions_by_name(client, "reactions_remove", "white_check_mark", "1000.0") >= 1
+
+    @pytest.mark.asyncio
+    async def test_stale_pencil2_removed_on_reconnect(self, config, sessions):
+        """After restart, stale pencil2 on thread root is cleaned."""
+        async def fake_stream(prompt):
+            yield make_event("result", text="done")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        client.reactions_get.return_value = {
+            "message": {
+                "reactions": [
+                    {"name": "pencil2", "users": ["UBOT123"]},
+                    {"name": "white_check_mark", "users": ["UBOT123"]},
+                ],
+            },
+        }
+
+        info = mock_session_info(mock_session)
+
+        with patch.object(sessions, "get_or_create", return_value=info):
+            event = {
+                "ts": "2000.0",
+                "thread_ts": "1000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event, "after restart", client, config, sessions)
+
+        assert _reactions_by_name(client, "reactions_remove", "pencil2", "1000.0") >= 1
+        assert _reactions_by_name(client, "reactions_remove", "white_check_mark", "1000.0") >= 1
+
+    @pytest.mark.asyncio
+    async def test_no_sync_for_existing_session(self, config, sessions):
+        """Sync is skipped when session already has reactions tracked."""
+        async def fake_stream(prompt):
+            yield make_event("result", text="done")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        info = mock_session_info(mock_session)
+        # Simulate existing session with tracked reactions
+        info.thread_reactions.add("white_check_mark")
+        info.total_requests = 1
+
+        with patch.object(sessions, "get_or_create", return_value=info):
+            event = {
+                "ts": "2000.0",
+                "thread_ts": "1000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event, "follow up", client, config, sessions)
+
+        # reactions_get should NOT be called — we already have local state
+        client.reactions_get.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Error/interrupt cleanup of pencil2/package
+# ---------------------------------------------------------------------------
+
+
+class TestErrorInterruptCleanupPencilPackage:
+    """Error and interrupt paths clean up pencil2/package from streaming."""
+
+    @pytest.mark.asyncio
+    async def test_pencil2_removed_on_error(self, config, sessions):
+        """If pencil2 was added during streaming, error path removes it."""
+        async def exploding_stream(prompt):
+            yield make_event("system", subtype="init", session_id="s1")
+            raise RuntimeError("kaboom")
+
+        mock_session = MagicMock()
+        mock_session.stream = exploding_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        info = mock_session_info(mock_session)
+        # Simulate pencil2 being on thread root (e.g. from partial streaming)
+        info.thread_reactions.add("pencil2")
+
+        with patch.object(sessions, "get_or_create", return_value=info):
+            event = {
+                "ts": "2000.0",
+                "thread_ts": "1000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event, "fail", client, config, sessions)
+
+        assert _reactions_by_name(client, "reactions_remove", "pencil2", "1000.0") >= 1
+
+    @pytest.mark.asyncio
+    async def test_package_removed_on_error(self, config, sessions):
+        """If package was added during streaming, error path removes it."""
+        async def exploding_stream(prompt):
+            yield make_event("system", subtype="init", session_id="s1")
+            raise RuntimeError("kaboom")
+
+        mock_session = MagicMock()
+        mock_session.stream = exploding_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        info = mock_session_info(mock_session)
+        info.thread_reactions.add("package")
+
+        with patch.object(sessions, "get_or_create", return_value=info):
+            event = {
+                "ts": "2000.0",
+                "thread_ts": "1000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event, "fail", client, config, sessions)
+
+        assert _reactions_by_name(client, "reactions_remove", "package", "1000.0") >= 1
+
+    @pytest.mark.asyncio
+    async def test_pencil2_removed_on_interrupt(self, config, sessions):
+        """If pencil2 was added during streaming, interrupt path removes it."""
+        async def fake_stream(prompt):
+            yield make_event("assistant", text="partial")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        info = mock_session_info(mock_session)
+        mock_session.was_interrupted = True
+        mock_session.interrupt_source = "reaction"
+        # Simulate pencil2 added during streaming
+        info.thread_reactions.add("pencil2")
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=info):
+            event = {
+                "ts": "2000.0",
+                "thread_ts": "1000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event, "work", client, config, sessions)
+
+        assert _reactions_by_name(client, "reactions_remove", "pencil2", "1000.0") >= 1
+
+    @pytest.mark.asyncio
+    async def test_package_removed_on_interrupt(self, config, sessions):
+        """If package was added during streaming, interrupt path removes it."""
+        async def fake_stream(prompt):
+            yield make_event("assistant", text="partial")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        info = mock_session_info(mock_session)
+        mock_session.was_interrupted = True
+        mock_session.interrupt_source = "reaction"
+        info.thread_reactions.add("package")
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=info):
+            event = {
+                "ts": "2000.0",
+                "thread_ts": "1000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event, "work", client, config, sessions)
+
+        assert _reactions_by_name(client, "reactions_remove", "package", "1000.0") >= 1
 

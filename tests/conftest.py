@@ -84,6 +84,8 @@ def mock_client():
     client.conversations_replies.return_value = {"messages": []}
     client.conversations_history.return_value = {"messages": []}
     client.auth_test.return_value = {"user_id": "UBOT123"}
+    # Default reactions_get for emoji sync on reconnect.
+    client.reactions_get.return_value = {"message": {}}
     # Support the 3-step file upload flow used by _send_snippet.
     client.files_getUploadURLExternal.return_value = {
         "upload_url": "https://files.slack.com/upload/v1/fake",

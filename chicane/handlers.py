@@ -64,6 +64,40 @@ async def _remove_thread_reaction(
     except Exception:
         session_info.thread_reactions.discard(name)
 
+
+async def _sync_thread_reactions(
+    client: AsyncWebClient,
+    channel: str,
+    session_info: SessionInfo,
+) -> None:
+    """Populate ``session_info.thread_reactions`` from actual Slack state.
+
+    Called on reconnect / server restart so the in-memory set matches
+    reality and ``_remove_thread_reaction`` can clean up stale emojis
+    instead of silently skipping them.
+    """
+    try:
+        resp = await client.reactions_get(
+            channel=channel, timestamp=session_info.thread_ts,
+        )
+        message = resp.get("message", {})
+        # Identify the bot's user ID so we only track our own reactions.
+        auth = await client.auth_test()
+        bot_user_id = auth["user_id"]
+        for reaction in message.get("reactions", []):
+            if bot_user_id in reaction.get("users", []):
+                session_info.thread_reactions.add(reaction["name"])
+        logger.debug(
+            "Synced thread reactions for %s: %s",
+            session_info.thread_ts, session_info.thread_reactions,
+        )
+    except Exception:
+        logger.debug(
+            "Failed to sync thread reactions for %s",
+            session_info.thread_ts, exc_info=True,
+        )
+
+
 # Threshold above which we upload a snippet instead of splitting into
 # multiple messages.  Set slightly above SLACK_MAX_LENGTH so short
 # overflows still get a simple two-message split.
@@ -372,11 +406,22 @@ async def _process_message(
     )
     session = session_info.session
 
+    # On reconnect (new SessionInfo for an existing thread), sync our
+    # in-memory reaction set from Slack so _remove_thread_reaction can
+    # actually clean up stale emojis left by a previous bot instance.
+    if (
+        thread_ts != event["ts"]
+        and not session_info.thread_reactions
+        and session_info.total_requests == 0
+    ):
+        await _sync_thread_reactions(client, channel, session_info)
+
     # Thread-root status: clear any previous state → add eyes so the channel
     # list shows this thread is actively being worked on.
     if thread_ts != event["ts"]:
         for old_emoji in ("white_check_mark", "x", "octagonal_sign",
-                         "speech_balloon", "warning", "hourglass"):
+                         "speech_balloon", "warning", "hourglass",
+                         "pencil2", "package"):
             await _remove_thread_reaction(client, channel, session_info, old_emoji)
         await _add_thread_reaction(client, channel, session_info, "eyes")
 
@@ -785,8 +830,10 @@ async def _process_message(
                     except Exception:
                         pass
                     # Thread-root: swap eyes/speech_balloon → stop sign
+                    # Also clean up pencil2/package from partial streaming
                     if thread_ts != event["ts"]:
-                        for int_emoji in ("eyes", "speech_balloon"):
+                        for int_emoji in ("eyes", "speech_balloon",
+                                          "pencil2", "package"):
                             await _remove_thread_reaction(client, channel, session_info, int_emoji)
                         await _add_thread_reaction(client, channel, session_info, "octagonal_sign")
                 return
@@ -940,8 +987,10 @@ async def _process_message(
             except Exception:
                 pass
             # Thread-root status: swap eyes/speech_balloon → x on error
+            # Also clean up pencil2/package from partial streaming
             if thread_ts != event["ts"]:
-                for err_emoji in ("eyes", "speech_balloon"):
+                for err_emoji in ("eyes", "speech_balloon",
+                                  "pencil2", "package"):
                     await _remove_thread_reaction(client, channel, session_info, err_emoji)
                 await _add_thread_reaction(client, channel, session_info, "x")
 
