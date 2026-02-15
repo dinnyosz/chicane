@@ -472,34 +472,16 @@ async def _process_message(
                     # Post tool activity
                     if show_activities:
                         for activity in activities:
-                            # Activities are plain strings or dicts with
-                            # ``text`` + ``diff`` (uploaded as snippet).
-                            if isinstance(activity, dict):
-                                act_text = activity["text"]
-                                act_diff = activity.get("diff")
-                            else:
-                                act_text = activity
-                                act_diff = None
-
                             if first_activity:
                                 await client.chat_update(
-                                    channel=channel, ts=message_ts, text=act_text,
+                                    channel=channel, ts=message_ts, text=activity,
                                 )
                                 first_activity = False
                             else:
                                 r = await client.chat_postMessage(
-                                    channel=channel, thread_ts=thread_ts, text=act_text,
+                                    channel=channel, thread_ts=thread_ts, text=activity,
                                 )
                                 sessions.register_bot_message(r["ts"], thread_ts)
-
-                            # Upload diff as a syntax-highlighted snippet
-                            if act_diff:
-                                await _send_snippet(
-                                    client, channel, thread_ts,
-                                    act_diff,
-                                    filename="edit.diff",
-                                    snippet_type="diff",
-                                )
 
                     # Detect file edits — add pencil reaction to thread root
                     if not files_changed and _has_file_edit(event_data):
@@ -1139,13 +1121,14 @@ def _format_edit_diff(
     old_string: str,
     new_string: str,
     file_path: str = "edit",
-    max_lines: int = 40,
+    max_lines: int = 30,
 ) -> str:
-    """Build a unified-diff string from an Edit tool's old/new strings.
+    """Build a compact diff string from an Edit tool's old/new strings.
 
-    The output looks like ``git diff`` and is intended to be uploaded as
-    a Slack snippet with ``filetype=diff`` so Slack applies red/green
-    syntax highlighting.
+    Returns only the changed lines (``-``/``+`` prefixed) with minimal
+    context, formatted for embedding in a Slack code block.  Skips the
+    ``---``/``+++`` file headers and ``@@`` hunk markers to keep it
+    short and readable inline.
     """
     import difflib
 
@@ -1157,32 +1140,41 @@ def _format_edit_diff(
         new_lines,
         fromfile=f"a/{file_path}",
         tofile=f"b/{file_path}",
-        n=3,
+        n=2,
     ))
 
     if not diff:
-        # Identical strings — shouldn't happen but be safe
         return ""
 
-    # Ensure every line ends with a newline for clean display
-    result = "".join(l if l.endswith("\n") else l + "\n" for l in diff)
+    # Strip file headers (---/+++) and @@ markers, keep only diff body
+    body_lines: list[str] = []
+    for line in diff:
+        if line.startswith(("---", "+++", "@@")):
+            continue
+        # Ensure line ends with newline
+        if not line.endswith("\n"):
+            line += "\n"
+        body_lines.append(line)
+
+    if not body_lines:
+        return ""
 
     # Truncate if very large
-    lines = result.splitlines(keepends=True)
-    if len(lines) > max_lines:
-        result = "".join(lines[:max_lines])
-        result += f"\n… {len(lines) - max_lines} more lines\n"
+    if len(body_lines) > max_lines:
+        result = "".join(body_lines[:max_lines])
+        result += f"… {len(body_lines) - max_lines} more lines\n"
+    else:
+        result = "".join(body_lines)
 
-    return result
+    return result.rstrip("\n")
 
 
-def _format_tool_activity(event: ClaudeEvent) -> list[str | dict]:
-    """Extract tool_use blocks from an assistant event and return display items.
+def _format_tool_activity(event: ClaudeEvent) -> list[str]:
+    """Extract tool_use blocks from an assistant event and return display strings.
 
-    Each item is either a plain string (posted as ``text``) or a dict
-    with ``text`` and ``diff`` keys.  When ``diff`` is present the
-    caller uploads it as a Slack snippet with ``filetype=diff`` for
-    red/green syntax highlighting.
+    Each item is a plain string to be posted as Slack ``text``.
+    Edit tool activities include an inline diff code block showing
+    what changed.
     """
     message = event.raw.get("message", {})
     content = message.get("content", [])
@@ -1210,7 +1202,7 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str | dict]:
             if old_string or new_string:
                 diff = _format_edit_diff(old_string, new_string, basename)
                 if diff:
-                    activities.append({"text": header, "diff": diff})
+                    activities.append(f"{header}\n```\n{diff}\n```")
                 else:
                     activities.append(header)
             else:

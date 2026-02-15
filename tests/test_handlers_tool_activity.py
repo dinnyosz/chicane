@@ -45,13 +45,11 @@ class TestFormatToolActivity:
         result = _format_tool_activity(event)
         assert len(result) == 1
         item = result[0]
-        assert isinstance(item, dict)
-        assert item["text"] == ":pencil2: Editing `handlers.py`"
-        diff = item["diff"]
-        assert "--- a/handlers.py" in diff
-        assert "+++ b/handlers.py" in diff
-        assert "-def foo():" in diff
-        assert "+def bar():" in diff
+        assert isinstance(item, str)
+        assert ":pencil2: Editing `handlers.py`" in item
+        assert "-def foo():" in item
+        assert "+def bar():" in item
+        assert "```" in item  # inline code block
 
     def test_edit_tool_multiline_diff(self):
         event = make_tool_event(
@@ -65,11 +63,10 @@ class TestFormatToolActivity:
         result = _format_tool_activity(event)
         assert len(result) == 1
         item = result[0]
-        assert isinstance(item, dict)
-        diff = item["diff"]
-        assert "-y = 2" in diff
-        assert "+y = 3" in diff
-        assert "+z = 4" in diff
+        assert isinstance(item, str)
+        assert "-y = 2" in item
+        assert "+y = 3" in item
+        assert "+z = 4" in item
 
     def test_edit_tool_no_strings_fallback(self):
         """Edit with no old/new strings falls back to simple message."""
@@ -293,13 +290,15 @@ class TestFormatToolActivity:
 
 
 class TestFormatEditDiff:
-    """Test _format_edit_diff returns a unified diff string."""
+    """Test _format_edit_diff returns a compact diff string."""
 
     def test_simple_replacement(self):
         result = _format_edit_diff("def foo():", "def bar():")
         assert isinstance(result, str)
-        assert "--- a/edit" in result
-        assert "+++ b/edit" in result
+        # Headers are stripped — only diff body
+        assert "---" not in result
+        assert "+++" not in result
+        assert "@@" not in result
         assert "-def foo():" in result
         assert "+def bar():" in result
 
@@ -314,11 +313,6 @@ class TestFormatEditDiff:
         # Context lines present
         assert " a" in result
         assert " c" in result
-
-    def test_custom_filename(self):
-        result = _format_edit_diff("a", "b", file_path="config.py")
-        assert "--- a/config.py" in result
-        assert "+++ b/config.py" in result
 
     def test_truncation(self):
         old = "\n".join(f"line {i}" for i in range(50))
