@@ -82,6 +82,22 @@ def _sdk_message_to_raw(msg) -> dict:
             content = [{"type": "text", "text": msg.content}]
         else:
             content = _content_blocks_to_dicts(msg.content)
+
+        # SDK may deliver tool results via `tool_use_result` instead of
+        # (or in addition to) the content list.  Merge them so handlers
+        # always find tool_result blocks in the standard location.
+        has_tool_results = any(
+            b.get("type") == "tool_result" for b in content
+        )
+        if not has_tool_results and msg.tool_use_result:
+            tur = msg.tool_use_result
+            content.append({
+                "type": "tool_result",
+                "tool_use_id": tur.get("tool_use_id", ""),
+                "content": tur.get("content"),
+                "is_error": tur.get("is_error", False),
+            })
+
         raw: dict = {"type": "user", "message": {"content": content}}
         if msg.parent_tool_use_id:
             raw["parent_tool_use_id"] = msg.parent_tool_use_id
@@ -231,7 +247,7 @@ class ClaudeEvent:
         for block in content:
             if block.get("type") == "tool_result" and not block.get("is_error"):
                 tool_use_id = block.get("tool_use_id", "")
-                text = block.get("content", "")
+                text = block.get("content") or ""
                 if isinstance(text, list):
                     text = "".join(
                         p.get("text", "") for p in text if isinstance(p, dict)

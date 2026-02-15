@@ -450,6 +450,92 @@ class TestSdkMessageConversion:
         assert raw["type"] == "user"
         assert raw["message"]["content"] == [{"type": "text", "text": "hello"}]
 
+    def test_sdk_message_to_raw_user_tool_use_result_merged(self):
+        """When SDK delivers tool result via tool_use_result field (e.g. MCP tools),
+        it should be merged into the content list as a tool_result block."""
+        from claude_agent_sdk import UserMessage
+        msg = UserMessage(
+            content="",
+            uuid=None,
+            parent_tool_use_id=None,
+            tool_use_result={
+                "tool_use_id": "toolu_mcp",
+                "content": "search results here",
+                "is_error": False,
+            },
+        )
+        raw = _sdk_message_to_raw(msg)
+        content = raw["message"]["content"]
+        tool_results = [b for b in content if b.get("type") == "tool_result"]
+        assert len(tool_results) == 1
+        assert tool_results[0]["tool_use_id"] == "toolu_mcp"
+        assert tool_results[0]["content"] == "search results here"
+        assert tool_results[0]["is_error"] is False
+
+    def test_sdk_message_to_raw_user_tool_use_result_not_duplicated(self):
+        """When content already has tool_result blocks, tool_use_result should not
+        be merged (avoid duplicates)."""
+        from claude_agent_sdk import ToolResultBlock, UserMessage
+        msg = UserMessage(
+            content=[
+                ToolResultBlock(
+                    tool_use_id="toolu_abc",
+                    content="file updated",
+                    is_error=False,
+                ),
+            ],
+            uuid=None,
+            parent_tool_use_id=None,
+            tool_use_result={
+                "tool_use_id": "toolu_abc",
+                "content": "file updated",
+            },
+        )
+        raw = _sdk_message_to_raw(msg)
+        content = raw["message"]["content"]
+        tool_results = [b for b in content if b.get("type") == "tool_result"]
+        assert len(tool_results) == 1  # Not duplicated
+
+    def test_sdk_message_to_raw_user_tool_use_result_with_list_content(self):
+        """MCP tool results may have list content (e.g. [{'type': 'text', 'text': '...'}])."""
+        from claude_agent_sdk import UserMessage
+        msg = UserMessage(
+            content="",
+            uuid=None,
+            parent_tool_use_id=None,
+            tool_use_result={
+                "tool_use_id": "toolu_mcp",
+                "content": [{"type": "text", "text": "mcp result"}],
+            },
+        )
+        raw = _sdk_message_to_raw(msg)
+        content = raw["message"]["content"]
+        tool_results = [b for b in content if b.get("type") == "tool_result"]
+        assert len(tool_results) == 1
+        # Verify it can be extracted by tool_results property
+        event = ClaudeEvent(type="user", raw=raw)
+        results = event.tool_results
+        assert len(results) == 1
+        assert results[0] == ("toolu_mcp", "mcp result")
+
+    def test_sdk_message_to_raw_user_tool_use_result_error(self):
+        """MCP tool errors via tool_use_result should be extractable by tool_errors."""
+        from claude_agent_sdk import UserMessage
+        msg = UserMessage(
+            content="",
+            uuid=None,
+            parent_tool_use_id=None,
+            tool_use_result={
+                "tool_use_id": "toolu_mcp",
+                "content": "Connection refused",
+                "is_error": True,
+            },
+        )
+        raw = _sdk_message_to_raw(msg)
+        event = ClaudeEvent(type="user", raw=raw)
+        assert len(event.tool_errors) == 1
+        assert "Connection refused" in event.tool_errors[0]
+
     def test_sdk_message_to_raw_system_init(self):
         from claude_agent_sdk import SystemMessage
         msg = SystemMessage(subtype="init", data={"session_id": "s1", "cwd": "/tmp"})
