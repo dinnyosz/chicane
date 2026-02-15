@@ -12,11 +12,39 @@ from tests.conftest import make_event, make_tool_event, mock_client, mock_sessio
 class TestFormatToolActivity:
     """Test _format_tool_activity helper for each tool type."""
 
+    # --- Read ---
+
     def test_read_tool(self):
         event = make_tool_event(
             tool_block("Read", file_path="/home/user/project/config.py")
         )
         assert _format_tool_activity(event) == [":mag: Reading `config.py`"]
+
+    def test_read_tool_with_offset_and_limit(self):
+        event = make_tool_event(
+            tool_block("Read", file_path="/src/big.py", offset=50, limit=100)
+        )
+        assert _format_tool_activity(event) == [":mag: Reading `big.py` (lines 50\u2013150)"]
+
+    def test_read_tool_with_offset_only(self):
+        event = make_tool_event(
+            tool_block("Read", file_path="/src/big.py", offset=200)
+        )
+        assert _format_tool_activity(event) == [":mag: Reading `big.py` (from line 200)"]
+
+    def test_read_tool_with_limit_only(self):
+        event = make_tool_event(
+            tool_block("Read", file_path="/src/big.py", limit=50)
+        )
+        assert _format_tool_activity(event) == [":mag: Reading `big.py` (first 50 lines)"]
+
+    def test_read_tool_with_pdf_pages(self):
+        event = make_tool_event(
+            tool_block("Read", file_path="/docs/report.pdf", pages="3-5")
+        )
+        assert _format_tool_activity(event) == [":mag: Reading `report.pdf` (pages 3-5)"]
+
+    # --- Bash ---
 
     def test_bash_tool(self):
         event = make_tool_event(
@@ -32,6 +60,31 @@ class TestFormatToolActivity:
         result = _format_tool_activity(event)
         assert len(result) == 1
         assert result[0] == f":computer: Running `{long_cmd}`"
+
+    def test_bash_tool_with_description(self):
+        event = make_tool_event(
+            tool_block("Bash", command="npm install", description="Install dependencies")
+        )
+        assert _format_tool_activity(event) == [":computer: Install dependencies"]
+
+    def test_bash_tool_background(self):
+        event = make_tool_event(
+            tool_block("Bash", command="pytest -x", run_in_background=True)
+        )
+        assert _format_tool_activity(event) == [":computer: Running `pytest -x` (background)"]
+
+    def test_bash_tool_description_and_background(self):
+        event = make_tool_event(
+            tool_block(
+                "Bash",
+                command="pytest -x",
+                description="Run tests",
+                run_in_background=True,
+            )
+        )
+        assert _format_tool_activity(event) == [":computer: Run tests (background)"]
+
+    # --- Edit ---
 
     def test_edit_tool_with_diff(self):
         event = make_tool_event(
@@ -75,11 +128,42 @@ class TestFormatToolActivity:
         )
         assert _format_tool_activity(event) == [":pencil2: Editing `handlers.py`"]
 
+    def test_edit_tool_replace_all(self):
+        event = make_tool_event(
+            tool_block(
+                "Edit",
+                file_path="/src/config.py",
+                old_string="old_name",
+                new_string="new_name",
+                replace_all=True,
+            )
+        )
+        result = _format_tool_activity(event)
+        assert len(result) == 1
+        assert "(all occurrences)" in result[0]
+        assert ":pencil2: Editing `config.py` (all occurrences)" in result[0]
+
+    # --- Write ---
+
     def test_write_tool(self):
         event = make_tool_event(
-            tool_block("Write", file_path="/src/new_file.py")
+            tool_block("Write", file_path="/src/new_file.py", content="line1\nline2\nline3")
         )
-        assert _format_tool_activity(event) == [":pencil2: Writing `new_file.py`"]
+        assert _format_tool_activity(event) == [":pencil2: Writing `new_file.py` (3 lines)"]
+
+    def test_write_tool_single_line(self):
+        event = make_tool_event(
+            tool_block("Write", file_path="/src/single.txt", content="hello")
+        )
+        assert _format_tool_activity(event) == [":pencil2: Writing `single.txt` (1 line)"]
+
+    def test_write_tool_no_content(self):
+        event = make_tool_event(
+            tool_block("Write", file_path="/src/empty.py")
+        )
+        assert _format_tool_activity(event) == [":pencil2: Writing `empty.py`"]
+
+    # --- Grep ---
 
     def test_grep_tool(self):
         event = make_tool_event(
@@ -87,11 +171,55 @@ class TestFormatToolActivity:
         )
         assert _format_tool_activity(event) == [":mag: Searching for `download_files`"]
 
+    def test_grep_tool_with_glob_filter(self):
+        event = make_tool_event(
+            tool_block("Grep", pattern="useState", glob="*.tsx")
+        )
+        assert _format_tool_activity(event) == [
+            ":mag: Searching for `useState` in `*.tsx`"
+        ]
+
+    def test_grep_tool_with_type_filter(self):
+        event = make_tool_event(
+            tool_block("Grep", pattern="error", type="py")
+        )
+        assert _format_tool_activity(event) == [
+            ":mag: Searching for `error` (py files)"
+        ]
+
+    def test_grep_tool_with_path(self):
+        event = make_tool_event(
+            tool_block("Grep", pattern="TODO", path="/home/user/project/src")
+        )
+        assert _format_tool_activity(event) == [
+            ":mag: Searching for `TODO` in `src/`"
+        ]
+
+    def test_grep_tool_with_glob_and_path(self):
+        event = make_tool_event(
+            tool_block("Grep", pattern="import", glob="*.py", path="/project/lib")
+        )
+        assert _format_tool_activity(event) == [
+            ":mag: Searching for `import` in `*.py` in `lib/`"
+        ]
+
+    # --- Glob ---
+
     def test_glob_tool(self):
         event = make_tool_event(
             tool_block("Glob", pattern="**/*.py")
         )
         assert _format_tool_activity(event) == [":mag: Finding files `**/*.py`"]
+
+    def test_glob_tool_with_path(self):
+        event = make_tool_event(
+            tool_block("Glob", pattern="*.test.ts", path="/project/src")
+        )
+        assert _format_tool_activity(event) == [
+            ":mag: Finding files `*.test.ts` in `src/`"
+        ]
+
+    # --- WebFetch ---
 
     def test_webfetch_tool_with_url(self):
         event = make_tool_event(
@@ -99,9 +227,32 @@ class TestFormatToolActivity:
         )
         assert _format_tool_activity(event) == [":globe_with_meridians: Fetching `https://example.com/api`"]
 
+    def test_webfetch_tool_with_url_and_prompt(self):
+        event = make_tool_event(
+            tool_block(
+                "WebFetch",
+                url="https://docs.example.com",
+                prompt="Find the authentication section",
+            )
+        )
+        result = _format_tool_activity(event)
+        assert len(result) == 1
+        assert ":globe_with_meridians: Fetching `https://docs.example.com`" in result[0]
+        assert "Find the authentication section" in result[0]
+
+    def test_webfetch_tool_long_prompt_truncated(self):
+        long_prompt = "A" * 100
+        event = make_tool_event(
+            tool_block("WebFetch", url="https://example.com", prompt=long_prompt)
+        )
+        result = _format_tool_activity(event)
+        assert "\u2026" in result[0]
+
     def test_webfetch_tool_no_url(self):
         event = make_tool_event(tool_block("WebFetch"))
         assert _format_tool_activity(event) == [":globe_with_meridians: Fetching URL"]
+
+    # --- WebSearch ---
 
     def test_websearch_tool_with_query(self):
         event = make_tool_event(
@@ -109,9 +260,35 @@ class TestFormatToolActivity:
         )
         assert _format_tool_activity(event) == [":globe_with_meridians: Searching web for `python asyncio tutorial`"]
 
+    def test_websearch_tool_with_allowed_domains(self):
+        event = make_tool_event(
+            tool_block(
+                "WebSearch",
+                query="react hooks",
+                allowed_domains=["stackoverflow.com", "reactjs.org"],
+            )
+        )
+        result = _format_tool_activity(event)
+        assert len(result) == 1
+        assert "stackoverflow.com, reactjs.org" in result[0]
+
+    def test_websearch_tool_with_blocked_domains(self):
+        event = make_tool_event(
+            tool_block(
+                "WebSearch",
+                query="python tutorial",
+                blocked_domains=["w3schools.com"],
+            )
+        )
+        result = _format_tool_activity(event)
+        assert len(result) == 1
+        assert "excluding w3schools.com" in result[0]
+
     def test_websearch_tool_no_query(self):
         event = make_tool_event(tool_block("WebSearch"))
         assert _format_tool_activity(event) == [":globe_with_meridians: Searching web"]
+
+    # --- Task ---
 
     def test_task_tool_with_details(self):
         event = make_tool_event(
@@ -125,9 +302,19 @@ class TestFormatToolActivity:
         )
         assert _format_tool_activity(event) == [":robot_face: Spawning Bash"]
 
+    def test_task_tool_with_model(self):
+        event = make_tool_event(
+            tool_block("Task", subagent_type="Explore", description="find tests", model="haiku")
+        )
+        assert _format_tool_activity(event) == [
+            ":robot_face: Spawning Explore: find tests (haiku)"
+        ]
+
     def test_task_tool_no_details(self):
         event = make_tool_event(tool_block("Task"))
         assert _format_tool_activity(event) == [":robot_face: Spawning subagent"]
+
+    # --- Skill ---
 
     def test_skill_tool_with_name(self):
         event = make_tool_event(
@@ -135,9 +322,19 @@ class TestFormatToolActivity:
         )
         assert _format_tool_activity(event) == [":zap: Running skill `commit`"]
 
+    def test_skill_tool_with_args(self):
+        event = make_tool_event(
+            tool_block("Skill", skill="commit", args='-m "fix bug"')
+        )
+        assert _format_tool_activity(event) == [
+            ':zap: Running skill `commit` \u2014 `-m "fix bug"`'
+        ]
+
     def test_skill_tool_no_name(self):
         event = make_tool_event(tool_block("Skill"))
         assert _format_tool_activity(event) == [":zap: Running skill"]
+
+    # --- NotebookEdit ---
 
     def test_notebook_edit_tool(self):
         event = make_tool_event(
@@ -145,9 +342,116 @@ class TestFormatToolActivity:
         )
         assert _format_tool_activity(event) == [":notebook: Editing notebook `analysis.ipynb`"]
 
+    def test_notebook_edit_insert_mode(self):
+        event = make_tool_event(
+            tool_block(
+                "NotebookEdit",
+                notebook_path="/nb.ipynb",
+                edit_mode="insert",
+                cell_type="code",
+                cell_number=5,
+            )
+        )
+        assert _format_tool_activity(event) == [
+            ":notebook: Inserting into notebook `nb.ipynb` \u2014 code cell #5"
+        ]
+
+    def test_notebook_edit_delete_mode(self):
+        event = make_tool_event(
+            tool_block(
+                "NotebookEdit",
+                notebook_path="/nb.ipynb",
+                edit_mode="delete",
+                cell_number=3,
+            )
+        )
+        assert _format_tool_activity(event) == [
+            ":notebook: Deleting from notebook `nb.ipynb` \u2014 cell #3"
+        ]
+
+    def test_notebook_edit_with_cell_type_only(self):
+        event = make_tool_event(
+            tool_block(
+                "NotebookEdit",
+                notebook_path="/nb.ipynb",
+                cell_type="markdown",
+            )
+        )
+        assert _format_tool_activity(event) == [
+            ":notebook: Editing notebook `nb.ipynb` \u2014 markdown"
+        ]
+
+    # --- Plan mode ---
+
     def test_enter_plan_mode_tool(self):
         event = make_tool_event(tool_block("EnterPlanMode"))
         assert _format_tool_activity(event) == [":clipboard: Entering plan mode"]
+
+    def test_exit_plan_mode_tool(self):
+        event = make_tool_event(tool_block("ExitPlanMode"))
+        assert _format_tool_activity(event) == [":clipboard: Exiting plan mode"]
+
+    # --- ToolSearch ---
+
+    def test_tool_search_with_query(self):
+        event = make_tool_event(
+            tool_block("ToolSearch", query="slack")
+        )
+        assert _format_tool_activity(event) == [":toolbox: Searching for tool `slack`"]
+
+    def test_tool_search_no_query(self):
+        event = make_tool_event(tool_block("ToolSearch"))
+        assert _format_tool_activity(event) == [":toolbox: Searching for tools"]
+
+    # --- TaskOutput ---
+
+    def test_task_output(self):
+        event = make_tool_event(
+            tool_block("TaskOutput", task_id="abc123")
+        )
+        assert _format_tool_activity(event) == [
+            ":hourglass_flowing_sand: Waiting for background task"
+        ]
+
+    # --- TaskStop ---
+
+    def test_task_stop(self):
+        event = make_tool_event(
+            tool_block("TaskStop", task_id="abc123")
+        )
+        assert _format_tool_activity(event) == [
+            ":octagonal_sign: Stopping background task"
+        ]
+
+    # --- ListMcpResourcesTool ---
+
+    def test_list_mcp_resources_with_server(self):
+        event = make_tool_event(
+            tool_block("ListMcpResourcesTool", server="magaldi")
+        )
+        assert _format_tool_activity(event) == [
+            ":card_index: Listing MCP resources (magaldi)"
+        ]
+
+    def test_list_mcp_resources_no_server(self):
+        event = make_tool_event(tool_block("ListMcpResourcesTool"))
+        assert _format_tool_activity(event) == [":card_index: Listing MCP resources"]
+
+    # --- ReadMcpResourceTool ---
+
+    def test_read_mcp_resource_with_uri(self):
+        event = make_tool_event(
+            tool_block("ReadMcpResourceTool", server="magaldi", uri="repo://chicane")
+        )
+        assert _format_tool_activity(event) == [
+            ":card_index: Reading MCP resource `repo://chicane`"
+        ]
+
+    def test_read_mcp_resource_no_uri(self):
+        event = make_tool_event(tool_block("ReadMcpResourceTool"))
+        assert _format_tool_activity(event) == [":card_index: Reading MCP resource"]
+
+    # --- AskUserQuestion ---
 
     def test_ask_user_question_tool(self):
         event = make_tool_event(tool_block("AskUserQuestion"))

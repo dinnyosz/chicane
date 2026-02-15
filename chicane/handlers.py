@@ -1464,16 +1464,41 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
         if tool_name == "Read":
             file_path = tool_input.get("file_path", "")
             basename = Path(file_path).name if file_path else "file"
-            activities.append(f":mag: Reading `{basename}`")
+            suffix = ""
+            offset = tool_input.get("offset")
+            limit = tool_input.get("limit")
+            pages = tool_input.get("pages")
+            if pages:
+                suffix = f" (pages {pages})"
+            elif offset and limit:
+                suffix = f" (lines {offset}\u2013{offset + limit})"
+            elif offset:
+                suffix = f" (from line {offset})"
+            elif limit:
+                suffix = f" (first {limit} lines)"
+            activities.append(f":mag: Reading `{basename}`{suffix}")
         elif tool_name == "Bash":
             cmd = tool_input.get("command", "")
-            activities.append(f":computer: Running `{cmd}`")
+            description = tool_input.get("description", "")
+            bg = tool_input.get("run_in_background", False)
+            if description:
+                label = f":computer: {description}"
+                if bg:
+                    label += " (background)"
+                activities.append(label)
+            else:
+                label = f":computer: Running `{cmd}`"
+                if bg:
+                    label += " (background)"
+                activities.append(label)
         elif tool_name == "Edit":
             file_path = tool_input.get("file_path", "")
             basename = Path(file_path).name if file_path else "file"
             old_string = tool_input.get("old_string", "")
             new_string = tool_input.get("new_string", "")
-            header = f":pencil2: Editing `{basename}`"
+            replace_all = tool_input.get("replace_all", False)
+            ra_suffix = " (all occurrences)" if replace_all else ""
+            header = f":pencil2: Editing `{basename}`{ra_suffix}"
             if old_string or new_string:
                 diff = _format_edit_diff(old_string, new_string, basename)
                 if diff:
@@ -1485,45 +1510,134 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
         elif tool_name == "Write":
             file_path = tool_input.get("file_path", "")
             basename = Path(file_path).name if file_path else "file"
-            activities.append(f":pencil2: Writing `{basename}`")
+            content = tool_input.get("content", "")
+            if content:
+                line_count = content.count("\n") + 1
+                activities.append(
+                    f":pencil2: Writing `{basename}` ({line_count} line{'s' if line_count != 1 else ''})"
+                )
+            else:
+                activities.append(f":pencil2: Writing `{basename}`")
         elif tool_name == "Grep":
             pattern = tool_input.get("pattern", "")
-            activities.append(f":mag: Searching for `{pattern}`")
+            path = tool_input.get("path", "")
+            glob_filter = tool_input.get("glob", "")
+            type_filter = tool_input.get("type", "")
+            scope_parts: list[str] = []
+            if glob_filter:
+                scope_parts.append(f"in `{glob_filter}`")
+            elif type_filter:
+                scope_parts.append(f"({type_filter} files)")
+            if path:
+                dir_name = Path(path).name or path
+                scope_parts.append(f"in `{dir_name}/`")
+            scope = " " + " ".join(scope_parts) if scope_parts else ""
+            activities.append(f":mag: Searching for `{pattern}`{scope}")
         elif tool_name == "Glob":
             pattern = tool_input.get("pattern", "")
-            activities.append(f":mag: Finding files `{pattern}`")
+            path = tool_input.get("path", "")
+            if path:
+                dir_name = Path(path).name or path
+                activities.append(f":mag: Finding files `{pattern}` in `{dir_name}/`")
+            else:
+                activities.append(f":mag: Finding files `{pattern}`")
         elif tool_name == "WebFetch":
             url = tool_input.get("url", "")
-            if url:
+            prompt = tool_input.get("prompt", "")
+            if url and prompt:
+                # Truncate prompt to keep it readable
+                short_prompt = (prompt[:60] + "…") if len(prompt) > 60 else prompt
+                activities.append(
+                    f":globe_with_meridians: Fetching `{url}`\n  _{short_prompt}_"
+                )
+            elif url:
                 activities.append(f":globe_with_meridians: Fetching `{url}`")
             else:
                 activities.append(":globe_with_meridians: Fetching URL")
         elif tool_name == "WebSearch":
             query = tool_input.get("query", "")
+            allowed = tool_input.get("allowed_domains", [])
+            blocked = tool_input.get("blocked_domains", [])
             if query:
-                activities.append(f":globe_with_meridians: Searching web for `{query}`")
+                suffix = ""
+                if allowed:
+                    suffix = f" ({', '.join(allowed)})"
+                elif blocked:
+                    suffix = f" (excluding {', '.join(blocked)})"
+                activities.append(
+                    f":globe_with_meridians: Searching web for `{query}`{suffix}"
+                )
             else:
                 activities.append(":globe_with_meridians: Searching web")
         elif tool_name == "Task":
             subagent_type = tool_input.get("subagent_type", "")
             description = tool_input.get("description", "")
+            model = tool_input.get("model", "")
             if subagent_type or description:
                 parts = [p for p in [subagent_type, description] if p]
-                activities.append(f":robot_face: Spawning {': '.join(parts)}")
+                label = f":robot_face: Spawning {': '.join(parts)}"
+                if model:
+                    label += f" ({model})"
+                activities.append(label)
             else:
                 activities.append(":robot_face: Spawning subagent")
         elif tool_name == "Skill":
             skill = tool_input.get("skill", "")
-            if skill:
+            args = tool_input.get("args", "")
+            if skill and args:
+                activities.append(f":zap: Running skill `{skill}` — `{args}`")
+            elif skill:
                 activities.append(f":zap: Running skill `{skill}`")
             else:
                 activities.append(":zap: Running skill")
         elif tool_name == "NotebookEdit":
             notebook_path = tool_input.get("notebook_path", "")
             basename = Path(notebook_path).name if notebook_path else "notebook"
-            activities.append(f":notebook: Editing notebook `{basename}`")
+            edit_mode = tool_input.get("edit_mode", "replace")
+            cell_type = tool_input.get("cell_type", "")
+            cell_number = tool_input.get("cell_number")
+            mode_verbs = {
+                "insert": "Inserting into",
+                "delete": "Deleting from",
+                "replace": "Editing",
+            }
+            verb = mode_verbs.get(edit_mode, "Editing")
+            detail_parts: list[str] = []
+            if cell_type:
+                detail_parts.append(cell_type)
+            if cell_number is not None:
+                detail_parts.append(f"cell #{cell_number}")
+            detail = " ".join(detail_parts)
+            if detail:
+                activities.append(f":notebook: {verb} notebook `{basename}` — {detail}")
+            else:
+                activities.append(f":notebook: {verb} notebook `{basename}`")
         elif tool_name == "EnterPlanMode":
             activities.append(":clipboard: Entering plan mode")
+        elif tool_name == "ExitPlanMode":
+            activities.append(":clipboard: Exiting plan mode")
+        elif tool_name == "ToolSearch":
+            query = tool_input.get("query", "")
+            if query:
+                activities.append(f":toolbox: Searching for tool `{query}`")
+            else:
+                activities.append(":toolbox: Searching for tools")
+        elif tool_name == "TaskOutput":
+            activities.append(":hourglass_flowing_sand: Waiting for background task")
+        elif tool_name == "TaskStop":
+            activities.append(":octagonal_sign: Stopping background task")
+        elif tool_name == "ListMcpResourcesTool":
+            server = tool_input.get("server", "")
+            if server:
+                activities.append(f":card_index: Listing MCP resources ({server})")
+            else:
+                activities.append(":card_index: Listing MCP resources")
+        elif tool_name == "ReadMcpResourceTool":
+            uri = tool_input.get("uri", "")
+            if uri:
+                activities.append(f":card_index: Reading MCP resource `{uri}`")
+            else:
+                activities.append(":card_index: Reading MCP resource")
         elif tool_name == "TodoWrite":
             todos = tool_input.get("todos", [])
             if todos:
