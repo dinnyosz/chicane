@@ -302,6 +302,25 @@ class TestChannelDirs:
         )
         assert config.resolve_dir_channel(tmp_path) is None
 
+    def test_resolve_dir_channel_ambiguous_warns(self, tmp_path, caplog):
+        """When multiple channels map to the same dir, first wins and a warning is logged."""
+        project = tmp_path / "web"
+        project.mkdir()
+        config = Config(
+            slack_bot_token="t",
+            slack_app_token="t",
+            base_directory=tmp_path,
+            channel_dirs={"frontend": "web", "design": "web"},
+        )
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="chicane.config"):
+            result = config.resolve_dir_channel(project)
+        assert result == "frontend"
+        assert "multiple channels" in caplog.text.lower()
+        assert "#frontend" in caplog.text
+        assert "#design" in caplog.text
+
     def test_resolve_traversal_blocked(self):
         """Directory traversal via ../.. should be blocked when base_directory is set."""
         config = Config(

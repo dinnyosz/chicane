@@ -101,15 +101,28 @@ class Config:
         Iterates channel_dirs, resolves each mapped path (relative to
         base_directory if needed), and returns the channel name whose
         resolved path matches *cwd*.  Returns None if no match.
+
+        When multiple channels map to the same directory, the first match
+        (by insertion order) is returned and a warning is logged.
         """
         cwd = cwd.resolve()
+        matches: list[str] = []
         for channel_name, mapped in self.channel_dirs.items():
             path = Path(mapped)
             if not path.is_absolute() and self.base_directory:
                 path = self.base_directory / mapped
             if path.resolve() == cwd:
-                return channel_name
-        return None
+                matches.append(channel_name)
+        if not matches:
+            return None
+        if len(matches) > 1:
+            logger.warning(
+                "Directory %s maps to multiple channels: %s — using #%s",
+                cwd,
+                ", ".join(f"#{c}" for c in matches),
+                matches[0],
+            )
+        return matches[0]
 
     def resolve_channel_dir(self, channel_name: str) -> Path | None:
         """Resolve working directory for a channel.
