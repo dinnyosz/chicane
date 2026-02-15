@@ -18,6 +18,7 @@ from chicane.handlers import (
     _should_show,
     _split_message,
     _summarize_tool_input,
+    SessionSearchResult,
     SLACK_MAX_LENGTH,
 )
 from tests.conftest import make_tool_event, tool_block
@@ -288,7 +289,7 @@ class TestHandoffRegex:
 
 
 class TestFindSessionIdInThread:
-    """Test scanning thread messages for a handoff session_id."""
+    """Test scanning thread messages for session references."""
 
     @pytest.mark.asyncio
     async def test_finds_session_id_in_thread(self):
@@ -306,7 +307,9 @@ class TestFindSessionIdInThread:
         }
 
         result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
-        assert result == "abc-123-def"
+        assert result.session_id == "abc-123-def"
+        assert result.alias is None  # old UUID format has no alias
+        assert result.total_found == 1
 
     @pytest.mark.asyncio
     async def test_returns_none_when_no_session_id(self):
@@ -317,12 +320,16 @@ class TestFindSessionIdInThread:
                 {"user": "UBOT123", "ts": "1001.0", "text": "hi there"},
             ]
         }
+        client.conversations_history.return_value = {"messages": []}
 
         result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
-        assert result is None
+        assert result.session_id is None
+        assert result.alias is None
+        assert result.total_found == 0
 
     @pytest.mark.asyncio
-    async def test_returns_first_session_id_found(self):
+    async def test_returns_last_session_id_found(self):
+        """When multiple session_ids exist, the last (most recent) wins."""
         client = AsyncMock()
         client.conversations_replies.return_value = {
             "messages": [
@@ -340,23 +347,207 @@ class TestFindSessionIdInThread:
         }
 
         result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
-        assert result == "aaa-111"
+        assert result.session_id == "bbb-222"
+        assert result.total_found == 2
+        assert len(result.skipped_aliases) == 1  # aaa-111 skipped
 
     @pytest.mark.asyncio
     async def test_returns_none_on_api_error(self):
         client = AsyncMock()
         client.conversations_replies.side_effect = Exception("API error")
+        client.conversations_history.return_value = {"messages": []}
 
         result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
-        assert result is None
+        assert result.session_id is None
+        assert result.alias is None
 
     @pytest.mark.asyncio
     async def test_handles_empty_thread(self):
         client = AsyncMock()
         client.conversations_replies.return_value = {"messages": []}
+        client.conversations_history.return_value = {"messages": []}
 
         result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
-        assert result is None
+        assert result.session_id is None
+        assert result.alias is None
+        assert result.total_found == 0
+
+    @pytest.mark.asyncio
+    async def test_returns_alias_when_found_via_alias_format(self, tmp_path):
+        """When session is found via _(session: alias)_ format, the alias
+        should be returned alongside the session_id."""
+        from unittest.mock import patch
+        from chicane.config import save_handoff_session
+
+        client = AsyncMock()
+        client.conversations_replies.return_value = {
+            "messages": [
+                {
+                    "user": "UBOT123",
+                    "ts": "1001.0",
+                    "text": ":sparkles: New session\n_(session: clever-fox-rainbow)_",
+                },
+            ]
+        }
+
+        with patch("chicane.config._HANDOFF_MAP_FILE", tmp_path / "sessions.json"):
+            save_handoff_session("clever-fox-rainbow", "sess-abc-123")
+            result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
+
+        assert result.session_id == "sess-abc-123"
+        assert result.alias == "clever-fox-rainbow"
+        assert result.total_found == 1
+
+    @pytest.mark.asyncio
+    async def test_returns_last_match_in_thread(self, tmp_path):
+        """When multiple sessions exist in a thread, the last (most recent)
+        should be returned, with the older one tracked as skipped."""
+        from unittest.mock import patch
+        from chicane.config import save_handoff_session
+
+        client = AsyncMock()
+        client.conversations_replies.return_value = {
+            "messages": [
+                {
+                    "user": "UBOT123",
+                    "ts": "1000.0",
+                    "text": ":sparkles: New session\n_(session: old-dusty-parrot)_",
+                },
+                {
+                    "user": "UBOT123",
+                    "ts": "1001.0",
+                    "text": ":sparkles: New session\n_(session: fresh-shiny-eagle)_",
+                },
+            ]
+        }
+
+        with patch("chicane.config._HANDOFF_MAP_FILE", tmp_path / "sessions.json"):
+            save_handoff_session("old-dusty-parrot", "sess-old")
+            save_handoff_session("fresh-shiny-eagle", "sess-new")
+            result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
+
+        assert result.session_id == "sess-new"
+        assert result.alias == "fresh-shiny-eagle"
+        assert result.total_found == 2
+        assert "old-dusty-parrot" in result.skipped_aliases
+
+    @pytest.mark.asyncio
+    async def test_finds_handoff_and_bot_session_messages(self, tmp_path):
+        """Both handoff messages _(session: alias)_ and bot session
+        messages _(session: alias)_ should be found — the last one wins."""
+        from unittest.mock import patch
+        from chicane.config import save_handoff_session
+
+        client = AsyncMock()
+        client.conversations_replies.return_value = {
+            "messages": [
+                {
+                    "user": "UBOT123",
+                    "ts": "1000.0",
+                    "text": "Handoff summary\n_(session: handoff-cool-cat)_",
+                },
+                {
+                    "user": "UBOT123",
+                    "ts": "1001.0",
+                    "text": ":arrows_counterclockwise: Continuing session\n_(session: handoff-cool-cat)_",
+                },
+            ]
+        }
+
+        with patch("chicane.config._HANDOFF_MAP_FILE", tmp_path / "sessions.json"):
+            save_handoff_session("handoff-cool-cat", "sess-handoff")
+            result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
+
+        assert result.session_id == "sess-handoff"
+        assert result.alias == "handoff-cool-cat"
+
+    @pytest.mark.asyncio
+    async def test_unmapped_alias_tracked(self, tmp_path):
+        """When an alias is found but can't be mapped, it appears in
+        unmapped_aliases and session_id is None."""
+        from unittest.mock import patch
+
+        client = AsyncMock()
+        client.conversations_replies.return_value = {
+            "messages": [
+                {
+                    "user": "UBOT123",
+                    "ts": "1001.0",
+                    "text": ":sparkles: New session\n_(session: lost-ghost-cat)_",
+                },
+            ]
+        }
+
+        with patch("chicane.config._HANDOFF_MAP_FILE", tmp_path / "sessions.json"):
+            # Don't save anything — alias is unmapped
+            result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
+
+        assert result.session_id is None
+        assert result.total_found == 1
+        assert "lost-ghost-cat" in result.unmapped_aliases
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_older_when_newest_unmapped(self, tmp_path):
+        """When the newest alias can't be mapped, fall back to the next
+        older one that can."""
+        from unittest.mock import patch
+        from chicane.config import save_handoff_session
+
+        client = AsyncMock()
+        client.conversations_replies.return_value = {
+            "messages": [
+                {
+                    "user": "UBOT123",
+                    "ts": "1000.0",
+                    "text": ":sparkles: New session\n_(session: old-good-parrot)_",
+                },
+                {
+                    "user": "UBOT123",
+                    "ts": "1001.0",
+                    "text": ":sparkles: New session\n_(session: new-lost-eagle)_",
+                },
+            ]
+        }
+
+        with patch("chicane.config._HANDOFF_MAP_FILE", tmp_path / "sessions.json"):
+            save_handoff_session("old-good-parrot", "sess-old-good")
+            # Don't save new-lost-eagle — it's unmapped
+            result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
+
+        assert result.session_id == "sess-old-good"
+        assert result.alias == "old-good-parrot"
+        assert result.total_found == 2
+        assert "new-lost-eagle" in result.unmapped_aliases
+        assert result.skipped_aliases == []  # old-good-parrot was used, not skipped
+
+    @pytest.mark.asyncio
+    async def test_all_unmapped(self, tmp_path):
+        """When all aliases are unmapped, session_id is None and all are
+        listed in unmapped_aliases."""
+        from unittest.mock import patch
+
+        client = AsyncMock()
+        client.conversations_replies.return_value = {
+            "messages": [
+                {
+                    "user": "UBOT123",
+                    "ts": "1000.0",
+                    "text": ":sparkles: New session\n_(session: ghost-one-alpha)_",
+                },
+                {
+                    "user": "UBOT123",
+                    "ts": "1001.0",
+                    "text": ":sparkles: New session\n_(session: ghost-two-beta)_",
+                },
+            ]
+        }
+
+        with patch("chicane.config._HANDOFF_MAP_FILE", tmp_path / "sessions.json"):
+            result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
+
+        assert result.session_id is None
+        assert result.total_found == 2
+        assert set(result.unmapped_aliases) == {"ghost-one-alpha", "ghost-two-beta"}
 
 
 class TestResolveChannelCwd:

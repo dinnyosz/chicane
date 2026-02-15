@@ -63,8 +63,8 @@ class TestChicaneHandoff:
         # Full session_id should NOT be in text — only a funky alias
         assert "sess-abc" not in text
         assert "_(session:" in text
-        # Alias format: adjective-animal-noun
-        assert re.search(r"\(session: [a-z]+-[a-z]+-[a-z]+\)", text)
+        # Alias format: 3+ hyphenated words (coolname may produce more)
+        assert re.search(r"\(session: [a-z]+(?:-[a-z]+){2,}\)", text)
         assert "Working on auth flow" in text
 
     @pytest.mark.asyncio

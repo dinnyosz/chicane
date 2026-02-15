@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 from collections import defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
 from time import monotonic
 
@@ -333,13 +334,24 @@ async def _process_message(
 
     # On reconnect, try to find a session_id in the thread first so we can
     # resume the original Claude session instead of rebuilding from history.
+    resumed_alias: str | None = None
+    session_search: SessionSearchResult | None = None
     if is_reconnect and not handoff_session_id:
-        found_id = await _find_session_id_in_thread(channel, thread_ts, client)
-        if found_id:
-            handoff_session_id = found_id
+        session_search = await _find_session_id_in_thread(
+            channel, thread_ts, client
+        )
+        if session_search.session_id:
+            handoff_session_id = session_search.session_id
+            resumed_alias = session_search.alias
             is_reconnect = False
             logger.info(
-                f"Reconnect: found session_id {found_id} in thread {thread_ts}"
+                f"Reconnect: found session_id {handoff_session_id} "
+                f"(alias={resumed_alias}) in thread {thread_ts}"
+            )
+        elif session_search.unmapped_aliases:
+            logger.info(
+                f"Reconnect: found unmapped aliases "
+                f"{session_search.unmapped_aliases} in thread {thread_ts}"
             )
 
     # Get or create a Claude session for this thread
@@ -563,20 +575,75 @@ async def _process_message(
                                 )
 
                 elif event_data.type == "system" and event_data.subtype == "init":
-                    # New session started — save alias so it survives restarts.
-                    # Only generate an alias on the *first* init event for this
-                    # session.  The SDK may emit init on every query() call, so
-                    # guard with session_alias to avoid overwriting.
+                    # Session init — either resuming an existing session or
+                    # starting a brand new one.  Post an informative message
+                    # so users know which case it is.
+                    # The message always ends with _(session: alias)_ so that
+                    # _find_session_id_in_thread can pick it up on reconnect.
                     sid = event_data.session_id
-                    if sid and not handoff_session_id and not session_info.session_alias:
-                        alias = generate_session_alias()
-                        save_handoff_session(alias, sid)
-                        session_info.session_alias = alias
-                        await client.chat_postMessage(
-                            channel=channel,
-                            thread_ts=thread_ts,
-                            text=f":link: _{alias}_",
-                        )
+                    if sid and not session_info.session_alias:
+                        if handoff_session_id or resumed_alias:
+                            # Resuming an existing session (handoff or reconnect)
+                            alias = resumed_alias or generate_session_alias()
+                            if not resumed_alias:
+                                save_handoff_session(alias, sid)
+                            session_info.session_alias = alias
+                            msg = f":arrows_counterclockwise: Continuing session _{alias}_"
+                            # Add context about other sessions in the thread
+                            if session_search and session_search.total_found > 1:
+                                extras: list[str] = []
+                                if session_search.skipped_aliases:
+                                    extras.append(
+                                        f"skipped older: {', '.join(f'_{a}_' for a in session_search.skipped_aliases)}"
+                                    )
+                                if session_search.unmapped_aliases:
+                                    extras.append(
+                                        f"couldn't map: {', '.join(f'_{a}_' for a in session_search.unmapped_aliases)}"
+                                    )
+                                if extras:
+                                    msg += f"\n({'; '.join(extras)})"
+                                else:
+                                    msg += f"\n({session_search.total_found} sessions found in thread, using most recent)"
+                            msg += f"\n_(session: {alias})_"
+                            await client.chat_postMessage(
+                                channel=channel,
+                                thread_ts=thread_ts,
+                                text=msg,
+                            )
+                        elif (
+                            session_search
+                            and session_search.unmapped_aliases
+                        ):
+                            # Found alias(es) in thread history but couldn't
+                            # map any back to a session_id (bot restarted,
+                            # map file lost, etc.).  Start fresh but tell
+                            # the user what happened.
+                            alias = generate_session_alias()
+                            save_handoff_session(alias, sid)
+                            session_info.session_alias = alias
+                            unmapped_list = ", ".join(
+                                f"_{a}_" for a in session_search.unmapped_aliases
+                            )
+                            await client.chat_postMessage(
+                                channel=channel,
+                                thread_ts=thread_ts,
+                                text=(
+                                    f":warning: Found previous session(s)"
+                                    f" {unmapped_list} in thread but"
+                                    f" couldn't reconnect (session map lost)."
+                                    f" Starting fresh.\n_(session: {alias})_"
+                                ),
+                            )
+                        else:
+                            # Brand new session — no prior references found
+                            alias = generate_session_alias()
+                            save_handoff_session(alias, sid)
+                            session_info.session_alias = alias
+                            await client.chat_postMessage(
+                                channel=channel,
+                                thread_ts=thread_ts,
+                                text=f":sparkles: New session\n_(session: {alias})_",
+                            )
 
                 elif event_data.type == "system" and event_data.subtype == "compact_boundary":
                     if _should_show("compact_boundary", config.verbosity):
@@ -855,67 +922,122 @@ async def _fetch_thread_history(
         return None
 
 
+@dataclass
+class SessionSearchResult:
+    """Result of scanning a thread for session references.
+
+    Attributes:
+        session_id: The resolved session_id to use (from the best match), or None.
+        alias: The alias of the matched session, or None.
+        total_found: How many session references were found in the thread.
+        unmapped_aliases: Aliases found but not resolvable to a session_id.
+        skipped_aliases: Aliases that were found but skipped because a later
+            (more recent) match was preferred.
+    """
+
+    session_id: str | None = None
+    alias: str | None = None
+    total_found: int = 0
+    unmapped_aliases: list[str] = field(default_factory=list)
+    skipped_aliases: list[str] = field(default_factory=list)
+
+
 async def _find_session_id_in_thread(
     channel: str,
     thread_ts: str,
     client: AsyncWebClient,
-) -> str | None:
-    """Scan thread messages for a handoff session_id.
+) -> SessionSearchResult:
+    """Scan thread messages for session references.
 
-    Returns the session_id if found in any message, otherwise None.
+    Collects *all* session references found in the thread, then tries to
+    resolve them from most recent to oldest.  The first one that maps to a
+    valid session_id wins.  Unmapped aliases and skipped (older) aliases are
+    tracked so the caller can inform the user.
+
     Checks for session aliases first (``_(session: funky-name)_``),
     looking up the real session_id from the local map. Falls back to
     the old ``_(session_id: uuid)_`` format for backward compatibility.
     """
 
-    def _extract_session_id(text: str) -> str | None:
-        """Try alias lookup first, then old UUID format."""
-        # New format: _(session: alias)_ → look up real session_id
+    def _extract_ref(text: str) -> tuple[str | None, str | None]:
+        """Extract a session reference from message text.
+
+        Returns ``(alias_or_uuid, format)`` where format is ``"alias"``
+        or ``"uuid"``, or ``(None, None)`` if no reference found.
+        """
         alias_match = _SESSION_ALIAS_RE.search(text)
         if alias_match:
-            alias = alias_match.group(1)
-            sid = load_handoff_session(alias)
-            if sid:
-                logger.debug(f"Resolved alias {alias} → {sid[:8]}...")
-                return sid
-            logger.debug(f"Alias {alias} not in local map")
-        # Old format: _(session_id: uuid)_ → use directly
+            return alias_match.group(1), "alias"
         uuid_match = _HANDOFF_RE.search(text)
         if uuid_match:
-            logger.debug(f"Found session_id in text: {uuid_match.group(1)[:8]}...")
-            return uuid_match.group(1)
-        return None
+            return uuid_match.group(1), "uuid"
+        return None, None
+
+    # Collect all references in chronological order.
+    refs: list[tuple[str, str]] = []  # (value, format)
 
     try:
         replies = await client.conversations_replies(
             channel=channel, ts=thread_ts, limit=100
         )
         for msg in replies.get("messages", []):
-            sid = _extract_session_id(msg.get("text", ""))
-            if sid:
-                return sid
+            val, fmt = _extract_ref(msg.get("text", ""))
+            if val:
+                refs.append((val, fmt))
     except Exception:
         logger.warning(
             f"Could not scan thread {thread_ts} for session_id", exc_info=True
         )
 
-    # Fallback: fetch the thread starter message directly.
-    try:
-        resp = await client.conversations_history(
-            channel=channel, latest=thread_ts, inclusive=True, limit=1
-        )
-        for msg in resp.get("messages", []):
-            sid = _extract_session_id(msg.get("text", ""))
-            if sid:
-                return sid
-    except Exception:
-        logger.warning(
-            f"Could not fetch thread starter {thread_ts} for session_id",
-            exc_info=True,
-        )
+    # Fallback: check the thread starter message directly (it may not
+    # appear in conversations_replies for parent-level messages).
+    if not refs:
+        try:
+            resp = await client.conversations_history(
+                channel=channel, latest=thread_ts, inclusive=True, limit=1
+            )
+            for msg in resp.get("messages", []):
+                val, fmt = _extract_ref(msg.get("text", ""))
+                if val:
+                    refs.append((val, fmt))
+        except Exception:
+            logger.warning(
+                f"Could not fetch thread starter {thread_ts} for session_id",
+                exc_info=True,
+            )
 
-    logger.debug(f"No session_id found in thread {thread_ts}")
-    return None
+    if not refs:
+        logger.debug(f"No session_id found in thread {thread_ts}")
+        return SessionSearchResult()
+
+    # Walk from most recent to oldest, try to resolve each.
+    result = SessionSearchResult(total_found=len(refs))
+    resolved = False
+
+    for val, fmt in reversed(refs):
+        if fmt == "alias":
+            sid = load_handoff_session(val)
+            if sid:
+                if not resolved:
+                    result.session_id = sid
+                    result.alias = val
+                    resolved = True
+                    logger.debug(f"Resolved alias {val} → {sid[:8]}...")
+                else:
+                    result.skipped_aliases.append(val)
+            else:
+                result.unmapped_aliases.append(val)
+                logger.debug(f"Alias {val} not in local map")
+        elif fmt == "uuid":
+            if not resolved:
+                result.session_id = val
+                resolved = True
+                logger.debug(f"Found session_id {val[:8]}...")
+            else:
+                # UUID-format entries don't have a human-friendly alias
+                result.skipped_aliases.append(val[:12] + "…")
+
+    return result
 
 
 async def _bot_in_thread(
