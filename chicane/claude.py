@@ -98,6 +98,7 @@ def _sdk_message_to_raw(msg) -> dict:
                 "is_error": tur.get("is_error", False),
             })
 
+
         raw: dict = {"type": "user", "message": {"content": content}}
         if msg.parent_tool_use_id:
             raw["parent_tool_use_id"] = msg.parent_tool_use_id
