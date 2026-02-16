@@ -391,10 +391,10 @@ class TestInterruptedStreamDisplay:
             channel="C_CHAN", name="eyes", timestamp="6000.0"
         )
 
-        # Placeholder should show "New message received" not stop sign
-        update_calls = client.chat_update.call_args_list
-        forward_update = [
-            c for c in update_calls
-            if ":fast_forward:" in c.kwargs.get("text", "")
+        # "New message received" should be a thread reply, not a placeholder update
+        post_calls = client.chat_postMessage.call_args_list
+        forward_posts = [
+            c for c in post_calls
+            if ":bulb:" in c.kwargs.get("text", "")
         ]
-        assert len(forward_update) == 1
+        assert len(forward_posts) == 1
