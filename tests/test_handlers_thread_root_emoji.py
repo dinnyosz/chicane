@@ -466,7 +466,7 @@ class TestThreadRootReactionFailuresIgnored:
             await _process_message(event, "hello", client, config, sessions)
 
         # The text response should still be posted
-        client.chat_update.assert_called()
+        client.chat_postMessage.assert_called()
 
 
 # ---------------------------------------------------------------------------

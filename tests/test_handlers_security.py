@@ -87,8 +87,12 @@ class TestErrorSanitization:
             await mention_handler(event=event, client=client)
 
         # The error message posted to Slack should NOT contain the internal details
-        update_calls = client.chat_update.call_args_list
-        error_msg = update_calls[-1].kwargs.get("text", update_calls[-1][1].get("text", ""))
+        error_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":x: Error" in c.kwargs.get("text", "")
+        ]
+        assert len(error_posts) == 1
+        error_msg = error_posts[0].kwargs["text"]
         assert "secret internal path" not in error_msg
         assert "/etc/passwd" not in error_msg
         assert "RuntimeError" in error_msg

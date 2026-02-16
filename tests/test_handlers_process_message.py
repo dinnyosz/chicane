@@ -40,11 +40,16 @@ class TestProcessMessageFormatting:
             }
             await _process_message(event, "hello", client, config, sessions)
 
-        final_update = client.chat_update.call_args_list[-1]
-        assert "\n\n" in final_update.kwargs["text"]
+        # Find the posted text (not the session init or completion summary)
+        text_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if c.kwargs.get("text", "").startswith("First")
+        ]
+        assert len(text_posts) == 1
+        assert "\n\n" in text_posts[0].kwargs["text"]
         # Bullets get converted from - to • by _markdown_to_mrkdwn
         expected = streamed.replace("- bullet", "• bullet")
-        assert final_update.kwargs["text"] == expected
+        assert text_posts[0].kwargs["text"] == expected
 
     @pytest.mark.asyncio
     async def test_result_text_used_when_no_streamed_content(
@@ -71,8 +76,11 @@ class TestProcessMessageFormatting:
             }
             await _process_message(event, "hello", client, config, sessions)
 
-        final_update = client.chat_update.call_args_list[-1]
-        assert final_update.kwargs["text"] == result_text
+        text_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if c.kwargs.get("text", "") == result_text
+        ]
+        assert len(text_posts) == 1
 
 
 class TestProcessMessageEdgeCases:
@@ -114,7 +122,7 @@ class TestProcessMessageEdgeCases:
             event = {"ts": "5001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
-        client.chat_update.assert_called()
+        client.chat_postMessage.assert_called()
 
     @pytest.mark.asyncio
     async def test_empty_response_posts_warning(self, config, sessions):
@@ -131,8 +139,11 @@ class TestProcessMessageEdgeCases:
             event = {"ts": "5002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
-        final_update = client.chat_update.call_args_list[-1]
-        assert "empty response" in final_update.kwargs["text"].lower()
+        warning_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if "empty response" in c.kwargs.get("text", "").lower()
+        ]
+        assert len(warning_posts) == 1
 
     @pytest.mark.asyncio
     async def test_stream_exception_posts_error(self, config, sessions):
@@ -150,11 +161,16 @@ class TestProcessMessageEdgeCases:
             event = {"ts": "5003.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
-        error_update = client.chat_update.call_args_list[-1]
-        assert ":x: Error (RuntimeError)" in error_update.kwargs["text"]
-        assert "Check bot logs" in error_update.kwargs["text"]
+        error_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":x: Error" in c.kwargs.get("text", "")
+        ]
+        assert len(error_posts) == 1
+        error_text = error_posts[0].kwargs["text"]
+        assert ":x: Error (RuntimeError)" in error_text
+        assert "Check bot logs" in error_text
         # Ensure internal error message is NOT leaked to Slack
-        assert "stream exploded" not in error_update.kwargs["text"]
+        assert "stream exploded" not in error_text
 
     @pytest.mark.asyncio
     async def test_long_response_uploaded_as_snippet(self, config, sessions):
@@ -173,11 +189,6 @@ class TestProcessMessageEdgeCases:
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "5004.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
-
-        # Placeholder updated to indicate snippet
-        assert client.chat_update.called
-        update_text = client.chat_update.call_args.kwargs["text"]
-        assert "snippet" in update_text.lower()
 
         # Snippet uploaded via files_upload_v2
         client.files_upload_v2.assert_called_once()
@@ -203,14 +214,14 @@ class TestProcessMessageEdgeCases:
             event = {"ts": "5004.1", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
-        # Should be split into 2 messages, not uploaded as snippet
-        assert client.chat_update.called
+        # Should be split into multiple messages, not uploaded as snippet
         client.files_upload_v2.assert_not_called()
+        # At least 2 chat_postMessage calls for the split text
         assert client.chat_postMessage.call_count >= 2
 
     @pytest.mark.asyncio
-    async def test_text_only_response_updates_placeholder(self, config, sessions):
-        """When there are no tool calls, the final text updates the placeholder."""
+    async def test_text_only_response_posted_as_reply(self, config, sessions):
+        """When there are no tool calls, the final text is posted as a thread reply."""
         chunk_text = "x" * 150
 
         async def fake_stream(prompt):
@@ -227,8 +238,12 @@ class TestProcessMessageEdgeCases:
             event = {"ts": "5005.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
-        assert client.chat_update.call_count == 1
-        assert client.chat_update.call_args.kwargs["text"] == chunk_text
+        text_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if c.kwargs.get("text", "") == chunk_text
+        ]
+        assert len(text_posts) == 1
+        client.chat_update.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_reconnect_rebuilds_context(self, config, sessions):
@@ -630,7 +645,7 @@ class TestProcessMessageEdgeCases:
             alias_text = alias_posts[0].kwargs["text"]
             assert "New session" in alias_text
             # Must contain the scannable (session: alias) format
-            m = re.search(r"\(session:\s*([a-z]+(?:-[a-z]+){2,})\)", alias_text)
+            m = re.search(r"\(session:\s*([a-z]+(?:-[a-z]+)+)\)", alias_text)
             assert m, f"No scannable session alias found in: {alias_text}"
             alias = m.group(1)
 
@@ -671,7 +686,7 @@ class TestProcessMessageEdgeCases:
             text = continuing_posts[0].kwargs["text"]
             assert "Continuing session" in text
             # Must contain the scannable (session: alias) format
-            m = re.search(r"\(session:\s*([a-z]+(?:-[a-z]+){2,})\)", text)
+            m = re.search(r"\(session:\s*([a-z]+(?:-[a-z]+)+)\)", text)
             assert m, f"No scannable session alias found in: {text}"
 
     @pytest.mark.asyncio

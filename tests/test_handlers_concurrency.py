@@ -98,10 +98,9 @@ class TestSessionLock:
         assert "do Y" in results
 
     @pytest.mark.asyncio
-    async def test_each_message_gets_own_placeholder(self, config, sessions):
-        """Each queued message should post its own 'Working on it...' placeholder."""
+    async def test_each_message_gets_own_response(self, config, sessions):
+        """Each queued message should produce its own response."""
         lock = asyncio.Lock()
-        post_count = 0
 
         async def fake_stream(prompt):
             yield make_event("result", text="done")
@@ -127,12 +126,12 @@ class TestSessionLock:
                 _process_message(event_b, "second", client, config, sessions),
             )
 
-        # Each message posts its own "Working on it..." placeholder
-        hourglass_calls = [
+        # Each message should produce a "done" response
+        done_posts = [
             c for c in client.chat_postMessage.call_args_list
-            if ":hourglass_flowing_sand:" in c.kwargs.get("text", "")
+            if c.kwargs.get("text", "") == "done"
         ]
-        assert len(hourglass_calls) == 2
+        assert len(done_posts) == 2
 
     @pytest.mark.asyncio
     async def test_first_error_doesnt_block_second(self, config, sessions):
@@ -172,11 +171,11 @@ class TestSessionLock:
         assert call_count == 2
 
         # First should show error (sanitized — no internal message leaked)
-        error_updates = [
-            c for c in client.chat_update.call_args_list
+        error_posts = [
+            c for c in client.chat_postMessage.call_args_list
             if ":x: Error (" in c.kwargs.get("text", "")
         ]
-        assert len(error_updates) == 1
+        assert len(error_posts) == 1
 
     @pytest.mark.asyncio
     async def test_different_threads_not_serialized(self, config):

@@ -47,14 +47,14 @@ Slack (Socket Mode) → app.py → handlers.py → sessions.py → claude.py →
 
 `handlers.py` (~1000 lines) is the most complex module. Key subsystems:
 
-**Concurrent message handling:** Per-session `asyncio.Lock` serializes streams within a thread. Multiple messages in the same thread queue behind the lock (each gets its own placeholder message). Different threads run fully concurrently.
+**Concurrent message handling:** Per-session `asyncio.Lock` serializes streams within a thread. Multiple messages in the same thread queue behind the lock. Different threads run fully concurrently.
 
 **Notification verbosity:** Three levels (minimal/normal/verbose) control what's shown:
 - *Always shown:* text responses, completion summaries, permission denials, errors
 - *normal+:* tool activities (`:mag: Reading file.py`), tool errors
 - *verbose:* tool results/output, compaction notices
 
-**Tool activity tracking:** `_format_tool_activity()` maps 20+ tool types to emoji + one-liner. First activity updates the placeholder; subsequent activities are thread replies. Tool outputs >500 chars are uploaded as Slack snippets. Git commits detected via regex get `:package:` reactions. Subagent events prefixed with `:arrow_right_hook:`.
+**Tool activity tracking:** `_format_tool_activity()` maps 20+ tool types to emoji + one-liner. All activities are posted as thread replies. Tool outputs >500 chars are uploaded as Slack snippets. Git commits detected via regex get `:package:` reactions. Subagent events prefixed with `:arrow_right_hook:`.
 
 **Message flow:** Slack event → dedup → resolve cwd → `SessionStore.get_or_create()` → acquire lock → stream response → `_format_tool_activity()` / text accumulation → split into Slack-safe chunks (3900 char limit) → completion summary.
 

@@ -229,14 +229,18 @@ class TestInterruptedStreamDisplay:
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN"}
             await _process_message(event, "do something", client, config, sessions)
 
-        # The placeholder should be updated with partial text + interrupted indicator
-        update_calls = client.chat_update.call_args_list
-        interrupted_update = [
-            c for c in update_calls
-            if ":stop_sign: _Interrupted_" in c.kwargs.get("text", "")
+        # Partial text and stop indicator should be posted as thread replies
+        post_calls = client.chat_postMessage.call_args_list
+        text_posts = [
+            c for c in post_calls
+            if "Partial response" in c.kwargs.get("text", "")
         ]
-        assert len(interrupted_update) == 1
-        assert "Partial response" in interrupted_update[0].kwargs["text"]
+        assert len(text_posts) == 1
+        stop_posts = [
+            c for c in post_calls
+            if c.kwargs.get("text") == ":stop_sign: _Interrupted_"
+        ]
+        assert len(stop_posts) == 1
 
     @pytest.mark.asyncio
     async def test_interrupted_stream_no_text_shows_indicator(self, config, sessions):
@@ -263,13 +267,13 @@ class TestInterruptedStreamDisplay:
             event = {"ts": "2000.0", "channel": "C_CHAN", "user": "UHUMAN"}
             await _process_message(event, "do something", client, config, sessions)
 
-        # Placeholder should be updated to just the interrupted indicator
-        update_calls = client.chat_update.call_args_list
-        interrupted_update = [
-            c for c in update_calls
+        # Stop indicator should be posted as a thread reply
+        post_calls = client.chat_postMessage.call_args_list
+        stop_posts = [
+            c for c in post_calls
             if c.kwargs.get("text") == ":stop_sign: _Interrupted_"
         ]
-        assert len(interrupted_update) == 1
+        assert len(stop_posts) == 1
 
     @pytest.mark.asyncio
     async def test_interrupted_stream_swaps_eyes_to_stop(self, config, sessions):
@@ -372,9 +376,6 @@ class TestInterruptedStreamDisplay:
         all_texts = [
             c.kwargs.get("text", "")
             for c in client.chat_postMessage.call_args_list
-        ] + [
-            c.kwargs.get("text", "")
-            for c in client.chat_update.call_args_list
         ]
         stop_messages = [t for t in all_texts if ":stop_sign:" in t]
         assert len(stop_messages) == 0

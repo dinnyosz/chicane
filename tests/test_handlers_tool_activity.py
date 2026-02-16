@@ -680,7 +680,7 @@ class TestToolActivityStreaming:
     """Test that tool activities are posted correctly during streaming."""
 
     @pytest.mark.asyncio
-    async def test_first_tool_activity_updates_placeholder(self, config, sessions):
+    async def test_first_tool_activity_posted_as_reply(self, config, sessions):
         async def fake_stream(prompt):
             yield make_tool_event(
                 tool_block("Read", file_path="/src/config.py")
@@ -698,9 +698,12 @@ class TestToolActivityStreaming:
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "show config", client, config, sessions)
 
-        first_update = client.chat_update.call_args_list[0]
-        assert first_update.kwargs["text"] == ":mag: Reading `config.py`"
-        assert first_update.kwargs["ts"] == "9999.0"
+        activity_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":mag:" in c.kwargs.get("text", "")
+        ]
+        assert len(activity_posts) >= 1
+        assert activity_posts[0].kwargs["text"] == ":mag: Reading `config.py`"
 
     @pytest.mark.asyncio
     async def test_subsequent_activities_posted_as_replies(self, config, sessions):
@@ -727,12 +730,12 @@ class TestToolActivityStreaming:
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "fix tests", client, config, sessions)
 
-        assert client.chat_update.call_args_list[0].kwargs["text"] == ":mag: Reading `a.py`"
-
         post_calls = client.chat_postMessage.call_args_list
-        assert post_calls[1].kwargs["text"] == ":pencil2: Editing `a.py`"
-        assert post_calls[2].kwargs["text"] == ":computer: Running `pytest`"
-        assert post_calls[3].kwargs["text"] == "Done."
+        activity_texts = [c.kwargs["text"] for c in post_calls]
+        assert ":mag: Reading `a.py`" in activity_texts
+        assert ":pencil2: Editing `a.py`" in activity_texts
+        assert ":computer: Running `pytest`" in activity_texts
+        assert "Done." in activity_texts
 
     @pytest.mark.asyncio
     async def test_final_text_as_thread_replies_when_activities_exist(
@@ -761,8 +764,8 @@ class TestToolActivityStreaming:
         assert final_post.kwargs["thread_ts"] == "1000.0"
 
     @pytest.mark.asyncio
-    async def test_no_activities_updates_placeholder_with_text(self, config, sessions):
-        """When there are no tool calls, the response replaces the placeholder."""
+    async def test_no_activities_posts_text_as_reply(self, config, sessions):
+        """When there are no tool calls, the response is posted as a thread reply."""
 
         async def fake_stream(prompt):
             yield make_event("assistant", text="Quick answer.")
@@ -778,8 +781,12 @@ class TestToolActivityStreaming:
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
-        final_update = client.chat_update.call_args_list[-1]
-        assert final_update.kwargs["text"] == "Quick answer."
+        text_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if c.kwargs.get("text", "") == "Quick answer."
+        ]
+        assert len(text_posts) == 1
+        client.chat_update.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_text_flushed_before_next_tool_activity(self, config, sessions):
@@ -804,12 +811,14 @@ class TestToolActivityStreaming:
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "fix it", client, config, sessions)
 
-        assert client.chat_update.call_args_list[0].kwargs["text"] == ":mag: Reading `a.py`"
-
         post_calls = client.chat_postMessage.call_args_list
-        assert post_calls[1].kwargs["text"] == "Looks good, let me edit it."
-        assert post_calls[2].kwargs["text"] == ":pencil2: Editing `a.py`"
-        assert post_calls[3].kwargs["text"] == "Done editing."
+        texts = [c.kwargs["text"] for c in post_calls]
+        # Text should be flushed before the next tool activity
+        read_idx = texts.index(":mag: Reading `a.py`")
+        text_idx = texts.index("Looks good, let me edit it.")
+        edit_idx = texts.index(":pencil2: Editing `a.py`")
+        done_idx = texts.index("Done editing.")
+        assert read_idx < text_idx < edit_idx < done_idx
 
     @pytest.mark.asyncio
     async def test_long_text_with_activities_uploaded_as_snippet(

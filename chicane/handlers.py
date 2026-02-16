@@ -15,6 +15,7 @@ from slack_bolt.async_app import AsyncApp
 from slack_sdk.web.async_client import AsyncWebClient
 
 from .config import Config, generate_session_alias, load_handoff_session, save_handoff_session
+from .emoji_map import emoji_for_alias
 from .sessions import SessionInfo, SessionStore
 
 logger = logging.getLogger(__name__)
@@ -475,21 +476,8 @@ async def _process_message(
         )
         prompt = (prompt + file_note) if prompt else file_note.lstrip()
 
-    # Post initial "thinking" message
-    try:
-        result = await client.chat_postMessage(
-            channel=channel,
-            thread_ts=thread_ts,
-            text=":hourglass_flowing_sand: Working on it...",
-        )
-        message_ts = result["ts"]
-        sessions.register_bot_message(message_ts, thread_ts)
-    except Exception:
-        logger.exception("Failed to post placeholder message")
-        return
-
     # If another stream is active for this thread, interrupt it so we
-    # can acquire the lock quickly instead of waiting minutes.
+    # can acquire the lock quickly instead of waiting for it to finish.
     queued = session_info.lock.locked()
     if session_info.session.is_streaming:
         logger.info(f"New message in {thread_ts} — interrupting active stream")
@@ -507,7 +495,6 @@ async def _process_message(
             await _remove_thread_reaction(client, channel, session_info, "hourglass")
         full_text = ""
         event_count = 0
-        first_activity = True  # track whether to update placeholder or post new
         result_event = None  # capture result event for completion summary
         git_committed = False  # track whether a git commit happened (since last edit)
         files_changed = False  # track uncommitted file changes
@@ -542,16 +529,10 @@ async def _process_message(
                     # Post tool activity
                     if show_activities:
                         for activity in activities:
-                            if first_activity:
-                                await client.chat_update(
-                                    channel=channel, ts=message_ts, text=activity,
-                                )
-                                first_activity = False
-                            else:
-                                r = await client.chat_postMessage(
-                                    channel=channel, thread_ts=thread_ts, text=activity,
-                                )
-                                sessions.register_bot_message(r["ts"], thread_ts)
+                            r = await client.chat_postMessage(
+                                channel=channel, thread_ts=thread_ts, text=activity,
+                            )
+                            sessions.register_bot_message(r["ts"], thread_ts)
 
                     # Detect file edits — add pencil reaction to thread root
                     if not files_changed and _has_file_edit(event_data):
@@ -750,6 +731,12 @@ async def _process_message(
                                 text=f":sparkles: New session\n_(session: {alias})_",
                             )
 
+                        # Add an animal emoji reaction matching the alias
+                        await _add_thread_reaction(
+                            client, channel, session_info,
+                            emoji_for_alias(alias),
+                        )
+
                 elif event_data.type == "system" and event_data.subtype == "compact_boundary":
                     if _should_show("compact_boundary", config.verbosity):
                         meta = event_data.compact_metadata or {}
@@ -775,15 +762,10 @@ async def _process_message(
                     # New message will process next — post partial text, then note
                     if full_text:
                         mrkdwn = _markdown_to_mrkdwn(full_text)
-                        if first_activity:
-                            await client.chat_update(
-                                channel=channel, ts=message_ts, text=mrkdwn[:SLACK_MAX_LENGTH],
+                        for chunk in _split_message(mrkdwn):
+                            await client.chat_postMessage(
+                                channel=channel, thread_ts=thread_ts, text=chunk,
                             )
-                        else:
-                            for chunk in _split_message(mrkdwn):
-                                await client.chat_postMessage(
-                                    channel=channel, thread_ts=thread_ts, text=chunk,
-                                )
                     await client.chat_postMessage(
                         channel=channel, thread_ts=thread_ts,
                         text=":bulb: _Thought added_",
@@ -800,25 +782,14 @@ async def _process_message(
                     # Reaction interrupt — show partial text + stop indicator
                     if full_text:
                         mrkdwn = _markdown_to_mrkdwn(full_text)
-                        if first_activity:
-                            await client.chat_update(
-                                channel=channel, ts=message_ts,
-                                text=mrkdwn[:SLACK_MAX_LENGTH] + "\n\n:stop_sign: _Interrupted_",
-                            )
-                        else:
-                            for chunk in _split_message(mrkdwn):
-                                await client.chat_postMessage(
-                                    channel=channel, thread_ts=thread_ts, text=chunk,
-                                )
+                        for chunk in _split_message(mrkdwn):
                             await client.chat_postMessage(
-                                channel=channel, thread_ts=thread_ts,
-                                text=":stop_sign: _Interrupted_",
+                                channel=channel, thread_ts=thread_ts, text=chunk,
                             )
-                    else:
-                        await client.chat_update(
-                            channel=channel, ts=message_ts,
-                            text=":stop_sign: _Interrupted_",
-                        )
+                    await client.chat_postMessage(
+                        channel=channel, thread_ts=thread_ts,
+                        text=":stop_sign: _Interrupted_",
+                    )
                     # Swap eyes → stop sign reaction on user's message
                     try:
                         await client.reactions_remove(
@@ -843,30 +814,12 @@ async def _process_message(
                 mrkdwn = _markdown_to_mrkdwn(full_text)
 
                 if len(mrkdwn) > SNIPPET_THRESHOLD:
-                    # Long output → upload as a snippet file
-                    if first_activity:
-                        await client.chat_update(
-                            channel=channel, ts=message_ts,
-                            text=":page_facing_up: Response uploaded as snippet (too long for a message).",
-                        )
                     await _send_snippet(client, channel, thread_ts, mrkdwn)
                 else:
-                    chunks = _split_message(mrkdwn)
-                    if first_activity:
-                        # No tool activities were posted — update the placeholder
-                        await client.chat_update(
-                            channel=channel, ts=message_ts, text=chunks[0],
+                    for chunk in _split_message(mrkdwn):
+                        await client.chat_postMessage(
+                            channel=channel, thread_ts=thread_ts, text=chunk,
                         )
-                        for chunk in chunks[1:]:
-                            await client.chat_postMessage(
-                                channel=channel, thread_ts=thread_ts, text=chunk,
-                            )
-                    else:
-                        # Tool activities were posted — send text as thread replies
-                        for chunk in chunks:
-                            await client.chat_postMessage(
-                                channel=channel, thread_ts=thread_ts, text=chunk,
-                            )
             else:
                 logger.warning(
                     f"Empty response from Claude: {event_count} events received, "
@@ -879,9 +832,9 @@ async def _process_message(
                     "Please close that Claude Code session first (type `/exit` or quit), "
                     "then try again."
                 )
-                await client.chat_update(
+                await client.chat_postMessage(
                     channel=channel,
-                    ts=message_ts,
+                    thread_ts=thread_ts,
                     text=msg,
                 )
 
@@ -969,9 +922,9 @@ async def _process_message(
         except Exception as exc:
             logger.exception(f"Error processing message: {exc}")
             try:
-                await client.chat_update(
+                await client.chat_postMessage(
                     channel=channel,
-                    ts=message_ts,
+                    thread_ts=thread_ts,
                     text=f":x: Error ({type(exc).__name__}). Check bot logs for details.",
                 )
             except Exception:

@@ -305,8 +305,6 @@ class TestVerbosityFiltering:
 
         all_texts = [
             c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list
-        ] + [
-            c.kwargs.get("text", "") for c in client.chat_update.call_args_list
         ]
         assert not any(":mag:" in t for t in all_texts)
         assert any("Here is the file content." in t for t in all_texts)
@@ -357,8 +355,6 @@ class TestVerbosityFiltering:
 
         all_texts = [
             c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list
-        ] + [
-            c.kwargs.get("text", "") for c in client.chat_update.call_args_list
         ]
         assert any(":mag:" in t for t in all_texts)
 
