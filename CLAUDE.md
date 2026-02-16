@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Chicane** is a Slack bot that bridges Claude Code sessions into team chat. It connects Slack (via Socket Mode) to the Claude Code CLI via async subprocess streaming. The killer feature is **session handoff** — passing coding sessions between desktop Claude Code and Slack (and back).
+**Chicane** is a Slack bot that bridges Claude Code sessions into team chat. It connects Slack (via Socket Mode) to the Claude Agent SDK for persistent, multi-turn coding sessions. The killer feature is **session handoff** — passing coding sessions between desktop Claude Code and Slack (and back).
 
 *"When Claude Code can't go straight, take the chicane."*
 
@@ -17,7 +17,7 @@ pip install -e ".[dev]"
 # Run the bot
 chicane run                # start the Slack bot
 chicane run --detach       # run as daemon (requires LOG_DIR)
-chicane setup              # interactive 10-step config wizard
+chicane setup              # interactive setup wizard
 chicane handoff --summary "..." # hand off a session to Slack
 
 # Tests
@@ -30,41 +30,64 @@ pytest -k "test_from_env"           # pattern match
 ## Architecture
 
 ```
-Slack (Socket Mode) → app.py → handlers.py → sessions.py → claude.py → Claude Code CLI subprocess
+Slack (Socket Mode) → app.py → handlers.py → sessions.py → claude.py → Claude Agent SDK
 ```
 
-**Seven modules, each with a single responsibility:**
+**Core modules:**
 
-- **`app.py`** — CLI entrypoints (`run`, `setup`, `handoff`), AsyncApp creation, signal handling, logging setup. Exports `resolve_session_id()` and `resolve_channel_id()` as shared helpers. Stores config and sessions as private attrs on the AsyncApp (`_chicane_config`, `_chicane_sessions`).
-- **`config.py`** — Frozen dataclass loaded from env vars. Config file lives at `platformdirs.user_config_dir("chicane")/.env`. Validates tokens, permission modes, log levels. `resolve_channel_dir()` maps Slack channels to working directories.
-- **`claude.py`** — `ClaudeSession` wraps a `claude` CLI subprocess with `--print --output-format stream-json --verbose`. `ClaudeEvent` dataclass parses streaming JSON events, extracting text (skipping tool_use blocks), session_id, errors, and cost. System prompt only sent on first call, not on resumes.
-- **`handlers.py`** — Registers `app_mention` and `message` event handlers. Core flow in `_process_message()`: dedup → resolve cwd → get/create session → stream response → split into Slack-safe chunks (3900 char limit). Handles reconnection by scanning thread history for handoff session IDs. Adds emoji reactions for visual feedback (eyes → checkmark/x).
-- **`mcp_server.py`** — FastMCP server exposing `chicane_handoff`, `chicane_send_message`, and `chicane_init` tools for Claude Code. Uses stdio transport. `chicane_init` installs the skill and optionally adds tools to the allowed list. Entry point: `chicane-mcp = "chicane.mcp_server:main"`.
-- **`sessions.py`** — `SessionStore` maps `thread_ts → SessionInfo`. One Claude session per Slack thread. Includes `SLACK_SYSTEM_PROMPT` that tells Claude it's operating via Slack with formatting constraints. Auto-cleanup of idle sessions (24h default).
-- **`setup.py`** — 10-step interactive wizard using Rich. Saves config progressively after each step.
+- **`app.py`** — CLI entrypoints (`run`, `setup`, `handoff`), AsyncApp creation, signal handling. Stores config and sessions as private attrs on the AsyncApp (`_chicane_config`, `_chicane_sessions`).
+- **`config.py`** — Frozen dataclass loaded from env vars. Config file at `platformdirs.user_config_dir("chicane")/.env`. `resolve_channel_dir()` maps Slack channels ↔ working directories.
+- **`claude.py`** — `ClaudeSession` wraps `ClaudeSDKClient` (from `claude-agent-sdk`). The SDK client persists across turns — created once via `_ensure_connected()`, reused for all messages in a thread. `stream(prompt)` calls `client.query()` then iterates `client.receive_response()`, converting SDK message types (`AssistantMessage`, `ResultMessage`, etc.) to `ClaudeEvent` dicts via `_sdk_message_to_raw()`. System prompt sent on first call only. Supports `interrupt()` for cancellation.
+- **`handlers.py`** — Registers `app_mention` and `message` event handlers. See [Handler patterns](#handler-patterns) below.
+- **`sessions.py`** — `SessionStore` maps `thread_ts → SessionInfo`. One Claude session per Slack thread. Each `SessionInfo` carries a `ClaudeSession`, an `asyncio.Lock` for concurrency, and metadata. Includes `SLACK_SYSTEM_PROMPT` that constrains Claude's Slack behavior. Auto-cleanup of idle sessions (24h).
+- **`mcp_server.py`** — FastMCP server exposing `chicane_handoff`, `chicane_send_message`, and `chicane_init` tools. Uses stdio transport. Entry point: `chicane-mcp`.
+- **`setup.py`** — Interactive wizard using Rich. Saves config progressively after each step.
 
-**Key flows:**
-- **Message flow:** Slack event → handler dedup → `SessionStore.get_or_create()` → `ClaudeSession.stream()` → parse `ClaudeEvent` → update Slack message periodically → split long responses
+## Handler Patterns
+
+`handlers.py` (~1000 lines) is the most complex module. Key subsystems:
+
+**Concurrent message handling:** Per-session `asyncio.Lock` serializes streams within a thread. Multiple messages in the same thread queue behind the lock (each gets its own placeholder message). Different threads run fully concurrently.
+
+**Notification verbosity:** Three levels (minimal/normal/verbose) control what's shown:
+- *Always shown:* text responses, completion summaries, permission denials, errors
+- *normal+:* tool activities (`:mag: Reading file.py`), tool errors
+- *verbose:* tool results/output, compaction notices
+
+**Tool activity tracking:** `_format_tool_activity()` maps 20+ tool types to emoji + one-liner. First activity updates the placeholder; subsequent activities are thread replies. Tool outputs >500 chars are uploaded as Slack snippets. Git commits detected via regex get `:package:` reactions. Subagent events prefixed with `:arrow_right_hook:`.
+
+**Message flow:** Slack event → dedup → resolve cwd → `SessionStore.get_or_create()` → acquire lock → stream response → `_format_tool_activity()` / text accumulation → split into Slack-safe chunks (3900 char limit) → completion summary.
+
+**Handoff reconnection:** Thread reply → scan thread history for `(session_id: uuid)` regex → resume session with that ID.
+
+## Key Flows
+
 - **Handoff (CLI → Slack):** `chicane handoff` → auto-detect session_id from `~/.claude/history.jsonl` → resolve channel from cwd via `CHANNEL_DIRS` → post message with embedded `(session_id: uuid)`
-- **Reconnect (Slack picks up):** Thread reply detected → scan thread history for `(session_id: uuid)` regex → resume session with `--resume` flag
+- **Reconnect (Slack picks up):** Thread reply detected → scan thread history for `(session_id: uuid)` → resume with that session
 
 ## Tech Stack
 
 - Python 3.11+, async throughout (asyncio, AsyncApp, AsyncWebClient)
+- `claude-agent-sdk` for Claude sessions (replaced subprocess in commit 64dfaf5)
 - `slack-bolt[async]` for Slack Socket Mode
-- `pytest` + `pytest-asyncio` for tests
-- `mcp` (Model Context Protocol) for the MCP server (`chicane-mcp` entry point)
-- `hatchling` build backend, entry points: `chicane = "chicane.app:main"`, `chicane-mcp = "chicane.mcp_server:main"`, `chicane-mcp-dev = "chicane.mcp_server:main"` (dev alias)
-- `platformdirs` for OS-specific config paths
-- `rich` for terminal UI in setup wizard
+- `pytest` + `pytest-asyncio` for tests (class-based test organization, heavy `AsyncMock` usage)
+- `mcp` for the MCP server
+- `hatchling` build backend
+- `platformdirs` for OS-specific config paths, `rich` for terminal UI
+
+## Test Conventions
+
+- Tests live in `tests/` with `conftest.py` providing shared fixtures: `config`, `sessions`, `make_event`, `make_tool_event`, `tool_block`, `mock_client`
+- Autouse `_patch_snippet_io` fixture eliminates real I/O and sleeps globally
+- Handler tests are split by concern: `test_handlers_concurrency.py`, `test_handlers_notifications.py`, `test_handlers_tool_activity.py`, `test_handlers_process_message.py`, `test_handlers_routing.py`, `test_handlers_formatting.py`, `test_handlers_files.py`, `test_handlers_utils.py`
+- All Slack API calls use `AsyncMock`. All async tests use `@pytest.mark.asyncio`.
 
 ## Key Conventions
 
-- All Slack API calls are async. Tests use `AsyncMock` and `@pytest.mark.asyncio`.
 - Config is immutable (frozen dataclass). Never mutate — create new instances.
-- The `SLACK_SYSTEM_PROMPT` in `sessions.py` constrains Claude's behavior for Slack (no markdown headers/tables, 4000 char limit, auto-approve edits).
-- Deduplication uses separate sets for mentions vs messages to prevent double-processing from overlapping Slack events.
-- The CLI command is `chicane` (pyproject.toml entry point).
+- Deduplication uses separate sets for mentions vs messages to prevent double-processing.
+- The `ClaudeEvent` abstraction layer isolates handlers.py from SDK internals — handlers never see SDK types directly.
+- Entry points: `chicane` (CLI), `chicane-mcp` / `chicane-mcp-dev` (MCP server).
 
 ## Environment Variables
 
