@@ -465,11 +465,10 @@ class TestVerbosityFiltering:
             event = {"ts": "20008.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "show log", client, config, sessions)
 
-        # Should upload as snippet, not post inline
-        client.files_getUploadURLExternal.assert_called_once()
-        client.files_completeUploadExternal.assert_called_once()
-        complete_kwargs = client.files_completeUploadExternal.call_args.kwargs
-        assert complete_kwargs["channel_id"] == "C_CHAN"
+        # Should upload as snippet via files_upload_v2, not post inline
+        client.files_upload_v2.assert_called_once()
+        upload_kwargs = client.files_upload_v2.call_args.kwargs
+        assert upload_kwargs["channel"] == "C_CHAN"
 
         # No inline tool output messages
         all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]

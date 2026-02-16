@@ -1,7 +1,9 @@
 # Chicane — bridge Claude Code sessions to Slack
 
 Use `chicane_handoff` when the user says "hand this off to Slack", "continue
-on Slack", or similar. Use `chicane_send_message` for quick status updates.
+on Slack", or similar. Use `chicane_send_message` for any project-related
+communication — progress updates, completed work, errors, questions, or
+anything the team should know about.
 
 ## Handoff
 
@@ -24,11 +26,15 @@ chicane_handoff(
 
 ## Send a message
 
-Use `chicane_send_message` for quick pings, status updates, or notifications
-that don't require a full session handoff:
+Use `chicane_send_message` for any project-related communication that doesn't
+require a full session handoff. Proactively send messages when:
+- You complete a significant piece of work (commits, feature done, bug fixed)
+- You encounter errors or blockers the team should know about
+- Tests pass or fail after changes
+- You have questions or need input
 
 ```
-chicane_send_message(text="Deployment complete, all tests green.")
+chicane_send_message(text="Pushed 3 commits to feature/auth — login flow complete, tests passing.")
 ```
 
 ## After a handoff

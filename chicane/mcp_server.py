@@ -133,8 +133,9 @@ async def chicane_send_message(
     """Send a message to a Slack channel.
 
     The channel is resolved from the current working directory via
-    CHANNEL_DIRS if not provided. Useful for status updates, notifications,
-    or quick pings without a full session handoff.
+    CHANNEL_DIRS if not provided. Use for any project-related communication:
+    progress updates, completed work, errors, questions, or anything the
+    team should know about.
     """
     try:
         channel_name, channel_id = await _resolve_channel(channel or None)

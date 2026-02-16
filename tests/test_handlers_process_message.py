@@ -179,11 +179,10 @@ class TestProcessMessageEdgeCases:
         update_text = client.chat_update.call_args.kwargs["text"]
         assert "snippet" in update_text.lower()
 
-        # Snippet uploaded via 3-step upload flow
-        client.files_getUploadURLExternal.assert_called_once()
-        client.files_completeUploadExternal.assert_called_once()
-        complete_kwargs = client.files_completeUploadExternal.call_args.kwargs
-        assert complete_kwargs["channel_id"] == "C_CHAN"
+        # Snippet uploaded via files_upload_v2
+        client.files_upload_v2.assert_called_once()
+        upload_kwargs = client.files_upload_v2.call_args.kwargs
+        assert upload_kwargs["channel"] == "C_CHAN"
 
     @pytest.mark.asyncio
     async def test_moderate_response_split_into_chunks(self, config, sessions):
@@ -206,7 +205,7 @@ class TestProcessMessageEdgeCases:
 
         # Should be split into 2 messages, not uploaded as snippet
         assert client.chat_update.called
-        client.files_getUploadURLExternal.assert_not_called()
+        client.files_upload_v2.assert_not_called()
         assert client.chat_postMessage.call_count >= 2
 
     @pytest.mark.asyncio

@@ -1900,11 +1900,8 @@ async def _send_snippet(
 ) -> None:
     """Upload *text* as a Slack snippet file in the thread.
 
-    Uses the three-step Slack upload flow (``getUploadURLExternal`` →
-    PUT content → ``completeUploadExternal``).  A short delay is inserted
-    between each step to avoid racing Slack's backend, and the whole
-    sequence is retried once on failure before falling back to split
-    messages.
+    Uses ``files_upload_v2`` which handles the multi-step upload
+    internally and reliably shares the file to the channel/thread.
 
     Pass *snippet_type* (e.g. ``"diff"``) to request Slack syntax
     highlighting for that file type.
@@ -1912,39 +1909,19 @@ async def _send_snippet(
     last_exc: BaseException | None = None
     for attempt in range(1, _max_attempts + 1):
         try:
-            # Step 1 – obtain an upload URL and file id.
-            size = len(text.encode("utf-8"))
-            upload_kwargs: dict = dict(filename=filename, length=size)
-            if snippet_type:
-                upload_kwargs["snippet_type"] = snippet_type
-            url_resp = await client.files_getUploadURLExternal(
-                **upload_kwargs,
-            )
-            upload_url: str = url_resp["upload_url"]
-            file_id: str = url_resp["file_id"]
-
-            await asyncio.sleep(_step_delay)
-
-            # Step 2 – upload the content to the URL Slack gave us.
-            async with aiohttp.ClientSession() as http:
-                put_resp = await http.put(
-                    upload_url,
-                    data=text.encode("utf-8"),
-                    headers={"Content-Type": "text/markdown"},
-                )
-                put_resp.raise_for_status()
-
-            await asyncio.sleep(_step_delay)
-
-            # Step 3 – finalise the upload and share it in the thread.
-            await client.files_completeUploadExternal(
-                files=[{"id": file_id, "title": Path(filename).stem or "snippet"}],
-                channel_id=channel,
+            upload_kwargs: dict = dict(
+                content=text,
+                filename=filename,
+                title=Path(filename).stem or "snippet",
+                channel=channel,
                 thread_ts=thread_ts,
-                initial_comment=initial_comment or None,
+                filetype=snippet_type or "text",
             )
+            if initial_comment:
+                upload_kwargs["initial_comment"] = initial_comment
+            await client.files_upload_v2(**upload_kwargs)
             return  # success
-        except (SlackApiError, aiohttp.ClientError, KeyError) as exc:
+        except SlackApiError as exc:
             last_exc = exc
             if attempt < _max_attempts:
                 logger.info(

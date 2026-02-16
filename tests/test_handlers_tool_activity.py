@@ -833,11 +833,10 @@ class TestToolActivityStreaming:
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions)
 
-        # Long text should be uploaded as a snippet, not split into chunks
-        client.files_getUploadURLExternal.assert_called_once()
-        client.files_completeUploadExternal.assert_called_once()
-        complete_kwargs = client.files_completeUploadExternal.call_args.kwargs
-        assert complete_kwargs["channel_id"] == "C_CHAN"
+        # Long text should be uploaded as a snippet via files_upload_v2
+        client.files_upload_v2.assert_called_once()
+        upload_kwargs = client.files_upload_v2.call_args.kwargs
+        assert upload_kwargs["channel"] == "C_CHAN"
 
 
 class TestToolErrorHandling:
