@@ -394,7 +394,7 @@ class TestGenerateSessionAlias:
         from chicane.config import generate_session_alias
         alias = generate_session_alias()
         parts = alias.split("-")
-        assert len(parts) == 2
+        assert len(parts) == 3
         assert all(part.isalpha() for part in parts)
 
     def test_avoids_collision_with_existing(self, tmp_path, monkeypatch):
@@ -427,9 +427,9 @@ class TestGenerateSessionAlias:
         map_file = tmp_path / "handoff_sessions.json"
         monkeypatch.setattr("chicane.config._HANDOFF_MAP_FILE", map_file)
 
-        monkeypatch.setattr("chicane.emoji_map.generate_alias", lambda: "same-alias")
-        save_handoff_session("same-alias", "some-id")
+        monkeypatch.setattr("chicane.emoji_map.generate_alias", lambda: "same-old-alias")
+        save_handoff_session("same-old-alias", "some-id")
 
         # Should still return after 50 retries (fallback)
         result = generate_session_alias()
-        assert result == "same-alias"
+        assert result == "same-old-alias"

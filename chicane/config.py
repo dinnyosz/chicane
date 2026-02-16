@@ -250,9 +250,9 @@ class Config:
 
 
 def generate_session_alias() -> str:
-    """Generate a memorable alias like ``blazing-rocket``.
+    """Generate a memorable alias like ``blazing-cosmic-falcon``.
 
-    Uses a custom word list (~18k combinations) where every noun maps
+    Uses a custom word list (~2M combinations) where every word maps
     1:1 to a standard Slack emoji.  Retries until the alias doesn't
     collide with an existing handoff mapping.
     """

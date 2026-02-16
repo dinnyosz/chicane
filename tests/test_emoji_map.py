@@ -5,6 +5,7 @@ import pytest
 from chicane.emoji_map import (
     ADJECTIVES,
     NOUNS,
+    all_emojis_for_alias,
     emoji_for_alias,
     emojis_for_alias,
     generate_alias,
@@ -12,86 +13,108 @@ from chicane.emoji_map import (
 
 
 class TestGenerateAlias:
-    """generate_alias produces valid adjective-noun pairs."""
+    """generate_alias produces valid adjective-adjective-noun triples."""
 
-    def test_format_is_adjective_dash_noun(self):
+    def test_format_is_adj_adj_noun(self):
         alias = generate_alias()
         parts = alias.split("-")
-        assert len(parts) == 2
+        assert len(parts) == 3
         assert parts[0] in ADJECTIVES
-        assert parts[1] in NOUNS
+        assert parts[1] in ADJECTIVES
+        assert parts[2] in NOUNS
+
+    def test_two_adjectives_are_different(self):
+        """The two adjectives should never be the same word."""
+        for _ in range(100):
+            alias = generate_alias()
+            parts = alias.split("-")
+            assert parts[0] != parts[1], f"Duplicate adjectives in {alias}"
 
     def test_uniqueness_over_many_calls(self):
         """Should produce varied results (not always the same)."""
         aliases = {generate_alias() for _ in range(100)}
         assert len(aliases) >= 80
 
-    def test_all_generated_aliases_have_both_emojis(self):
-        """Every alias should resolve to two non-fallback emojis."""
+    def test_all_generated_aliases_have_three_emojis(self):
+        """Every alias should resolve to three non-fallback emojis."""
         for _ in range(200):
             alias = generate_alias()
-            adj_emoji, noun_emoji = emojis_for_alias(alias)
-            assert adj_emoji != "sparkles", f"{alias} adjective fell back"
-            assert noun_emoji != "sparkles", f"{alias} noun fell back"
+            adj1, adj2, noun = all_emojis_for_alias(alias)
+            assert adj1 != "sparkles", f"{alias} adj1 fell back"
+            assert adj2 != "sparkles", f"{alias} adj2 fell back"
+            assert noun != "sparkles", f"{alias} noun fell back"
 
 
-class TestEmojisForAlias:
-    """emojis_for_alias returns (adjective_emoji, noun_emoji)."""
+class TestAllEmojisForAlias:
+    """all_emojis_for_alias returns (adj1_emoji, adj2_emoji, noun_emoji)."""
 
-    def test_both_emojis_returned(self):
-        adj, noun = emojis_for_alias("blazing-eagle")
-        assert adj == "fire"
+    def test_three_part_alias(self):
+        adj1, adj2, noun = all_emojis_for_alias("blazing-cosmic-eagle")
+        assert adj1 == "fire"
+        assert adj2 == "ringed_planet"
         assert noun == "eagle"
 
-    def test_stormy_shrimp(self):
-        adj, noun = emojis_for_alias("stormy-shrimp")
-        assert adj == "thunder_cloud_and_rain"
+    def test_stormy_golden_shrimp(self):
+        adj1, adj2, noun = all_emojis_for_alias("stormy-golden-shrimp")
+        assert adj1 == "thunder_cloud_and_rain"
+        assert adj2 == "star2"
         assert noun == "shrimp"
 
-    def test_golden_dragon(self):
-        adj, noun = emojis_for_alias("golden-dragon")
-        assert adj == "star2"
-        assert noun == "dragon"
-
-    def test_frozen_rocket(self):
-        adj, noun = emojis_for_alias("frozen-rocket")
-        assert adj == "ice_cube"
-        assert noun == "rocket"
-
-    def test_mystic_owl(self):
-        adj, noun = emojis_for_alias("mystic-owl")
-        assert adj == "crystal_ball"
-        assert noun == "owl"
-
-    def test_unknown_adjective_falls_back(self):
-        adj, noun = emojis_for_alias("xyzzy-eagle")
-        assert adj == "sparkles"
+    def test_backward_compat_two_part(self):
+        """Old adjective-noun aliases still work."""
+        adj1, adj2, noun = all_emojis_for_alias("blazing-eagle")
+        assert adj1 == "fire"
+        assert adj2 == "sparkles"  # no second adjective
         assert noun == "eagle"
 
-    def test_unknown_noun_falls_back(self):
-        adj, noun = emojis_for_alias("blazing-xyzzy")
-        assert adj == "fire"
-        assert noun == "sparkles"
-
     def test_single_word(self):
-        adj, noun = emojis_for_alias("dragon")
-        assert adj == "sparkles"
+        adj1, adj2, noun = all_emojis_for_alias("dragon")
+        assert adj1 == "sparkles"
+        assert adj2 == "sparkles"
         assert noun == "dragon"
 
     def test_empty_string(self):
-        adj, noun = emojis_for_alias("")
-        assert adj == "sparkles"
+        adj1, adj2, noun = all_emojis_for_alias("")
+        assert adj1 == "sparkles"
+        assert adj2 == "sparkles"
         assert noun == "sparkles"
+
+
+class TestEmojisForAlias:
+    """emojis_for_alias picks 2 random emojis from the 3 available."""
+
+    def test_returns_two_emojis(self):
+        result = emojis_for_alias("blazing-cosmic-eagle")
+        assert len(result) == 2
+
+    def test_picked_from_valid_set(self):
+        """Both returned emojis must be from the alias's 3 candidates."""
+        all_three = set(all_emojis_for_alias("blazing-cosmic-eagle"))
+        for _ in range(50):
+            e1, e2 = emojis_for_alias("blazing-cosmic-eagle")
+            assert e1 in all_three
+            assert e2 in all_three
+
+    def test_not_always_same_pair(self):
+        """Over many calls, different pairs should appear."""
+        pairs = set()
+        for _ in range(100):
+            pairs.add(emojis_for_alias("blazing-cosmic-eagle"))
+        # 3 candidates → 3 possible ordered pairs of 2
+        assert len(pairs) >= 2
 
 
 class TestEmojiForAlias:
     """Legacy single-emoji API returns the noun emoji."""
 
     def test_returns_noun_emoji(self):
+        assert emoji_for_alias("blazing-cosmic-eagle") == "eagle"
+
+    def test_backward_compat_two_part(self):
         assert emoji_for_alias("blazing-eagle") == "eagle"
 
     def test_fallback(self):
-        assert emoji_for_alias("blazing-xyzzy") == "sparkles"
+        assert emoji_for_alias("blazing-cosmic-xyzzy") == "sparkles"
 
 
 class TestNounCompleteness:
@@ -146,23 +169,29 @@ class TestAdjectiveCompleteness:
         for adj in ADJECTIVES:
             assert adj.isalpha(), f"Adjective '{adj}' not purely alphabetic"
 
+    def test_enough_for_sample_of_two(self):
+        """Need at least 2 adjectives for random.sample(adj_keys, 2)."""
+        assert len(ADJECTIVES) >= 2
+
 
 class TestIntegrationWithConfig:
     """Verify config.generate_session_alias uses the new generator."""
 
-    def test_config_alias_maps_to_both_emojis(self):
+    def test_config_alias_maps_to_three_emojis(self):
         from chicane.config import generate_session_alias
 
         alias = generate_session_alias()
-        adj_emoji, noun_emoji = emojis_for_alias(alias)
-        assert adj_emoji != "sparkles"
-        assert noun_emoji != "sparkles"
+        adj1, adj2, noun = all_emojis_for_alias(alias)
+        assert adj1 != "sparkles"
+        assert adj2 != "sparkles"
+        assert noun != "sparkles"
 
     def test_config_alias_format(self):
         from chicane.config import generate_session_alias
 
         alias = generate_session_alias()
         parts = alias.split("-")
-        assert len(parts) == 2
+        assert len(parts) == 3
         assert parts[0] in ADJECTIVES
-        assert parts[1] in NOUNS
+        assert parts[1] in ADJECTIVES
+        assert parts[2] in NOUNS

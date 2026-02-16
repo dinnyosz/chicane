@@ -2,10 +2,11 @@
 
 Replaces ``coolname`` with a custom generator.  Every noun AND adjective
 has an exact standard Slack emoji shortcode — no approximations, no custom
-emoji needed.  Aliases are ``adjective-noun`` pairs (e.g. ``blazing-rocket``)
-and produce *two* emoji reactions on the thread root.
+emoji needed.  Aliases are ``adjective-adjective-noun`` triples
+(e.g. ``blazing-cosmic-falcon``) and produce *two* randomly-chosen emoji
+reactions (out of the three available) on the thread root.
 
-~120 adjectives × ~150 nouns ≈ 18,000 unique combinations.
+~120² adjectives × ~150 nouns ≈ 2,160,000 unique combinations.
 """
 
 from __future__ import annotations
@@ -362,37 +363,53 @@ ADJECTIVES: dict[str, str] = {
 
 
 def generate_alias() -> str:
-    """Generate a session alias like ``blazing-rocket``.
+    """Generate a session alias like ``blazing-cosmic-falcon``.
 
-    Returns an ``adjective-noun`` string.  Both parts map 1:1 to
-    standard Slack emoji via :data:`ADJECTIVES` and :data:`NOUNS`.
+    Returns an ``adjective-adjective-noun`` string.  All three parts
+    map 1:1 to standard Slack emoji via :data:`ADJECTIVES` and :data:`NOUNS`.
 
-    ~120 × ~150 ≈ 18,000 unique combinations.
+    ~120² × ~150 ≈ 2,160,000 unique combinations.
     """
-    adj = random.choice(tuple(ADJECTIVES.keys()))
+    adj_keys = tuple(ADJECTIVES.keys())
+    adj1, adj2 = random.sample(adj_keys, 2)
     noun = random.choice(tuple(NOUNS.keys()))
-    return f"{adj}-{noun}"
+    return f"{adj1}-{adj2}-{noun}"
+
+
+def all_emojis_for_alias(alias: str) -> tuple[str, str, str]:
+    """Return (adj1_emoji, adj2_emoji, noun_emoji) for a session alias.
+
+    All are standard Slack emoji shortcodes (without colons).
+    Falls back to ``sparkles`` for unrecognised parts.
+    """
+    parts = alias.split("-")
+    if len(parts) >= 3:
+        adj1, adj2, noun = parts[0], parts[1], parts[-1]
+    elif len(parts) == 2:
+        # Backward compat with old adjective-noun aliases
+        adj1, adj2, noun = parts[0], "", parts[1]
+    else:
+        adj1, adj2, noun = "", "", parts[0] if parts else ""
+    return (
+        ADJECTIVES.get(adj1, "sparkles"),
+        ADJECTIVES.get(adj2, "sparkles"),
+        NOUNS.get(noun, "sparkles"),
+    )
 
 
 def emojis_for_alias(alias: str) -> tuple[str, str]:
-    """Return (adjective_emoji, noun_emoji) for a session alias.
+    """Return two randomly-chosen emojis (out of 3) for a session alias.
 
-    Both are standard Slack emoji shortcodes (without colons).
-    Falls back to ``sparkles`` for unrecognised parts.
+    Returns a pair of standard Slack emoji shortcodes (without colons).
+    The three candidates are (adj1, adj2, noun); two are picked at random.
     """
-    parts = alias.split("-", 1)
-    if len(parts) == 2:
-        adj, noun = parts
-    else:
-        adj, noun = "", parts[0]
-    return (
-        ADJECTIVES.get(adj, "sparkles"),
-        NOUNS.get(noun, "sparkles"),
-    )
+    all_three = all_emojis_for_alias(alias)
+    picked = random.sample(all_three, 2)
+    return (picked[0], picked[1])
 
 
 # Keep a single-emoji convenience function for backward compatibility.
 def emoji_for_alias(alias: str) -> str:
     """Return the noun emoji for a session alias (legacy single-emoji API)."""
-    _, noun_emoji = emojis_for_alias(alias)
+    *_, noun_emoji = all_emojis_for_alias(alias)
     return noun_emoji
