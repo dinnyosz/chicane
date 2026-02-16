@@ -15,7 +15,7 @@ from slack_bolt.async_app import AsyncApp
 from slack_sdk.web.async_client import AsyncWebClient
 
 from .config import Config, generate_session_alias, load_handoff_session, save_handoff_session
-from .emoji_map import emoji_for_alias
+from .emoji_map import emojis_for_alias
 from .sessions import SessionInfo, SessionStore
 
 logger = logging.getLogger(__name__)
@@ -111,9 +111,9 @@ MAX_FILE_SIZE = 10 * 1024 * 1024
 # Matches both plain  (session_id: uuid)  and Slack-italicised  _(session_id: uuid)_
 _HANDOFF_RE = re.compile(r"_?\(session_id:\s*([a-f0-9\-]+)\)_?\s*$")
 
-# Regex for the new alias format: _(session: funky-name-here)_
-# Coolname may produce 3+ words (e.g. "offbeat-grouse-of-plenty").
-_SESSION_ALIAS_RE = re.compile(r"_?\(session:\s*([a-z]+(?:-[a-z]+){2,})\)_?\s*$")
+# Regex for session alias format: _(session: adjective-noun)_
+# Matches 2+ hyphenated words to stay compatible with old coolname aliases.
+_SESSION_ALIAS_RE = re.compile(r"_?\(session:\s*([a-z]+(?:-[a-z]+)+)\)_?\s*$")
 
 # Tools whose output is too noisy for Slack (file contents).
 # Their tool_result blocks are silently dropped even in verbose mode.
@@ -731,10 +731,13 @@ async def _process_message(
                                 text=f":sparkles: New session\n_(session: {alias})_",
                             )
 
-                        # Add an animal emoji reaction matching the alias
+                        # Add emoji reactions matching the alias
+                        adj_emoji, noun_emoji = emojis_for_alias(alias)
                         await _add_thread_reaction(
-                            client, channel, session_info,
-                            emoji_for_alias(alias),
+                            client, channel, session_info, adj_emoji,
+                        )
+                        await _add_thread_reaction(
+                            client, channel, session_info, noun_emoji,
                         )
 
                 elif event_data.type == "system" and event_data.subtype == "compact_boundary":

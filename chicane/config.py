@@ -250,16 +250,17 @@ class Config:
 
 
 def generate_session_alias() -> str:
-    """Generate a memorable alias like ``imposing-steadfast-meerkat``.
+    """Generate a memorable alias like ``blazing-rocket``.
 
-    Uses the ``coolname`` library (~295M 3-word combinations) and retries
-    until the alias doesn't collide with an existing handoff mapping.
+    Uses a custom word list (~18k combinations) where every noun maps
+    1:1 to a standard Slack emoji.  Retries until the alias doesn't
+    collide with an existing handoff mapping.
     """
-    from coolname import generate as _coolname_generate
+    from .emoji_map import generate_alias
 
     existing = _load_handoff_map()
     for _ in range(50):
-        alias = "-".join(_coolname_generate(3))
+        alias = generate_alias()
         if alias not in existing:
             return alias
     # Extremely unlikely fallback — just return whatever we got
