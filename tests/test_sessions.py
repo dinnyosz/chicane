@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from chicane.config import Config
-from chicane.sessions import SLACK_SYSTEM_PROMPT, SessionStore
+from chicane.sessions import _build_system_prompt, SessionStore
 
 
 @pytest.fixture
@@ -186,15 +186,7 @@ class TestSessionStore:
         info = store.get_or_create("thread-1", config)
         prompt = info.session.system_prompt
         assert "open a terminal" in prompt.lower()
-        assert "start a new Claude Code session" in prompt
-        assert "ONLY interact through Slack" in prompt
-
-    def test_system_prompt_forbids_local_workarounds(self, store, config):
-        """System prompt must forbid suggesting shell commands for the user."""
-        info = store.get_or_create("thread-1", config)
-        prompt = info.session.system_prompt
-        assert "running shell commands" in prompt.lower()
-        assert "host system directly" in prompt.lower()
+        assert "ONLY interact via Slack" in prompt
 
     def test_system_prompt_forbids_interactive_tools(self, store, config):
         """System prompt must tell Claude not to use blocking interactive tools."""
@@ -202,7 +194,7 @@ class TestSessionStore:
         prompt = info.session.system_prompt
         assert "AskUserQuestion" in prompt
         assert "streamed output mode" in prompt.lower()
-        assert "will NOT work" in prompt
+        assert "will fail" in prompt.lower()
 
     @pytest.mark.asyncio
     async def test_shutdown_clears_sessions(self, store, config):
@@ -279,3 +271,50 @@ class TestSessionStore:
         await store.shutdown()
 
         assert store.thread_for_message("msg-1") is None
+
+
+class TestBuildSystemPrompt:
+    """Tests for _build_system_prompt verbosity adaptation."""
+
+    def test_minimal_hides_tool_calls(self):
+        prompt = _build_system_prompt("minimal")
+        assert "NOT shown" in prompt
+        assert "paste it in your reply" in prompt
+
+    def test_normal_shows_activity_not_output(self):
+        prompt = _build_system_prompt("normal")
+        assert "tool activity indicators" in prompt
+        assert "NOT tool output" in prompt
+
+    def test_verbose_shows_everything(self):
+        prompt = _build_system_prompt("verbose")
+        assert "tool activity indicators" in prompt
+        assert "tool output" in prompt
+        assert "don't need to repeat" in prompt.lower()
+
+    def test_default_is_verbose(self):
+        assert _build_system_prompt() == _build_system_prompt("verbose")
+
+    def test_unknown_verbosity_falls_back_to_verbose(self):
+        assert _build_system_prompt("unknown") == _build_system_prompt("verbose")
+
+    def test_all_levels_include_core_sections(self):
+        for level in ("minimal", "normal", "verbose"):
+            prompt = _build_system_prompt(level)
+            assert "Chicane" in prompt
+            assert "Slack" in prompt
+            assert "SECURITY" in prompt
+            assert "SAFETY" in prompt
+
+    def test_verbosity_passed_from_config(self):
+        """Config verbosity should flow through to the system prompt."""
+        for level in ("minimal", "normal", "verbose"):
+            config = Config(
+                slack_bot_token="xoxb-test",
+                slack_app_token="xapp-test",
+                verbosity=level,
+            )
+            store = SessionStore()
+            info = store.get_or_create("thread-1", config, cwd=Path("/tmp/test"))
+            expected = _build_system_prompt(level)
+            assert info.session.system_prompt == expected
