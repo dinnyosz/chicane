@@ -154,7 +154,7 @@ class TestChicaneHandoff:
 
             result = await mcp_mod.chicane_handoff(summary="test")
 
-        assert "close this session" in result
+        assert "pick it up" in result
 
 
 class TestChicaneSendMessage:

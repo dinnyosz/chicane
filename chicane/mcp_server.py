@@ -118,11 +118,7 @@ async def chicane_handoff(
     client = await _get_client()
     await client.chat_postMessage(channel=channel_id, text=text)
 
-    return (
-        f"Handoff posted to #{channel_name}. "
-        "The user should close this session so the bot can resume it — "
-        "the session can only be active in one place at a time."
-    )
+    return f"Handoff posted to #{channel_name}. The team can pick it up from there."
 
 
 @mcp.tool(annotations=_SLACK_ANNOTATIONS)

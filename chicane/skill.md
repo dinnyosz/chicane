@@ -41,12 +41,9 @@ chicane_send_message(text="Pushed 3 commits to feature/auth — login flow compl
 
 Once the handoff is posted, tell the user:
 
-> "Handoff posted to Slack. **You need to close this session** so the bot can
-> resume it — the session can only be active in one place at a time. Want me
-> to quit now?"
+> "Handoff posted to Slack. The team can pick it up from there."
 
-If the user confirms, exit the session. If they decline, remind them that
-Slack replies will fail until the session is closed.
+You can continue working in the current session — there's no need to close it.
 
 ## Setup (`chicane_init`)
 
@@ -59,4 +56,3 @@ Do not assume defaults. The user must confirm both choices.
 ## Important
 
 - Always include a meaningful summary so the user knows what was in progress.
-- Do NOT continue working after a handoff — the session will be picked up in Slack.
