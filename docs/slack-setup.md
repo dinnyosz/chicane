@@ -38,11 +38,16 @@ The manifest enables Socket Mode automatically. To verify:
 
 ## 4. Add tokens to your environment
 
+The easiest way is to run the setup wizard:
+
 ```bash
-cp .env.example .env
+chicane setup
 ```
 
-Edit `.env` and fill in:
+Or create the `.env` file manually in the platform config directory:
+
+- **macOS:** `~/Library/Application Support/chicane/.env`
+- **Linux:** `~/.config/chicane/.env` (or `$XDG_CONFIG_HOME/chicane/.env`)
 
 ```
 SLACK_BOT_TOKEN=xoxb-your-bot-token
