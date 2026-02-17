@@ -4,7 +4,7 @@ The official mascot/avatar for the Chicane project. Use this reference when gene
 
 ## Reference Image
 
-`~/code/ollama/chicane/ghost-tee-v4/polished-3d-character-render-camera-at-three-quart-20260211-151907.png`
+![Chicane Ghost Reference](chicane-ghost-reference.png)
 
 ## Character Description
 
