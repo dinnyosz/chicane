@@ -1,12 +1,12 @@
 """Session alias generation with 1:1 Slack emoji mapping.
 
-Replaces ``coolname`` with a custom generator.  Every noun AND adjective
-has an exact standard Slack emoji shortcode — no approximations, no custom
-emoji needed.  Aliases are ``adjective-adjective-noun`` triples
-(e.g. ``blazing-cosmic-falcon``) and produce *two* randomly-chosen emoji
+Replaces ``coolname`` with a custom generator.  Every noun, adjective,
+and verb has an exact standard Slack emoji shortcode — no approximations,
+no custom emoji needed.  Aliases are ``verb-adjective-noun`` triples
+(e.g. ``dancing-cosmic-falcon``) and produce *two* randomly-chosen emoji
 reactions (out of the three available) on the thread root.
 
-~120² adjectives × ~150 nouns ≈ 2,160,000 unique combinations.
+~65 verbs × ~134 adjectives × ~221 nouns ≈ 1,900,000 unique combinations.
 """
 
 from __future__ import annotations
@@ -397,38 +397,126 @@ ADJECTIVES: dict[str, str] = {
     "wispy": "cloud",
 }
 
+# ---------------------------------------------------------------------------
+# Verbs — present-participle form, each maps to a standard Slack emoji.
+# ---------------------------------------------------------------------------
+
+VERBS: dict[str, str] = {
+    # -- Emotions & expressions --
+    "crying": "cry",
+    "sobbing": "sob",
+    "laughing": "joy",
+    "blushing": "blush",
+    "winking": "wink",
+    "yawning": "yawning_face",
+    "sneezing": "sneezing_face",
+    "raging": "rage",
+    "melting": "melting_face",
+    "cursing": "face_with_symbols_on_mouth",
+    "thinking": "thinking_face",
+    "partying": "partying_face",
+    "saluting": "saluting_face",
+    "freezing": "cold_face",
+    "dreaming": "thought_balloon",
+    # -- Movement & action --
+    "dancing": "dancer",
+    "running": "runner",
+    "surfing": "surfer",
+    "rowing": "rowboat",
+    "diving": "diving_mask",
+    "skating": "ice_skate",
+    "skiing": "ski",
+    "racing": "racing_car",
+    "riding": "horse_racing",
+    "flying": "airplane",
+    "floating": "balloon",
+    "spinning": "cyclone",
+    "rolling": "wheel",
+    "bouncing": "basketball",
+    "sneaking": "ninja",
+    "juggling": "juggling",
+    # -- Sound & signal --
+    "singing": "microphone",
+    "ringing": "bell",
+    "roaring": "lion_face",
+    "howling": "wolf",
+    "ticking": "stopwatch",
+    # -- Nature & transformation --
+    "blooming": "blossom",
+    "wilting": "wilted_flower",
+    "rising": "sunrise",
+    "falling": "fallen_leaf",
+    "erupting": "volcano",
+    "burning": "fire",
+    "sparkling": "star2",
+    "glowing": "bulb",
+    "sizzling": "hot_pepper",
+    "bubbling": "bubble_tea",
+    "drifting": "cloud",
+    "fading": "ghost",
+    "waving": "wave",
+    # -- Activities --
+    "cooking": "cook",
+    "fishing": "fishing_pole_and_fish",
+    "camping": "tent",
+    "painting": "art",
+    "knitting": "yarn",
+    "gardening": "seedling",
+    "hammering": "hammer",
+    # -- Power & force --
+    "charging": "zap",
+    "exploding": "boom",
+    "flexing": "muscle",
+    "prowling": "leopard",
+    "soaring": "eagle",
+    "zapping": "zap",
+    # -- Rest --
+    "sleeping": "sleeping",
+    "napping": "zzz",
+    "peeking": "eyes",
+    "praying": "pray",
+}
+
 
 def generate_alias() -> str:
-    """Generate a session alias like ``blazing-cosmic-falcon``.
+    """Generate a session alias like ``dancing-cosmic-falcon``.
 
-    Returns an ``adjective-adjective-noun`` string.  All three parts
-    map 1:1 to standard Slack emoji via :data:`ADJECTIVES` and :data:`NOUNS`.
+    Returns a ``verb-adjective-noun`` string.  All three parts
+    map 1:1 to standard Slack emoji via :data:`VERBS`, :data:`ADJECTIVES`,
+    and :data:`NOUNS`.
 
-    ~120² × ~150 ≈ 2,160,000 unique combinations.
+    ~65 × ~134 × ~221 ≈ 1,900,000 unique combinations.
     """
-    adj_keys = tuple(ADJECTIVES.keys())
-    adj1, adj2 = random.sample(adj_keys, 2)
+    verb = random.choice(tuple(VERBS.keys()))
+    adj = random.choice(tuple(ADJECTIVES.keys()))
     noun = random.choice(tuple(NOUNS.keys()))
-    return f"{adj1}-{adj2}-{noun}"
+    return f"{verb}-{adj}-{noun}"
 
 
 def all_emojis_for_alias(alias: str) -> tuple[str, str, str]:
-    """Return (adj1_emoji, adj2_emoji, noun_emoji) for a session alias.
+    """Return (verb_emoji, adj_emoji, noun_emoji) for a session alias.
 
     All are standard Slack emoji shortcodes (without colons).
     Falls back to ``sparkles`` for unrecognised parts.
+    Checks VERBS first, then ADJECTIVES for the first two parts.
     """
     parts = alias.split("-")
     if len(parts) >= 3:
-        adj1, adj2, noun = parts[0], parts[1], parts[-1]
+        first, second, noun = parts[0], parts[1], parts[-1]
     elif len(parts) == 2:
         # Backward compat with old adjective-noun aliases
-        adj1, adj2, noun = parts[0], "", parts[1]
+        first, second, noun = parts[0], "", parts[1]
     else:
-        adj1, adj2, noun = "", "", parts[0] if parts else ""
+        first, second, noun = "", "", parts[0] if parts else ""
+
+    # Resolve first part: try VERBS, then ADJECTIVES (backward compat)
+    first_emoji = VERBS.get(first, ADJECTIVES.get(first, "sparkles"))
+    # Resolve second part: try ADJECTIVES, then VERBS (backward compat)
+    second_emoji = ADJECTIVES.get(second, VERBS.get(second, "sparkles"))
+
     return (
-        ADJECTIVES.get(adj1, "sparkles"),
-        ADJECTIVES.get(adj2, "sparkles"),
+        first_emoji,
+        second_emoji,
         NOUNS.get(noun, "sparkles"),
     )
 
