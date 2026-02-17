@@ -1,23 +1,23 @@
-# Chicane — bridge Claude Code sessions to Slack
+# Chicane — Slack bridge for Claude Code
 
-## Handoff
+Three tools: `chicane_handoff`, `chicane_send_message`, `chicane_init`.
 
-When the user wants to hand off to Slack:
+## `chicane_handoff`
 
-1. Write a 2-sentence summary — what you were working on and the current state.
-2. Scan the conversation for **open questions** — unresolved decisions, deferred
-   choices, blockers, or anything that needs user input. Format as a numbered list.
-3. Call `chicane_handoff` with the summary and questions.
-4. Only include `questions` if there are genuinely unresolved items. Don't fabricate.
+Hand off the current session to Slack. Before calling:
 
-## Send a message
+1. Summarize the session in 2 sentences: what was being worked on, and where it stands.
+2. Review the conversation for unresolved items — open decisions, blockers, questions needing input. Only include genuine items, never fabricate.
 
-Call `chicane_send_message` when the user asks you to send something to Slack.
+Pass the summary and any open questions to the tool. Session ID and channel are auto-resolved.
 
-## Setup (`chicane_init`)
+## `chicane_send_message`
 
-Before calling `chicane_init`, ask the user for:
-1. **Scope** — `"global"` (~/.claude/skills/) or `"project"` (project-local)
-2. **Allowed tools** — whether to add chicane tools to settings.local.json
+Send a message to a Slack channel. Use when the user asks to communicate something to Slack.
 
-Do not assume defaults. The user must confirm both choices.
+## `chicane_init`
+
+Install the Chicane skill and optionally auto-allow tools. Always ask the user before calling:
+
+1. **Scope** — `"global"` (all projects) or `"project"` (current project only)
+2. **Allowed tools** — whether to auto-allow chicane tools in `settings.local.json`
