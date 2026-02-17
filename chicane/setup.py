@@ -12,7 +12,7 @@ from rich.table import Table
 
 console = Console()
 
-_MANIFEST_PATH = Path(__file__).resolve().parent / "slack-app-manifest.json"
+_MANIFEST_PATH = Path(__file__).resolve().parent / "artifacts" / "slack-app-manifest.json"
 
 
 def _load_manifest() -> dict:

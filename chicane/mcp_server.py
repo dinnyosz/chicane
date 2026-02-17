@@ -151,7 +151,7 @@ def _get_skill_content() -> str:
     """Read and cache the bundled skill.md template."""
     global _SKILL_TEMPLATE
     if _SKILL_TEMPLATE is None:
-        template_path = Path(__file__).resolve().parent / "skill.md"
+        template_path = Path(__file__).resolve().parent / "artifacts" / "skill.md"
         _SKILL_TEMPLATE = template_path.read_text()
     return _SKILL_TEMPLATE
 
