@@ -13,7 +13,7 @@ Pass the summary and any open questions to the tool. Session ID and channel are 
 
 ## `chicane_send_message`
 
-Send a message to a Slack channel. Use when the user asks to communicate something to Slack.
+Send a message to a Slack channel. The channel is auto-resolved from the current working directory via `CHANNEL_DIRS`, so this only works when the cwd maps to a configured channel. Use when the user asks to communicate something to Slack.
 
 ## `chicane_init`
 
