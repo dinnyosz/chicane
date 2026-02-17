@@ -11,8 +11,8 @@ In motorsport, a **chicane** is a sequence of tight turns that forces drivers of
 ## How it works
 
 ```
-Slack (Socket Mode) → Chicane → Claude Code CLI (subprocess)
-                    ← streaming JSON ←
+Slack (Socket Mode) → Chicane → Claude Agent SDK
+                    ← streaming events ←
 ```
 
 Each Slack thread gets its own Claude Code session. The session persists for the life of the thread, so follow-up messages have full context. If the bot restarts, it reconnects to existing threads by scanning thread history or resuming via session IDs.
@@ -20,7 +20,7 @@ Each Slack thread gets its own Claude Code session. The session persists for the
 ## Prerequisites
 
 - **Python 3.11+**
-- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** installed and authenticated (`claude` must be on your PATH)
+- **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** installed and authenticated (the SDK reads your existing credentials)
 - A **Slack workspace** where you can create apps
 
 ## Installation
@@ -55,16 +55,23 @@ Follow the [Slack app setup guide](docs/slack-setup.md) to create and install a 
 
 ### 2. Configure environment variables
 
-Create a `.env` file in the directory where you'll run Chicane:
+Chicane reads its `.env` from the platform config directory:
+
+- **macOS:** `~/Library/Application Support/chicane/.env`
+- **Linux:** `~/.config/chicane/.env` (or `$XDG_CONFIG_HOME/chicane/.env`)
+
+You can create it manually:
 
 ```bash
-cat <<'EOF' > .env
+# macOS
+mkdir -p ~/Library/Application\ Support/chicane
+cat <<'EOF' > ~/Library/Application\ Support/chicane/.env
 SLACK_BOT_TOKEN=xoxb-your-bot-token
 SLACK_APP_TOKEN=xapp-your-app-token
 EOF
 ```
 
-Or, if you cloned the repo: `cp .env.example .env`
+Or just run `chicane setup` — it writes the file to the correct location for you.
 
 See [Configuration reference](#configuration-reference) for all options.
 
@@ -111,6 +118,7 @@ Once added, Claude Code discovers the tools automatically. You can say "hand thi
 |---|---|
 | `chicane_handoff` | Hand off the current session to Slack. Auto-detects session ID and channel from cwd. |
 | `chicane_send_message` | Send a message to a Slack channel. Channel auto-resolved from cwd via `CHANNEL_DIRS`. |
+| `chicane_init` | Install the Chicane skill and optionally auto-allow tools in `settings.local.json`. |
 
 ### CLI handoff
 
@@ -151,10 +159,11 @@ Starts the Slack bot. Connects via Socket Mode and listens for messages.
 | `--session-id` | No | Claude session ID (auto-detected from `~/.claude/history.jsonl` if omitted) |
 | `--channel` | No | Slack channel name (auto-resolved from cwd via `CHANNEL_DIRS` if omitted) |
 | `--cwd` | No | Working directory to resolve channel from (defaults to `$PWD`) |
+| `--questions` | No | Open questions to post as a thread reply |
 
 ## Configuration reference
 
-All configuration is via environment variables (loaded from `.env`).
+All configuration is via environment variables, loaded from the `.env` file in the [platform config directory](#2-configure-environment-variables).
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -163,11 +172,18 @@ All configuration is via environment variables (loaded from `.env`).
 | `BASE_DIRECTORY` | No | &mdash; | Default working directory for Claude sessions |
 | `ALLOWED_USERS` | No | (all users) | Comma-separated Slack user IDs that can use the bot |
 | `CHANNEL_DIRS` | No | &mdash; | Map channels to directories. Simple: `magaldi,frontend` (name = dir under `BASE_DIRECTORY`). Custom: `web=frontend,infra=/opt/infrastructure` |
-| `CLAUDE_MODEL` | No | CLI default | Claude model override (e.g. `sonnet`, `opus`) |
-| `CLAUDE_PERMISSION_MODE` | No | `acceptEdits` | Permission mode for Claude CLI (`acceptEdits`, `dontAsk`, `bypassPermissions`) |
+| `CLAUDE_MODEL` | No | SDK default | Claude model override (e.g. `sonnet`, `opus`) |
+| `CLAUDE_PERMISSION_MODE` | No | `acceptEdits` | Permission mode (`acceptEdits`, `dontAsk`, `bypassPermissions`) |
 | `CLAUDE_ALLOWED_TOOLS` | No | &mdash; | Comma-separated tool rules (e.g. `Bash(npm run *),Read`) |
+| `CLAUDE_DISALLOWED_TOOLS` | No | &mdash; | Comma-separated tools to disallow |
+| `CLAUDE_SETTING_SOURCES` | No | `user,project,local` | Which settings to load (`user`, `project`, `local`) |
+| `CLAUDE_MAX_TURNS` | No | &mdash; | Maximum agentic turns per request |
+| `CLAUDE_MAX_BUDGET_USD` | No | &mdash; | Maximum spend per request in USD |
+| `RATE_LIMIT` | No | `10` | Max messages per user per minute |
+| `VERBOSITY` | No | `verbose` | Notification level (`minimal`, `normal`, `verbose`) |
 | `LOG_DIR` | No | &mdash; | Directory for log files (required for `--detach` mode) |
 | `LOG_LEVEL` | No | `INFO` | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `CHICANE_CONFIG_DIR` | No | Platform default | Override the config directory path |
 
 ## License
 
