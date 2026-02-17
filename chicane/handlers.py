@@ -1871,7 +1871,7 @@ async def _send_snippet(
                 title=Path(filename).stem or "snippet",
                 channel=channel,
                 thread_ts=thread_ts,
-                filetype=snippet_type or "text",
+                snippet_type=snippet_type or "text",
             )
             if initial_comment:
                 upload_kwargs["initial_comment"] = initial_comment
