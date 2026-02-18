@@ -747,7 +747,7 @@ def _run_wizard(args) -> None:
     _save()
 
     # Step 15: Verbosity
-    _set_or_clear("VERBOSITY", _step_verbosity(existing.get("VERBOSITY", "normal")))
+    _set_or_clear("VERBOSITY", _step_verbosity(existing.get("VERBOSITY", "verbose")))
     _save()
 
     # Step 16: Done
