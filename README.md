@@ -202,6 +202,21 @@ All configuration is via environment variables, loaded from the `.env` file in t
 | `LOG_LEVEL` | No | `INFO` | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `CHICANE_CONFIG_DIR` | No | Platform default | Override the config directory path |
 
+## Authentication & usage terms
+
+Chicane uses the [Claude Agent SDK](https://github.com/anthropics/claude-code-sdk-python), which spawns the Claude Code CLI as a subprocess. The CLI handles all authentication — Chicane itself never touches API keys or tokens.
+
+The SDK supports several authentication methods:
+
+| Method | How to configure |
+|---|---|
+| **API key** (recommended) | Set `ANTHROPIC_API_KEY` in your environment or chicane `.env` |
+| **Claude Code login** | Run `claude` and log in — the SDK inherits your session |
+| **Amazon Bedrock** | Set `CLAUDE_CODE_USE_BEDROCK=1` + AWS credentials |
+| **Google Vertex AI** | Set `CLAUDE_CODE_USE_VERTEX=1` + GCP credentials |
+
+**Important:** Anthropic's [legal and compliance docs](https://code.claude.com/docs/en/legal-and-compliance) state that OAuth authentication from Free, Pro, and Max plans is "intended exclusively for Claude Code and Claude.ai" and that using these credentials with the Agent SDK "is not permitted." For production deployments, use an API key from [console.anthropic.com](https://console.anthropic.com) or a supported cloud provider.
+
 ## License
 
 [Apache 2.0](LICENSE)
