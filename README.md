@@ -59,6 +59,7 @@ Chicane reads its `.env` from the platform config directory:
 
 - **macOS:** `~/Library/Application Support/chicane/.env`
 - **Linux:** `~/.config/chicane/.env` (or `$XDG_CONFIG_HOME/chicane/.env`)
+- **Windows:** `%APPDATA%\chicane\.env`
 
 You can create it manually:
 
@@ -69,6 +70,22 @@ cat <<'EOF' > ~/Library/Application\ Support/chicane/.env
 SLACK_BOT_TOKEN=xoxb-your-bot-token
 SLACK_APP_TOKEN=xapp-your-app-token
 EOF
+
+# Linux
+mkdir -p ~/.config/chicane
+cat <<'EOF' > ~/.config/chicane/.env
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+SLACK_APP_TOKEN=xapp-your-app-token
+EOF
+```
+
+On Windows (PowerShell):
+```powershell
+New-Item -ItemType Directory -Force -Path "$env:APPDATA\chicane"
+@"
+SLACK_BOT_TOKEN=xoxb-your-bot-token
+SLACK_APP_TOKEN=xapp-your-app-token
+"@ | Set-Content "$env:APPDATA\chicane\.env"
 ```
 
 Or just run `chicane setup` — it writes the file to the correct location for you.
