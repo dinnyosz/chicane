@@ -289,6 +289,28 @@ class TestResolveChannel:
 
 class TestChicaneInit:
     @pytest.mark.asyncio
+    async def test_discovery_mode_no_params(self):
+        result = await mcp_mod.chicane_init()
+        assert "Before proceeding" in result
+        assert "Scope" in result
+        assert "Auto-allow tools" in result
+        assert "MCP server name" in result
+
+    @pytest.mark.asyncio
+    async def test_discovery_mode_partial_params(self):
+        # Only scope provided — still discovery mode
+        result = await mcp_mod.chicane_init(scope="global")
+        assert "Before proceeding" in result
+
+        # scope + mcp_server_name but missing add_allowed_tools
+        result = await mcp_mod.chicane_init(scope="global", mcp_server_name="chicane-dev")
+        assert "Before proceeding" in result
+
+        # scope + add_allowed_tools but missing mcp_server_name
+        result = await mcp_mod.chicane_init(scope="global", add_allowed_tools=True)
+        assert "Before proceeding" in result
+
+    @pytest.mark.asyncio
     async def test_global_scope(self, tmp_path):
         with patch("chicane.mcp_server.Path") as MockPath:
             MockPath.__truediv__ = Path.__truediv__

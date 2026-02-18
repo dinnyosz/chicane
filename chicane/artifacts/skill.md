@@ -17,7 +17,8 @@ Send a message to a Slack channel. The channel is auto-resolved from the current
 
 ## `chicane_init`
 
-Install the Chicane skill and optionally auto-allow tools. Always ask the user before calling:
+Install the Chicane skill and optionally auto-allow tools. This is a two-phase tool:
 
-1. **Scope** — `"global"` (all projects) or `"project"` (current project only)
-2. **Allowed tools** — whether to auto-allow chicane tools in `settings.local.json`
+1. **Call without parameters** — returns the setup options to present to the user.
+2. **Present the options** — ask the user to choose scope, allowed tools, and MCP server name.
+3. **Call again with all parameters** — performs the installation with the user's choices.

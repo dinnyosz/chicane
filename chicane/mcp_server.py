@@ -182,11 +182,28 @@ def _add_allowed_tools(settings_path: Path, mcp_server_name: str) -> list[str]:
     return added
 
 
+_DISCOVERY_PROMPT = """\
+Before proceeding, please confirm these options with the user:
+
+1. **Scope** — where to install the Chicane skill:
+   - `"global"` — install for all projects (~/.claude/skills/chicane/SKILL.md)
+   - `"project"` — install for this project only (<project_root>/.claude/skills/chicane/SKILL.md)
+
+2. **Auto-allow tools** — add chicane tools to `settings.local.json` so they run without permission prompts?
+   - `true` — yes, auto-allow chicane_handoff, chicane_send_message, chicane_init
+   - `false` — no, I'll approve each tool call manually
+
+3. **MCP server name** — the name used in your Claude Code MCP config (e.g. `"chicane"` or `"chicane-dev"`). \
+This must match the key in your `.claude.json` or `.mcp.json` mcpServers config.
+
+Once the user has confirmed, call this tool again with all three parameters set."""
+
+
 @mcp.tool(annotations=_LOCAL_IDEMPOTENT_ANNOTATIONS)
 async def chicane_init(
-    scope: str,
-    add_allowed_tools: bool,
-    mcp_server_name: str,
+    scope: str = "",
+    add_allowed_tools: bool | None = None,
+    mcp_server_name: str = "",
     project_root: str = "",
 ) -> str:
     """Set up Chicane for Claude Code.
@@ -195,9 +212,13 @@ async def chicane_init(
     tools to the allowed tools list in settings.local.json so they
     run without permission prompts.
 
-    IMPORTANT: Always ask the user to confirm scope, add_allowed_tools,
-    and mcp_server_name before calling this tool. Do not assume values.
+    Call this tool WITHOUT parameters first. It will return the setup
+    options to present to the user. Then call again with their choices.
     """
+    # Discovery mode: return options prompt if any required param is missing
+    if not scope or add_allowed_tools is None or not mcp_server_name:
+        return _DISCOVERY_PROMPT
+
     content = _get_skill_content()
 
     if scope == "project":
