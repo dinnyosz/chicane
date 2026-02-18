@@ -174,6 +174,14 @@ class Config:
                 f"Invalid CLAUDE_PERMISSION_MODE '{perm_mode}'. "
                 f"Must be one of: {', '.join(sorted(valid_perm_modes))}"
             )
+        allowed_user_list = [u.strip() for u in allowed.split(",") if u.strip()]
+        if perm_mode == "bypassPermissions" and len(allowed_user_list) > 1:
+            raise ValueError(
+                "CLAUDE_PERMISSION_MODE=bypassPermissions cannot be used with "
+                "multiple ALLOWED_USERS. bypassPermissions grants unrestricted "
+                "shell access — this is only safe for single-user, isolated "
+                "environments. Remove extra users or choose a safer permission mode."
+            )
         raw_tools = os.environ.get("CLAUDE_ALLOWED_TOOLS", "")
         raw_disallowed = os.environ.get("CLAUDE_DISALLOWED_TOOLS", "")
 
@@ -228,7 +236,7 @@ class Config:
             slack_bot_token=bot_token,
             slack_app_token=app_token,
             base_directory=Path(base_dir) if base_dir else None,
-            allowed_users=[u.strip() for u in allowed.split(",") if u.strip()],
+            allowed_users=allowed_user_list,
             channel_dirs=channel_dirs,
             log_level=_validate_log_level(os.environ.get("LOG_LEVEL", "INFO")),
             log_dir=Path(log_dir) if log_dir else None,

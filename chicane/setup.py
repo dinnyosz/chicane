@@ -320,18 +320,31 @@ def _step_claude_model(default: str = "") -> str:
     return _prompt_with_default("Model", default)
 
 
-def _step_permission_mode(default: str = "acceptEdits") -> str:
+def _step_permission_mode(default: str = "acceptEdits", *, allowed_users: str = "") -> str:
     """Step 7: Configure permission mode."""
     console.rule("Step 7 of 16: Permission Mode")
     console.print("\n  Controls what Claude Code can do autonomously.")
     console.print("  [dim]acceptEdits[/dim]       — auto-accepts file edits, use allowed tools for shell")
     console.print("  [dim]dontAsk[/dim]           — auto-denies everything except allowed tools")
-    console.print("  [dim]bypassPermissions[/dim] — auto-approves everything (containers/VMs only)")
+    console.print("  [dim]bypassPermissions[/dim] — auto-approves everything (single-user only)")
     valid_modes = {"acceptEdits", "dontAsk", "bypassPermissions"}
+    user_count = len(_parse_allowed_users(allowed_users))
     while True:
         val = _prompt_with_default("Permission mode", default)
         if not val or val in valid_modes:
             if val == "bypassPermissions":
+                if user_count > 1:
+                    console.print(Panel(
+                        "[bold red]BLOCKED:[/bold red] bypassPermissions cannot be used "
+                        "with multiple ALLOWED_USERS (you have {count}). "
+                        "This mode grants unrestricted shell access and is only "
+                        "safe for single-user, isolated environments.\n\n"
+                        "Choose a different permission mode or reduce ALLOWED_USERS "
+                        "to a single user.".format(count=user_count),
+                        title="Security Error",
+                        border_style="red",
+                    ))
+                    continue
                 console.print(Panel(
                     "[bold red]WARNING:[/bold red] bypassPermissions grants Claude "
                     "unrestricted access to all tools including shell commands. "
@@ -713,7 +726,10 @@ def _run_wizard(args) -> None:
     _save()
 
     # Step 7: Permission Mode
-    _set_or_clear("CLAUDE_PERMISSION_MODE", _step_permission_mode(existing.get("CLAUDE_PERMISSION_MODE", "acceptEdits")))
+    _set_or_clear("CLAUDE_PERMISSION_MODE", _step_permission_mode(
+        existing.get("CLAUDE_PERMISSION_MODE", "acceptEdits"),
+        allowed_users=env_values.get("ALLOWED_USERS", ""),
+    ))
     _save()
 
     # Step 8: Allowed Tools

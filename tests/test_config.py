@@ -43,7 +43,7 @@ class TestConfig:
         monkeypatch.setenv("ALLOWED_USERS", "U123, U456")
         monkeypatch.setenv("LOG_LEVEL", "DEBUG")
         monkeypatch.setenv("CLAUDE_MODEL", "sonnet")
-        monkeypatch.setenv("CLAUDE_PERMISSION_MODE", "bypassPermissions")
+        monkeypatch.setenv("CLAUDE_PERMISSION_MODE", "dontAsk")
         monkeypatch.setenv("LOG_DIR", "/var/log/chicane")
         monkeypatch.setenv("CLAUDE_ALLOWED_TOOLS", "Bash(npm run *), Read, Edit(./src/**)")
 
@@ -53,9 +53,28 @@ class TestConfig:
         assert config.allowed_users == ["U123", "U456"]
         assert config.log_level == "DEBUG"
         assert config.claude_model == "sonnet"
-        assert config.claude_permission_mode == "bypassPermissions"
+        assert config.claude_permission_mode == "dontAsk"
         assert config.log_dir == Path("/var/log/chicane")
         assert config.claude_allowed_tools == ["Bash(npm run *)", "Read", "Edit(./src/**)"]
+
+    def test_bypass_permissions_rejected_with_multiple_users(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("ALLOWED_USERS", "U123, U456")
+        monkeypatch.setenv("CLAUDE_PERMISSION_MODE", "bypassPermissions")
+
+        with pytest.raises(ValueError, match="bypassPermissions cannot be used with multiple ALLOWED_USERS"):
+            Config.from_env()
+
+    def test_bypass_permissions_allowed_with_single_user(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("ALLOWED_USERS", "U123")
+        monkeypatch.setenv("CLAUDE_PERMISSION_MODE", "bypassPermissions")
+
+        config = Config.from_env()
+        assert config.claude_permission_mode == "bypassPermissions"
+        assert config.allowed_users == ["U123"]
 
     def test_log_level_variants(self, monkeypatch):
         monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
