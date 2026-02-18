@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from chicane.config import Config, config_dir, env_file
+from chicane.config import Config, config_dir, env_file, save_handoff_session
 
 
 class TestConfig:
@@ -452,3 +452,16 @@ class TestGenerateSessionAlias:
         # Should still return after 50 retries (fallback)
         result = generate_session_alias()
         assert result == "same-old-alias"
+
+
+class TestHandoffFilePermissions:
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
+    def test_save_handoff_session_creates_file_with_0600(self, tmp_path, monkeypatch):
+        """save_handoff_session() must create handoff_sessions.json with mode 0o600."""
+        map_file = tmp_path / "handoff_sessions.json"
+        monkeypatch.setattr("chicane.config._HANDOFF_MAP_FILE", map_file)
+
+        save_handoff_session("test-alias", "test-session-id")
+
+        assert map_file.exists()
+        assert map_file.stat().st_mode & 0o777 == 0o600

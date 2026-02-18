@@ -662,6 +662,10 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
     for key, val in values.items():
         lines.append(f"{key}={val}")
     path.write_text("\n".join(lines) + "\n")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass  # Windows or restricted filesystem
 
 
 def setup_command(args) -> None:

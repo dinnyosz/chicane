@@ -2,6 +2,7 @@
 
 import argparse
 import signal
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -869,6 +870,13 @@ class TestWriteEnv:
         content = env_file.read_text()
         assert "SLACK_BOT_TOKEN=xoxb-test\n" in content
         assert "SLACK_APP_TOKEN" not in content
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
+    def test_creates_file_with_0600(self, tmp_path):
+        """_write_env() must create the .env file with mode 0o600."""
+        env_file = tmp_path / ".env"
+        _write_env(env_file, {"SLACK_BOT_TOKEN": "xoxb-test"})
+        assert env_file.stat().st_mode & 0o777 == 0o600
 
 
 class TestSetupCommand:

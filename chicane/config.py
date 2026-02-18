@@ -305,6 +305,10 @@ def save_handoff_session(alias: str, session_id: str) -> None:
     _HANDOFF_MAP_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp = _HANDOFF_MAP_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(data))
+    try:
+        tmp.chmod(0o600)
+    except OSError:
+        pass  # Windows or restricted filesystem
     tmp.rename(_HANDOFF_MAP_FILE)
 
 
