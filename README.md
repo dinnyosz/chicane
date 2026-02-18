@@ -217,6 +217,46 @@ The SDK supports several authentication methods:
 
 **Important:** Anthropic's [legal and compliance docs](https://code.claude.com/docs/en/legal-and-compliance) state that OAuth authentication from Free, Pro, and Max plans is "intended exclusively for Claude Code and Claude.ai" and that using these credentials with the Agent SDK "is not permitted." For production deployments, use an API key from [console.anthropic.com](https://console.anthropic.com) or a supported cloud provider.
 
+## Security & risk model
+
+Chicane gives your Slack workspace access to a Claude Code session running on your machine. Understand the implications before deploying.
+
+### Multi-user access = shared machine access
+
+Every user in `ALLOWED_USERS` can instruct Claude to read files, run commands, and edit code in the configured working directories. This is equivalent to giving them shell access to your machine (scoped by the permission mode). Only add users you trust at that level.
+
+### One set of credentials, multiple users
+
+All Slack users interact through a single set of Claude credentials — whoever runs the bot. If you're using an API key, all usage is billed to that key. This is **not subscription sharing** (each user doesn't get their own Claude session with your subscription), but it does mean your API spend scales with the number of active users and threads.
+
+If you use consumer OAuth (Pro/Max login) instead of an API key, having multiple users send requests through your subscription likely violates [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance), which state that consumer plan limits "assume ordinary, individual usage."
+
+### Permission modes
+
+| Mode | What Claude can do | Risk |
+|---|---|---|
+| `acceptEdits` (default) | Auto-approve file edits; shell commands require pre-approved tool patterns | Moderate — users can modify files but not run arbitrary commands |
+| `dontAsk` | Only use explicitly allowed tools; deny everything else | Low — tightly scoped to your allowlist |
+| `bypassPermissions` | Everything, including arbitrary shell commands | High — equivalent to unrestricted shell access; restricted to single-user configurations |
+
+`bypassPermissions` with multiple `ALLOWED_USERS` is blocked at startup. Even with a single user, only use it in isolated environments (containers, VMs).
+
+### Session handoff trust model
+
+When a session is handed off from Claude Code to Slack, anyone in the channel can see the session alias. Any allowed user who replies in that thread resumes the session with access to the original working directory. There is no per-session authentication — access control relies entirely on `ALLOWED_USERS`.
+
+### Thread history and prompt injection
+
+When Chicane cannot find a mapped session for a thread (e.g. the bot restarted and the handoff alias is missing), it falls back to rebuilding context by injecting the Slack thread history into Claude's prompt. Messages from non-allowed users are excluded, and Claude is instructed to treat the history as untrusted data. This is a defense-in-depth measure, not a cryptographic guarantee — treat public channels accordingly. When a session is successfully resumed via handoff alias, thread history injection does not occur.
+
+### Recommendations
+
+- **Use API key auth** for any deployment with multiple users
+- **Use `dontAsk` mode** with a tight `CLAUDE_ALLOWED_TOOLS` list for the most restrictive setup
+- **Set `CLAUDE_MAX_TURNS` and `CLAUDE_MAX_BUDGET_USD`** to bound cost and runaway sessions
+- **Keep `ALLOWED_USERS` minimal** — every user is effectively a shell user on your machine
+- **Prefer private channels** for threads containing sensitive code or session handoffs
+
 ## License
 
 [Apache 2.0](LICENSE)
