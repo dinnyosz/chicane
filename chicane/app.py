@@ -157,6 +157,17 @@ async def start(config: Config | None = None) -> None:
         await handler.connect_async()
         logger.info("Chicane is running. Press Ctrl+C to stop.")
 
+        async def _periodic_cleanup() -> None:
+            """Clean up expired sessions every hour."""
+            while True:
+                await asyncio.sleep(3600)
+                try:
+                    await sessions.cleanup()
+                except Exception:
+                    logger.warning("Session cleanup failed", exc_info=True)
+
+        cleanup_task = asyncio.ensure_future(_periodic_cleanup())
+
         loop = asyncio.get_running_loop()
         stop = asyncio.Event()
 
@@ -220,6 +231,7 @@ async def start(config: Config | None = None) -> None:
                 termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, restored)
             except (ImportError, OSError):
                 pass
+        cleanup_task.cancel()
         await sessions.shutdown()
         try:
             await asyncio.wait_for(handler.close_async(), timeout=3.0)

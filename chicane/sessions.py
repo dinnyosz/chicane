@@ -224,6 +224,7 @@ class SessionStore:
             ts
             for ts, info in self._sessions.items()
             if (now - info.last_used).total_seconds() > max_age_hours * 3600
+            and not info.session.is_streaming
         ]
         for ts in expired:
             info = self._sessions.pop(ts)

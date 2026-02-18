@@ -83,6 +83,35 @@ class TestSessionStore:
         removed = await store.cleanup(max_age_hours=24)
         assert removed == 0
 
+    @pytest.mark.asyncio
+    async def test_cleanup_skips_streaming_sessions(self, store, config):
+        """cleanup() must skip sessions where is_streaming is True."""
+        from unittest.mock import AsyncMock
+
+        # Create two sessions and age them both past the threshold
+        info_streaming = store.get_or_create("streaming-thread", config, cwd=Path("/tmp/s"))
+        info_idle = store.get_or_create("idle-thread", config, cwd=Path("/tmp/i"))
+
+        info_streaming.session.disconnect = AsyncMock()
+        info_idle.session.disconnect = AsyncMock()
+
+        # Age both sessions to 48 hours ago
+        aged = datetime.now() - timedelta(hours=48)
+        info_streaming.last_used = aged
+        info_idle.last_used = aged
+
+        # Set the internal _is_streaming flag (backing the is_streaming property)
+        info_streaming.session._is_streaming = True
+        info_idle.session._is_streaming = False
+
+        removed = await store.cleanup(max_age_hours=24)
+
+        assert removed == 1
+        assert "streaming-thread" in store._sessions
+        assert "idle-thread" not in store._sessions
+        info_idle.session.disconnect.assert_awaited_once()
+        info_streaming.session.disconnect.assert_not_awaited()
+
     def test_falls_back_to_temp_dir_when_no_cwd(self):
         config = Config(
             slack_bot_token="xoxb-test",
