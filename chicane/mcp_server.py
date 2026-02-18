@@ -184,16 +184,19 @@ def _add_allowed_tools(settings_path: Path, mcp_server_name: str) -> list[str]:
 
 @mcp.tool(annotations=_LOCAL_IDEMPOTENT_ANNOTATIONS)
 async def chicane_init(
-    scope: str = "global",
+    scope: str,
+    add_allowed_tools: bool,
+    mcp_server_name: str,
     project_root: str = "",
-    add_allowed_tools: bool = False,
-    mcp_server_name: str = "chicane-dev",
 ) -> str:
     """Set up Chicane for Claude Code.
 
     Installs the handoff skill (SKILL.md) and optionally adds chicane
     tools to the allowed tools list in settings.local.json so they
     run without permission prompts.
+
+    IMPORTANT: Always ask the user to confirm scope, add_allowed_tools,
+    and mcp_server_name before calling this tool. Do not assume values.
     """
     content = _get_skill_content()
 

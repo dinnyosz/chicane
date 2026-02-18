@@ -297,7 +297,11 @@ class TestChicaneInit:
             home = tmp_path / "home"
             MockPath.home.return_value = home
 
-            result = await mcp_mod.chicane_init(scope="global")
+            result = await mcp_mod.chicane_init(
+                scope="global",
+                add_allowed_tools=False,
+                mcp_server_name="chicane-dev",
+            )
 
         target = home / ".claude" / "skills" / "chicane" / "SKILL.md"
         assert target.exists()
@@ -309,7 +313,10 @@ class TestChicaneInit:
         mcp_mod._SKILL_TEMPLATE = "project skill"
 
         result = await mcp_mod.chicane_init(
-            scope="project", project_root=str(tmp_path)
+            scope="project",
+            project_root=str(tmp_path),
+            add_allowed_tools=False,
+            mcp_server_name="chicane-dev",
         )
 
         target = tmp_path / ".claude" / "skills" / "chicane" / "SKILL.md"
@@ -319,13 +326,21 @@ class TestChicaneInit:
 
     @pytest.mark.asyncio
     async def test_project_scope_requires_root(self):
-        result = await mcp_mod.chicane_init(scope="project")
+        result = await mcp_mod.chicane_init(
+            scope="project",
+            add_allowed_tools=False,
+            mcp_server_name="chicane-dev",
+        )
         assert "Error:" in result
         assert "project_root" in result
 
     @pytest.mark.asyncio
     async def test_invalid_scope(self):
-        result = await mcp_mod.chicane_init(scope="banana")
+        result = await mcp_mod.chicane_init(
+            scope="banana",
+            add_allowed_tools=False,
+            mcp_server_name="chicane-dev",
+        )
         assert "Error:" in result
         assert "banana" in result
 
@@ -375,6 +390,7 @@ class TestChicaneInit:
             scope="project",
             project_root=str(tmp_path),
             add_allowed_tools=True,
+            mcp_server_name="chicane-dev",
         )
 
         data = json.loads(settings.read_text())
@@ -408,6 +424,7 @@ class TestChicaneInit:
             scope="project",
             project_root=str(tmp_path),
             add_allowed_tools=True,
+            mcp_server_name="chicane-dev",
         )
 
         assert "already in" in result
@@ -439,6 +456,7 @@ class TestChicaneInit:
             result = await mcp_mod.chicane_init(
                 scope="global",
                 add_allowed_tools=True,
+                mcp_server_name="chicane-dev",
             )
 
         settings = tmp_path / "home" / ".claude" / "settings.local.json"
