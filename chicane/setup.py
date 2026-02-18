@@ -369,7 +369,7 @@ def _step_allowed_tools(default: str = "") -> str:
     """Step 8: Configure allowed tools interactively. Returns comma-separated rules."""
     console.rule("Step 8 of 16: Allowed Tools")
     console.print("\n  Pre-approve specific tools so Claude doesn't prompt for them.")
-    console.print("  [yellow]Warning:[/yellow] This overrides your Claude settings.json permissions.")
+    console.print("  These extend your existing Claude settings.json permissions.")
     console.print("  Leave empty to use your existing Claude config as-is.")
     console.print("  Patterns: [dim]Bash(npm run *)[/dim], [dim]Edit(./src/**)[/dim], [dim]Read[/dim], [dim]WebFetch[/dim]\n")
 
