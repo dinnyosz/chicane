@@ -187,7 +187,7 @@ All configuration is via environment variables, loaded from the `.env` file in t
 | `SLACK_BOT_TOKEN` | Yes | &mdash; | Slack Bot User OAuth Token (`xoxb-...`) |
 | `SLACK_APP_TOKEN` | Yes | &mdash; | Slack App-Level Token (`xapp-...`) with `connections:write` scope |
 | `BASE_DIRECTORY` | No | &mdash; | Default working directory for Claude sessions |
-| `ALLOWED_USERS` | No | (all users) | Comma-separated Slack user IDs that can use the bot |
+| `ALLOWED_USERS` | Yes | (none) | Comma-separated Slack user IDs that can use the bot. If empty, all messages are blocked. |
 | `CHANNEL_DIRS` | No | &mdash; | Map channels to directories. Simple: `magaldi,frontend` (name = dir under `BASE_DIRECTORY`). Custom: `web=frontend,infra=/opt/infrastructure` |
 | `CLAUDE_MODEL` | No | SDK default | Claude model override (e.g. `sonnet`, `opus`) |
 | `CLAUDE_PERMISSION_MODE` | No | `acceptEdits` | Permission mode (`acceptEdits`, `dontAsk`, `bypassPermissions`) |

@@ -113,7 +113,7 @@ def _parse_allowed_users(raw: str) -> list[str]:
 def _show_allowed_users(users: list[str]) -> None:
     """Display current allowed users."""
     if not users:
-        console.print("  [dim]No user restrictions — all workspace users can use Chicane.[/dim]\n")
+        console.print("  [dim]No users configured — all messages will be blocked.[/dim]\n")
         return
     table = Table(show_header=True, padding=(0, 2))
     table.add_column("Member ID", style="bold")
