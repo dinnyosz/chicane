@@ -781,5 +781,10 @@ def _run_wizard(args) -> None:
         "[dim]Chicane uses a persistent WebSocket connection. Prevent your OS\n"
         "from sleeping while the bot runs:[/dim]\n"
         "[dim]  macOS:[/dim]  [bold]caffeinate -i chicane run[/bold]\n"
-        "[dim]  Linux:[/dim]  [bold]systemd-inhibit --what=idle chicane run[/bold]"
+        "[dim]  Linux:[/dim]  [bold]systemd-inhibit --what=idle chicane run[/bold]\n"
+        "\n"
+        "[dim]To use handoff & messaging from Claude Code, add the MCP server:[/dim]\n"
+        "  [bold]claude mcp add chicane -- chicane-mcp[/bold]\n"
+        "[dim]Then run init inside Claude Code to install the skill:[/dim]\n"
+        "  [bold]Use the chicane_init tool[/bold] [dim](or say \"set up chicane\")[/dim]"
     ))
