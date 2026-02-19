@@ -785,6 +785,6 @@ def _run_wizard(args) -> None:
         "\n"
         "[dim]To use handoff & messaging from Claude Code, add the MCP server:[/dim]\n"
         "  [bold]claude mcp add chicane -- chicane-mcp[/bold]\n"
-        "[dim]Then run init inside Claude Code to install the skill:[/dim]\n"
-        "  [bold]Use the chicane_init tool[/bold] [dim](or say \"set up chicane\")[/dim]"
+        "[dim]Then restart Claude Code and say:[/dim]\n"
+        "  [bold]chicane init[/bold]"
     ))
