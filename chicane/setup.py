@@ -776,5 +776,10 @@ def _run_wizard(args) -> None:
     console.print(Panel(
         f"[green]✓[/green] Config saved to {env_path}\n"
         "[green]✓[/green] Next: run [bold]chicane run[/bold]\n"
-        "[green]✓[/green] Tip: invite @Chicane with /invite @Chicane"
+        "[green]✓[/green] Tip: invite @Chicane with /invite @Chicane\n"
+        "\n"
+        "[dim]Chicane uses a persistent WebSocket connection. Prevent your OS\n"
+        "from sleeping while the bot runs:[/dim]\n"
+        "[dim]  macOS:[/dim]  [bold]caffeinate -i chicane run[/bold]\n"
+        "[dim]  Linux:[/dim]  [bold]systemd-inhibit --what=idle chicane run[/bold]"
     ))
