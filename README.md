@@ -98,6 +98,18 @@ See [Configuration reference](#configuration-reference) for all options.
 chicane run
 ```
 
+Chicane uses a persistent WebSocket connection (Slack Socket Mode) to receive events in real time. If your OS puts the machine to sleep, the connection drops and the bot goes offline. On macOS, use `caffeinate` to prevent sleep while the bot is running:
+
+```bash
+caffeinate -i chicane run
+```
+
+On Linux, use `systemd-inhibit`:
+
+```bash
+systemd-inhibit --what=idle chicane run
+```
+
 ## Usage
 
 - **@mention in a channel** &mdash; `@Chicane refactor the auth module` starts a new session in a thread
