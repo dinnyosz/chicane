@@ -309,7 +309,7 @@ def save_handoff_session(alias: str, session_id: str) -> None:
         tmp.chmod(0o600)
     except OSError:
         pass  # Windows or restricted filesystem
-    tmp.rename(_HANDOFF_MAP_FILE)
+    tmp.replace(_HANDOFF_MAP_FILE)
 
 
 def load_handoff_session(alias: str) -> str | None:
