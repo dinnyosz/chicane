@@ -26,6 +26,7 @@ from claude_agent_sdk import (
     ToolUseBlock,
     UserMessage,
 )
+from claude_agent_sdk._errors import MessageParseError
 
 logger = logging.getLogger(__name__)
 
@@ -385,7 +386,20 @@ class ClaudeSession:
         try:
             await client.query(prompt)
 
-            async for msg in client.receive_response():
+            # Manual iteration so we can catch MessageParseError per-message
+            # and continue the stream.  The SDK raises this for message types
+            # it doesn't recognise yet (e.g. rate_limit_event) which would
+            # otherwise kill the entire stream.
+            response_iter = client.receive_response().__aiter__()
+            while True:
+                try:
+                    msg = await response_iter.__anext__()
+                except StopAsyncIteration:
+                    break
+                except MessageParseError as exc:
+                    logger.warning("SDK MessageParseError (skipped): %s", exc)
+                    continue
+
                 event_type = _MSG_TYPE_MAP.get(type(msg), "unknown")
                 raw = _sdk_message_to_raw(msg)
                 event = ClaudeEvent(type=event_type, raw=raw)

@@ -753,6 +753,77 @@ class TestClaudeSessionStream:
 
         mock_client.query.assert_awaited_once_with("test prompt")
 
+    @pytest.mark.asyncio
+    async def test_stream_skips_message_parse_error(self, caplog):
+        """MessageParseError mid-stream is logged and skipped, not fatal."""
+        from claude_agent_sdk import ResultMessage
+        from claude_agent_sdk._errors import MessageParseError
+
+        result_msg = ResultMessage(
+            subtype="success", duration_ms=100, duration_api_ms=90,
+            is_error=False, num_turns=1, session_id="s1",
+            total_cost_usd=None, usage=None, result="ok",
+        )
+
+        # Async generator that raises MessageParseError between valid messages
+        client = AsyncMock()
+        client.query = AsyncMock()
+
+        async def _response_with_parse_error():
+            yield result_msg
+            raise MessageParseError("Unknown message type: rate_limit_event", {})
+
+        client.receive_response = _response_with_parse_error
+
+        session = ClaudeSession()
+        with patch.object(session, "_ensure_connected", return_value=client):
+            events = [e async for e in session.stream("hello")]
+
+        # The valid message before the error should still be yielded
+        assert len(events) == 1
+        assert events[0].type == "result"
+        assert any("MessageParseError" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_stream_continues_after_message_parse_error(self):
+        """Stream continues yielding messages after a MessageParseError."""
+        from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+        from claude_agent_sdk._errors import MessageParseError
+
+        msg1 = AssistantMessage(
+            content=[TextBlock(text="before")], model="opus",
+            parent_tool_use_id=None, error=None,
+        )
+        msg2 = ResultMessage(
+            subtype="success", duration_ms=100, duration_api_ms=90,
+            is_error=False, num_turns=1, session_id="s1",
+            total_cost_usd=None, usage=None, result="after",
+        )
+
+        # msg1 → parse error → msg2 should all flow through
+        client = AsyncMock()
+        client.query = AsyncMock()
+
+        call_count = 0
+
+        async def _response_with_mid_stream_error():
+            nonlocal call_count
+            yield msg1
+            call_count += 1
+            raise MessageParseError("Unknown message type: rate_limit_event", {})
+
+        client.receive_response = _response_with_mid_stream_error
+
+        session = ClaudeSession()
+        with patch.object(session, "_ensure_connected", return_value=client):
+            events = [e async for e in session.stream("hello")]
+
+        # msg1 should be yielded; the error terminates the generator so msg2
+        # is never reached — but critically it doesn't crash.
+        assert len(events) == 1
+        assert events[0].text == "before"
+        assert not session.is_streaming
+
 
 class TestClaudeSessionRun:
     """Tests for the run() convenience method."""
