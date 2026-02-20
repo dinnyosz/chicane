@@ -37,7 +37,7 @@ def _load_existing_env(path: Path) -> dict[str, str]:
 
 def _copy_to_clipboard(text: str) -> bool:
     """Best-effort copy text to system clipboard. Returns True on success."""
-    for cmd in (["pbcopy"], ["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]):
+    for cmd in (["pbcopy"], ["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"], ["clip"]):
         try:
             subprocess.run(cmd, input=text.encode(), check=True, capture_output=True)
             return True
@@ -113,7 +113,7 @@ def _parse_allowed_users(raw: str) -> list[str]:
 def _show_allowed_users(users: list[str]) -> None:
     """Display current allowed users."""
     if not users:
-        console.print("  [dim]No users configured — all messages will be blocked.[/dim]\n")
+        console.print("  [dim]No users configured -- all messages will be blocked.[/dim]\n")
         return
     table = Table(show_header=True, padding=(0, 2))
     table.add_column("Member ID", style="bold")
@@ -142,7 +142,7 @@ def _step_create_app(has_tokens: bool) -> None:
     console.rule("Step 1 of 16: Create Slack App")
 
     if has_tokens:
-        console.print("\n  Tokens found in config — Slack app likely already configured.")
+        console.print("\n  Tokens found in config -- Slack app likely already configured.")
         skip = Confirm.ask("  Skip this step?", default=True, console=console)
         if skip:
             return
@@ -156,7 +156,7 @@ def _step_create_app(has_tokens: bool) -> None:
     console.print("  4. Switch to the JSON tab and paste the manifest")
 
     if copied:
-        console.print("\n  [green]✓[/green] Manifest copied to your clipboard.")
+        console.print("\n  [green][ok][/green] Manifest copied to your clipboard.")
         show = Confirm.ask("\n  Show manifest in console?", default=False, console=console)
         if show:
             console.print()
@@ -183,7 +183,7 @@ def _step_bot_token(default: str = "") -> str:
   3. Copy the "Bot User OAuth Token" (starts with xoxb-)
 """)
     token = _prompt_token("Bot Token", "xoxb-", default)
-    console.print("  [green]✓[/green] Saved")
+    console.print("  [green][ok][/green] Saved")
     return token
 
 
@@ -203,7 +203,7 @@ def _step_app_token(default: str = "") -> str:
   5. Click "Generate" and copy the token (starts with xapp-)
 """)
     token = _prompt_token("App Token", "xapp-", default)
-    console.print("  [green]✓[/green] Saved")
+    console.print("  [green][ok][/green] Saved")
     return token
 
 
@@ -250,7 +250,7 @@ def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
             name = name.lstrip("#")
             path = Prompt.ask("  Path", default=name, console=console).strip()
             mappings[name] = path
-            console.print(f"  [green]✓[/green] Added #{name} -> {path}\n")
+            console.print(f"  [green][ok][/green] Added #{name} -> {path}\n")
             _show_channel_table(mappings)
         elif action == "r":
             if not mappings:
@@ -259,7 +259,7 @@ def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
             name = Prompt.ask("  Channel name to remove", console=console).strip().lstrip("#")
             if name in mappings:
                 del mappings[name]
-                console.print(f"  [green]✓[/green] Removed #{name}\n")
+                console.print(f"  [green][ok][/green] Removed #{name}\n")
                 _show_channel_table(mappings)
             else:
                 console.print(f"  [red]Channel #{name} not found.[/red]\n")
@@ -272,7 +272,7 @@ def _step_allowed_users(defaults: dict[str, str]) -> str:
     """Step 5: Configure allowed users interactively. Returns comma-separated IDs or empty."""
     console.rule("Step 5 of 16: Allowed Users")
     console.print("\n  Restrict who can use the bot by Slack member ID.")
-    console.print("  (Find yours: Slack profile -> ⋮ menu -> Copy member ID)\n")
+    console.print("  (Find yours: Slack profile -> ... menu -> Copy member ID)\n")
 
     allowed = _parse_allowed_users(defaults.get("ALLOWED_USERS", ""))
     _show_allowed_users(allowed)
@@ -294,7 +294,7 @@ def _step_allowed_users(defaults: dict[str, str]) -> str:
                 console.print(f"  [dim]{user_id} already in list.[/dim]\n")
                 continue
             allowed.append(user_id)
-            console.print(f"  [green]✓[/green] Added {user_id}\n")
+            console.print(f"  [green][ok][/green] Added {user_id}\n")
             _show_allowed_users(allowed)
         elif action == "r":
             if not allowed:
@@ -303,7 +303,7 @@ def _step_allowed_users(defaults: dict[str, str]) -> str:
             user_id = Prompt.ask("  Member ID to remove", console=console).strip()
             if user_id in allowed:
                 allowed.remove(user_id)
-                console.print(f"  [green]✓[/green] Removed {user_id}\n")
+                console.print(f"  [green][ok][/green] Removed {user_id}\n")
                 _show_allowed_users(allowed)
             else:
                 console.print(f"  [red]{user_id} not found.[/red]\n")
@@ -324,9 +324,9 @@ def _step_permission_mode(default: str = "acceptEdits", *, allowed_users: str = 
     """Step 7: Configure permission mode."""
     console.rule("Step 7 of 16: Permission Mode")
     console.print("\n  Controls what Claude Code can do autonomously.")
-    console.print("  [dim]acceptEdits[/dim]       — auto-accepts file edits, use allowed tools for shell")
-    console.print("  [dim]dontAsk[/dim]           — auto-denies everything except allowed tools")
-    console.print("  [dim]bypassPermissions[/dim] — auto-approves everything (single-user only)")
+    console.print("  [dim]acceptEdits[/dim]       -- auto-accepts file edits, use allowed tools for shell")
+    console.print("  [dim]dontAsk[/dim]           -- auto-denies everything except allowed tools")
+    console.print("  [dim]bypassPermissions[/dim] -- auto-approves everything (single-user only)")
     valid_modes = {"acceptEdits", "dontAsk", "bypassPermissions"}
     user_count = len(_parse_allowed_users(allowed_users))
     while True:
@@ -368,7 +368,7 @@ def _parse_allowed_tools(raw: str) -> list[str]:
 def _show_allowed_tools(tools: list[str]) -> None:
     """Display current allowed tools."""
     if not tools:
-        console.print("  [dim]No pre-approved tools — using your Claude config as-is.[/dim]\n")
+        console.print("  [dim]No pre-approved tools -- using your Claude config as-is.[/dim]\n")
         return
     table = Table(show_header=True, padding=(0, 2))
     table.add_column("Tool Rule", style="bold")
@@ -406,7 +406,7 @@ def _step_allowed_tools(default: str = "") -> str:
                 console.print(f"  [dim]{rule} already in list.[/dim]\n")
                 continue
             tools.append(rule)
-            console.print(f"  [green]✓[/green] Added {rule}\n")
+            console.print(f"  [green][ok][/green] Added {rule}\n")
             _show_allowed_tools(tools)
         elif action == "r":
             if not tools:
@@ -415,7 +415,7 @@ def _step_allowed_tools(default: str = "") -> str:
             rule = Prompt.ask("  Tool rule to remove", console=console).strip()
             if rule in tools:
                 tools.remove(rule)
-                console.print(f"  [green]✓[/green] Removed {rule}\n")
+                console.print(f"  [green][ok][/green] Removed {rule}\n")
                 _show_allowed_tools(tools)
             else:
                 console.print(f"  [red]{rule} not found.[/red]\n")
@@ -426,7 +426,7 @@ def _step_allowed_tools(default: str = "") -> str:
 def _show_disallowed_tools(tools: list[str]) -> None:
     """Display current disallowed tools."""
     if not tools:
-        console.print("  [dim]No blocked tools — Claude can use any tool allowed by permissions.[/dim]\n")
+        console.print("  [dim]No blocked tools -- Claude can use any tool allowed by permissions.[/dim]\n")
         return
     table = Table(show_header=True, padding=(0, 2))
     table.add_column("Blocked Tool", style="bold")
@@ -440,7 +440,7 @@ def _step_disallowed_tools(default: str = "") -> str:
     """Step 9: Configure disallowed tools interactively. Returns comma-separated rules."""
     console.rule("Step 9 of 16: Disallowed Tools")
     console.print("\n  Block specific tools so Claude cannot use them.")
-    console.print("  Complement to allowed tools — these are always denied.")
+    console.print("  Complement to allowed tools -- these are always denied.")
     console.print("  Patterns: [dim]Bash[/dim], [dim]Edit(./secrets/**)[/dim], [dim]WebFetch[/dim]\n")
 
     tools = _parse_allowed_tools(default)
@@ -463,7 +463,7 @@ def _step_disallowed_tools(default: str = "") -> str:
                 console.print(f"  [dim]{rule} already in list.[/dim]\n")
                 continue
             tools.append(rule)
-            console.print(f"  [green]✓[/green] Added {rule}\n")
+            console.print(f"  [green][ok][/green] Added {rule}\n")
             _show_disallowed_tools(tools)
         elif action == "r":
             if not tools:
@@ -472,7 +472,7 @@ def _step_disallowed_tools(default: str = "") -> str:
             rule = Prompt.ask("  Tool rule to remove", console=console).strip()
             if rule in tools:
                 tools.remove(rule)
-                console.print(f"  [green]✓[/green] Removed {rule}\n")
+                console.print(f"  [green][ok][/green] Removed {rule}\n")
                 _show_disallowed_tools(tools)
             else:
                 console.print(f"  [red]{rule} not found.[/red]\n")
@@ -483,7 +483,7 @@ def _step_disallowed_tools(default: str = "") -> str:
 def _show_setting_sources(sources: list[str]) -> None:
     """Display current setting sources."""
     if not sources:
-        console.print("  [dim]No setting sources — Claude won't load any config files.[/dim]\n")
+        console.print("  [dim]No setting sources -- Claude won't load any config files.[/dim]\n")
         return
     table = Table(show_header=True, padding=(0, 2))
     table.add_column("Source", style="bold")
@@ -503,9 +503,9 @@ def _step_setting_sources(default: str = "user,project,local") -> str:
     """Step 10: Configure which Claude config scopes are loaded. Returns comma-separated sources."""
     console.rule("Step 10 of 16: Setting Sources")
     console.print("\n  Which Claude config scopes to load.")
-    console.print("  [dim]user[/dim]     — ~/.claude/settings.json (global user preferences)")
-    console.print("  [dim]project[/dim]  — .claude/settings.json (project-level, checked into git)")
-    console.print("  [dim]local[/dim]    — .claude/settings.local.json (local overrides, gitignored)")
+    console.print("  [dim]user[/dim]     -- ~/.claude/settings.json (global user preferences)")
+    console.print("  [dim]project[/dim]  -- .claude/settings.json (project-level, checked into git)")
+    console.print("  [dim]local[/dim]    -- .claude/settings.local.json (local overrides, gitignored)")
     console.print("  Default loads all three.\n")
 
     valid = {"user", "project", "local"}
@@ -532,7 +532,7 @@ def _step_setting_sources(default: str = "user,project,local") -> str:
                 console.print(f"  [dim]{source} already in list.[/dim]\n")
                 continue
             sources.append(source)
-            console.print(f"  [green]✓[/green] Added {source}\n")
+            console.print(f"  [green][ok][/green] Added {source}\n")
             _show_setting_sources(sources)
         elif action == "r":
             if not sources:
@@ -541,7 +541,7 @@ def _step_setting_sources(default: str = "user,project,local") -> str:
             source = Prompt.ask("  Source to remove", console=console).strip()
             if source in sources:
                 sources.remove(source)
-                console.print(f"  [green]✓[/green] Removed {source}\n")
+                console.print(f"  [green][ok][/green] Removed {source}\n")
                 _show_setting_sources(sources)
             else:
                 console.print(f"  [red]{source} not found.[/red]\n")
@@ -643,9 +643,9 @@ def _step_verbosity(default: str = "verbose") -> str:
     """Step 15: Configure verbosity level."""
     console.rule("Step 15 of 16: Verbosity")
     console.print("\n  Controls how much detail is shown in Slack during Claude sessions.")
-    console.print("  [dim]minimal[/dim]  — Only final text responses and completion summaries")
-    console.print("  [dim]normal[/dim]   — Text + tool call summaries and errors")
-    console.print("  [dim]verbose[/dim]  — Text + tool calls + tool outputs/results (default)")
+    console.print("  [dim]minimal[/dim]  -- Only final text responses and completion summaries")
+    console.print("  [dim]normal[/dim]   -- Text + tool call summaries and errors")
+    console.print("  [dim]verbose[/dim]  -- Text + tool calls + tool outputs/results (default)")
     valid_levels = {"minimal", "normal", "verbose"}
     while True:
         val = _prompt_with_default("Verbosity", default).lower()
@@ -694,7 +694,7 @@ def _run_wizard(args) -> None:
         _write_env(env_path, env_values)
 
     console.print()
-    console.print(Panel("[bold]Chicane — Setup Wizard[/bold]"))
+    console.print(Panel("[bold]Chicane -- Setup Wizard[/bold]"))
 
     has_tokens = bool(existing.get("SLACK_BOT_TOKEN") and existing.get("SLACK_APP_TOKEN"))
 
@@ -774,9 +774,9 @@ def _run_wizard(args) -> None:
     console.rule("Step 16 of 16: Done")
     console.print()
     console.print(Panel(
-        f"[green]✓[/green] Config saved to {env_path}\n"
-        "[green]✓[/green] Next: run [bold]chicane run[/bold]\n"
-        "[green]✓[/green] Tip: invite @Chicane with /invite @Chicane\n"
+        f"[green][ok][/green] Config saved to {env_path}\n"
+        "[green][ok][/green] Next: run [bold]chicane run[/bold]\n"
+        "[green][ok][/green] Tip: invite @Chicane with /invite @Chicane\n"
         "\n"
         "[dim]Chicane uses a persistent WebSocket connection. Prevent your OS\n"
         "from sleeping while the bot runs:[/dim]\n"

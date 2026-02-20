@@ -117,7 +117,7 @@ class Config:
             return None
         if len(matches) > 1:
             logger.warning(
-                "Directory %s maps to multiple channels: %s — using #%s",
+                "Directory %s maps to multiple channels: %s -- using #%s",
                 cwd,
                 ", ".join(f"#{c}" for c in matches),
                 matches[0],
@@ -179,7 +179,7 @@ class Config:
             raise ValueError(
                 "CLAUDE_PERMISSION_MODE=bypassPermissions cannot be used with "
                 "multiple ALLOWED_USERS. bypassPermissions grants unrestricted "
-                "shell access — this is only safe for single-user, isolated "
+                "shell access -- this is only safe for single-user, isolated "
                 "environments. Remove extra users or choose a safer permission mode."
             )
         raw_tools = os.environ.get("CLAUDE_ALLOWED_TOOLS", "")

@@ -138,13 +138,13 @@ async def start(config: Config | None = None) -> None:
         # Security warnings
         if config.claude_permission_mode == "bypassPermissions":
             logger.warning(
-                "SECURITY: bypassPermissions is active — Claude has unrestricted "
+                "SECURITY: bypassPermissions is active -- Claude has unrestricted "
                 "tool access. All allowed users effectively have shell access to "
                 "this machine."
             )
         if not config.allowed_users:
             logger.warning(
-                "SECURITY: ALLOWED_USERS is not set — the bot will reject all "
+                "SECURITY: ALLOWED_USERS is not set -- the bot will reject all "
                 "messages. Configure ALLOWED_USERS or run 'chicane setup'."
             )
 
@@ -257,7 +257,8 @@ def resolve_session_id(explicit: str | None = None) -> str:
     history = Path.home() / ".claude" / "history.jsonl"
     if not history.exists():
         raise ValueError("No Claude history found. Pass session_id explicitly.")
-    last_line = history.read_text().strip().rsplit("\n", 1)[-1]
+    lines = history.read_text().strip().splitlines()
+    last_line = lines[-1] if lines else ""
     session_id = json.loads(last_line).get("sessionId")
     if not session_id:
         raise ValueError(
@@ -351,7 +352,7 @@ class _ChicaneParser(argparse.ArgumentParser):
 def _build_parser() -> argparse.ArgumentParser:
     parser = _ChicaneParser(
         prog="chicane",
-        description="Chicane — When Claude Code can't go straight, take the chicane",
+        description="Chicane -- When Claude Code can't go straight, take the chicane",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -377,7 +378,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _print_help() -> None:
-    print("""Chicane — When Claude Code can't go straight, take the chicane
+    print("""Chicane -- When Claude Code can't go straight, take the chicane
 
 Usage: chicane <command> [options]
 
@@ -398,6 +399,10 @@ Run 'chicane <command> --help' for details on a specific command.""")
 
 def _run_detached() -> None:
     """Fork into background and run the bot as a daemon."""
+    if sys.platform == "win32":
+        print("Error: --detach is not supported on Windows.", file=sys.stderr)
+        sys.exit(1)
+
     config = Config.from_env()
     if not config.log_dir:
         print("Error: --detach requires LOG_DIR to be configured.", file=sys.stderr)

@@ -320,7 +320,7 @@ def _should_ignore(event: dict, config: Config) -> bool:
     """Check if this event should be ignored."""
     user = event.get("user", "")
     if not config.allowed_users:
-        security_logger.warning("BLOCKED: message from user=%s — ALLOWED_USERS is not configured", user)
+        security_logger.warning("BLOCKED: message from user=%s -- ALLOWED_USERS is not configured", user)
         return True
     if user not in config.allowed_users:
         security_logger.warning("BLOCKED: message from unauthorized user=%s", user)
@@ -346,7 +346,7 @@ async def _process_message(
     if handoff_match:
         handoff_session_id = handoff_match.group(1)
         prompt = prompt[: handoff_match.start()].rstrip()
-        logger.info(f"Handoff detected — resuming session {handoff_session_id}")
+        logger.info(f"Handoff detected -- resuming session {handoff_session_id}")
         security_logger.info("HANDOFF: user=%s resuming session=%s thread=%s", user, handoff_session_id, thread_ts)
 
     logger.debug(f"Processing message from {user} in {channel}: {prompt[:80]}")
@@ -481,7 +481,7 @@ async def _process_message(
     # can acquire the lock quickly instead of waiting for it to finish.
     queued = session_info.lock.locked()
     if session_info.session.is_streaming:
-        logger.info(f"New message in {thread_ts} — interrupting active stream")
+        logger.info(f"New message in {thread_ts} -- interrupting active stream")
         await session_info.session.interrupt(source="new_message")
 
     # Show hourglass on thread root while waiting for the lock
@@ -634,8 +634,8 @@ async def _process_message(
                     )
                     if session_is_stale:
                         logger.warning(
-                            f"Stale session: requested {handoff_session_id[:8]}… "
-                            f"but got {sid[:8]}… — rebuilding context"
+                            f"Stale session: requested {handoff_session_id[:8]}... "
+                            f"but got {sid[:8]}... -- rebuilding context"
                         )
                         if reconnect_history:
                             stale_context_prompt = (
@@ -1145,7 +1145,7 @@ async def _find_session_id_in_thread(
                 logger.debug(f"Found session_id {val[:8]}...")
             else:
                 # UUID-format entries don't have a human-friendly alias
-                result.skipped_aliases.append(val[:12] + "…")
+                result.skipped_aliases.append(val[:12] + "...")
 
     return result
 
@@ -1778,7 +1778,7 @@ def _markdown_to_mrkdwn(text: str) -> str:
     def _convert_table(m: re.Match) -> str:
         table_text = m.group(0)
         lines = [
-            line for line in table_text.split("\n")
+            line for line in table_text.splitlines()
             if not re.match(r"^\|[\s\-:|]+\|$", line.strip())
         ]
         return "```\n" + "\n".join(lines) + "\n```"
