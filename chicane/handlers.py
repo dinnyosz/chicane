@@ -850,7 +850,11 @@ async def _process_message(
                 mrkdwn = _markdown_to_mrkdwn(full_text)
 
                 if len(mrkdwn) > SNIPPET_THRESHOLD:
-                    await _send_snippet(client, channel, thread_ts, mrkdwn, queue=queue)
+                    stype = _guess_snippet_type(mrkdwn)
+                    await _send_snippet(
+                        client, channel, thread_ts, mrkdwn,
+                        snippet_type=stype, queue=queue,
+                    )
                 else:
                     for chunk in _split_message(mrkdwn):
                         await queue.post_message(
@@ -1867,6 +1871,16 @@ def _guess_snippet_type(text: str) -> str:
     return "text"
 
 
+# Map snippet_type → file extension so Slack infers the right type from filename.
+_SNIPPET_EXT: dict[str, str] = {
+    "diff": ".diff",
+    "javascript": ".json",
+    "xml": ".xml",
+    "python": ".py",
+    "text": ".txt",
+}
+
+
 async def _send_snippet(
     client: AsyncWebClient,
     channel: str,
@@ -1900,13 +1914,19 @@ async def _send_snippet(
     if not snippet_type:
         snippet_type = "text"
 
+    # Align filename extension with snippet_type so Slack doesn't
+    # override our type hint based on the .txt extension.
+    ext = _SNIPPET_EXT.get(snippet_type, ".txt")
+    stem = Path(filename).stem or "response"
+    filename = f"{stem}{ext}"
+
     last_exc: BaseException | None = None
     for attempt in range(1, _max_attempts + 1):
         try:
             upload_kwargs: dict = dict(
                 content=text,
                 filename=filename,
-                title=Path(filename).stem or "snippet",
+                title=stem or "snippet",
                 channel=channel,
                 thread_ts=thread_ts,
             )

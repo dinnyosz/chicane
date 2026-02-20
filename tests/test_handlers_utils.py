@@ -12,6 +12,7 @@ from chicane.handlers import (
     _fetch_thread_history,
     _find_session_id_in_thread,
     _guess_snippet_type,
+    _SNIPPET_EXT,
     _has_git_commit,
     _HANDOFF_RE,
     _SESSION_ALIAS_RE,
@@ -960,3 +961,60 @@ class TestGuessSnippetType:
     def test_multiline_plain_text(self):
         text = "line one\nline two\nline three\n"
         assert _guess_snippet_type(text) == "text"
+
+
+class TestSnippetExt:
+    """Tests for _SNIPPET_EXT filename extension mapping."""
+
+    def test_diff_extension(self):
+        assert _SNIPPET_EXT["diff"] == ".diff"
+
+    def test_json_extension(self):
+        assert _SNIPPET_EXT["javascript"] == ".json"
+
+    def test_text_fallback(self):
+        assert _SNIPPET_EXT["text"] == ".txt"
+
+    def test_unknown_type_falls_back(self):
+        assert _SNIPPET_EXT.get("unknown_type", ".txt") == ".txt"
+
+
+class TestSendSnippetFilenameAlignment:
+    """Tests that _send_snippet aligns filename extension with snippet_type."""
+
+    @pytest.mark.asyncio
+    async def test_diff_snippet_gets_diff_extension(self):
+        """When snippet_type='diff', filename should end with .diff."""
+        client = AsyncMock()
+        client.files_upload_v2 = AsyncMock()
+
+        from chicane.handlers import _send_snippet
+        await _send_snippet(client, "C123", "t1", "diff --git a/f b/f\n", snippet_type="diff")
+
+        kwargs = client.files_upload_v2.call_args.kwargs
+        assert kwargs["filename"] == "response.diff"
+        assert kwargs["snippet_type"] == "diff"
+
+    @pytest.mark.asyncio
+    async def test_text_snippet_keeps_txt_extension(self):
+        """Plain text keeps .txt extension."""
+        client = AsyncMock()
+        client.files_upload_v2 = AsyncMock()
+
+        from chicane.handlers import _send_snippet
+        await _send_snippet(client, "C123", "t1", "hello world")
+
+        kwargs = client.files_upload_v2.call_args.kwargs
+        assert kwargs["filename"] == "response.txt"
+
+    @pytest.mark.asyncio
+    async def test_custom_filename_stem_preserved(self):
+        """Custom filename stem is preserved, only extension changes."""
+        client = AsyncMock()
+        client.files_upload_v2 = AsyncMock()
+
+        from chicane.handlers import _send_snippet
+        await _send_snippet(client, "C123", "t1", '{"a":1}', filename="output.txt", snippet_type="javascript")
+
+        kwargs = client.files_upload_v2.call_args.kwargs
+        assert kwargs["filename"] == "output.json"
