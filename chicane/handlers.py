@@ -281,8 +281,8 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
             if await _check_rate_limit(event, client):
                 return
             clean_text = re.sub(r"<@[A-Z0-9]+>\s*", "", text).strip()
-            if clean_text:
-                await _process_message(event, clean_text, client, config, sessions, queue)
+            if clean_text or has_files:
+                await _process_message(event, clean_text or "", client, config, sessions, queue)
 
     @app.event("reaction_added")
     async def handle_reaction(event: dict, client: AsyncWebClient) -> None:

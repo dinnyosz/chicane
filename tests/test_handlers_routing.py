@@ -421,3 +421,28 @@ class TestFileShareSubtype:
             }
             await message_handler(event=event, client=AsyncMock())
             mock_process.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_file_only_with_mention_processed_in_channel(self, app, config, sessions):
+        """@mention + file with no other text in a channel should be processed."""
+        register_handlers(app, config, sessions)
+        message_handler = self._handlers["message"]
+
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            event = {
+                "ts": "9003.0",
+                "channel": "C_CHAN",
+                "channel_type": "channel",
+                "user": "UHUMAN1",
+                "text": "<@UBOT123>",
+                "subtype": "file_share",
+                "files": [{"name": "screenshot.png"}],
+            }
+            await message_handler(event=event, client=client)
+            mock_process.assert_called_once()
+            # Prompt should be empty string (mention stripped), files handled by _process_message
+            call_args = mock_process.call_args
+            assert call_args[0][1] == ""  # prompt arg
