@@ -979,11 +979,46 @@ class TestSnippetExt:
         assert _SNIPPET_EXT.get("unknown_type", ".txt") == ".txt"
 
 
+class TestTransliterateToAscii:
+    """Tests for _transliterate_to_ascii."""
+
+    def test_en_dash(self):
+        from chicane.handlers import _transliterate_to_ascii
+        assert _transliterate_to_ascii("1\u20133") == "1-3"
+
+    def test_em_dash(self):
+        from chicane.handlers import _transliterate_to_ascii
+        assert _transliterate_to_ascii("foo\u2014bar") == "foo--bar"
+
+    def test_smart_quotes(self):
+        from chicane.handlers import _transliterate_to_ascii
+        assert _transliterate_to_ascii("\u201chello\u201d") == '"hello"'
+
+    def test_ellipsis(self):
+        from chicane.handlers import _transliterate_to_ascii
+        assert _transliterate_to_ascii("wait\u2026") == "wait..."
+
+    def test_arrows(self):
+        from chicane.handlers import _transliterate_to_ascii
+        assert _transliterate_to_ascii("a \u2192 b") == "a -> b"
+
+    def test_pure_ascii_unchanged(self):
+        from chicane.handlers import _transliterate_to_ascii
+        text = "def foo():\n    return 42\n"
+        assert _transliterate_to_ascii(text) == text
+
+    def test_unmapped_unicode_dropped(self):
+        from chicane.handlers import _transliterate_to_ascii
+        # snowman (U+2603) is not in the map and should be dropped
+        assert _transliterate_to_ascii("hello \u2603 world") == "hello  world"
+
+    def test_mixed_mapped_and_unmapped(self):
+        from chicane.handlers import _transliterate_to_ascii
+        assert _transliterate_to_ascii("1\u20133 \u2603") == "1-3 "
+
+
 class TestSendSnippetFilenameAlignment:
     """Tests that _send_snippet aligns filename extension with snippet_type."""
-
-    # UTF-8 BOM that _send_snippet prepends to all uploads.
-    _BOM = b"\xef\xbb\xbf"
 
     @pytest.mark.asyncio
     async def test_diff_snippet_gets_diff_extension(self):
@@ -1023,8 +1058,8 @@ class TestSendSnippetFilenameAlignment:
         assert kwargs["filename"] == "output.json"
 
     @pytest.mark.asyncio
-    async def test_content_uploaded_as_bytes_with_bom(self):
-        """Content should be uploaded as bytes prefixed with a UTF-8 BOM."""
+    async def test_content_uploaded_as_str(self):
+        """Content should be uploaded as a str (not bytes) for snippet preview."""
         client = AsyncMock()
         client.files_upload_v2 = AsyncMock()
 
@@ -1033,21 +1068,19 @@ class TestSendSnippetFilenameAlignment:
 
         kwargs = client.files_upload_v2.call_args.kwargs
         content = kwargs["content"]
-        assert isinstance(content, bytes), "content should be bytes, not str"
-        assert content.startswith(self._BOM), "content should start with UTF-8 BOM"
-        assert content == self._BOM + b"hello world"
+        assert isinstance(content, str), "content should be str for snippet preview"
+        assert content == "hello world"
 
     @pytest.mark.asyncio
-    async def test_bom_with_unicode_content(self):
-        """Unicode content (e.g. en-dash) should survive BOM encoding."""
+    async def test_unicode_transliterated_before_upload(self):
+        """Unicode chars like en-dash should be transliterated to ASCII."""
         client = AsyncMock()
         client.files_upload_v2 = AsyncMock()
 
         from chicane.handlers import _send_snippet
-        text = "range: 1\u20133"
-        await _send_snippet(client, "C123", "t1", text)
+        await _send_snippet(client, "C123", "t1", "range: 1\u20133")
 
         kwargs = client.files_upload_v2.call_args.kwargs
         content = kwargs["content"]
-        assert isinstance(content, bytes)
-        assert content == self._BOM + text.encode("utf-8")
+        assert isinstance(content, str)
+        assert content == "range: 1-3"

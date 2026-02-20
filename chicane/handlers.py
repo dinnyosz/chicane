@@ -1854,6 +1854,42 @@ def _markdown_to_mrkdwn(text: str) -> str:
     return text
 
 
+# Common Unicode → ASCII replacements for snippet uploads.
+_UNICODE_TO_ASCII: dict[str, str] = {
+    "\u2013": "-",   # en-dash
+    "\u2014": "--",  # em-dash
+    "\u2018": "'",   # left single quote
+    "\u2019": "'",   # right single quote
+    "\u201c": '"',   # left double quote
+    "\u201d": '"',   # right double quote
+    "\u2026": "...", # ellipsis
+    "\u00a0": " ",   # non-breaking space
+    "\u2022": "*",   # bullet
+    "\u00b7": ".",   # middle dot
+    "\u2192": "->",  # right arrow
+    "\u2190": "<-",  # left arrow
+    "\u2265": ">=",  # greater-than-or-equal
+    "\u2264": "<=",  # less-than-or-equal
+    "\u2260": "!=",  # not-equal
+    "\u00d7": "x",   # multiplication sign
+}
+
+# Pre-compiled pattern matching any key in the map.
+_UNICODE_RE = re.compile("|".join(re.escape(k) for k in _UNICODE_TO_ASCII))
+
+
+def _transliterate_to_ascii(text: str) -> str:
+    """Replace common Unicode characters with ASCII equivalents.
+
+    Any remaining non-ASCII characters are dropped so the upload
+    payload is pure ASCII, which Slack's binary detector always
+    recognises as text.
+    """
+    text = _UNICODE_RE.sub(lambda m: _UNICODE_TO_ASCII[m.group()], text)
+    # Drop anything still outside printable ASCII + whitespace.
+    return text.encode("ascii", errors="ignore").decode("ascii")
+
+
 def _guess_snippet_type(text: str) -> str:
     """Guess a Slack snippet_type from content so Slack doesn't classify it as Binary.
 
@@ -1909,6 +1945,14 @@ async def _send_snippet(
     # to classify the upload as "Binary" instead of displayable text.
     text = re.sub(r"[^\x09\x0a\x0d\x20-\x7e\x80-\uffff]", "", text)
 
+    # Transliterate non-ASCII Unicode to closest ASCII equivalents
+    # (e.g. en-dash → hyphen, smart quotes → straight quotes).
+    # The raw upload POST carries no Content-Type header, so even a
+    # single multi-byte character can trip Slack's binary detector.
+    # Keeping content pure ASCII avoids this entirely while
+    # preserving the snippet preview (collapsed inline view).
+    text = _transliterate_to_ascii(text)
+
     # Always provide a snippet_type so Slack doesn't guess "Binary".
     if not snippet_type:
         snippet_type = "text"
@@ -1919,20 +1963,11 @@ async def _send_snippet(
     stem = Path(filename).stem or "response"
     filename = f"{stem}{ext}"
 
-    # Encode as bytes with a UTF-8 BOM prefix.  The SDK's
-    # _to_v2_file_upload_item accepts ``content`` as ``bytes`` and
-    # sends them directly via the raw POST to Slack's upload URL.
-    # That POST carries *no* Content-Type header, so Slack's
-    # server-side detector inspects the raw bytes.  The BOM
-    # (EF BB BF) is a universally recognised signal that the
-    # payload is UTF-8 text, preventing "Binary" misclassification.
-    content_bytes: bytes = b"\xef\xbb\xbf" + text.encode("utf-8")
-
     last_exc: BaseException | None = None
     for attempt in range(1, _max_attempts + 1):
         try:
             upload_kwargs: dict = dict(
-                content=content_bytes,
+                content=text,
                 filename=filename,
                 title=stem or "snippet",
                 channel=channel,
