@@ -1863,6 +1863,10 @@ async def _send_snippet(
     Pass *snippet_type* (e.g. ``"diff"``) to request Slack syntax
     highlighting for that file type.
     """
+    # Strip control characters (except \n, \r, \t) that can cause Slack
+    # to classify the upload as "Binary" instead of displayable text.
+    text = re.sub(r"[^\x09\x0a\x0d\x20-\x7e\x80-\uffff]", "", text)
+
     last_exc: BaseException | None = None
     for attempt in range(1, _max_attempts + 1):
         try:
