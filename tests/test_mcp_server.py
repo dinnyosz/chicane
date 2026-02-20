@@ -142,7 +142,7 @@ class TestChicaneHandoff:
         assert "Error:" in result
 
     @pytest.mark.asyncio
-    async def test_handoff_tells_user_to_close_session(self, config, mock_client):
+    async def test_handoff_success_message(self, config, mock_client):
         with (
             patch.object(mcp_mod, "_get_config", return_value=config),
             patch.object(mcp_mod, "_get_client", return_value=mock_client),

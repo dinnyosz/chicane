@@ -868,9 +868,8 @@ async def _process_message(
                 )
                 msg = (
                     ":warning: Claude returned an empty response. "
-                    "This usually means the session is still active in a terminal. "
-                    "Please close that Claude Code session first (type `/exit` or quit), "
-                    "then try again."
+                    "This can happen when the session history is in an unexpected state. "
+                    "Try sending your message again."
                 )
                 await queue.post_message(
                     channel, thread_ts, msg,
