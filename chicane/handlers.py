@@ -132,16 +132,6 @@ _QUIET_TOOLS = frozenset({"Read"})
 # (the system prompt says not to use them, but Claude sometimes tries anyway).
 _SILENT_TOOLS = frozenset({"EnterPlanMode", "ExitPlanMode", "AskUserQuestion"})
 
-# Emoji legend posted once per thread (after first completion).
-_EMOJI_LEGEND = (
-    ":eyes: working · "
-    ":white_check_mark: done · "
-    ":speech_balloon: needs your input · "
-    ":x: error · "
-    ":octagonal_sign: interrupted · "
-    ":hourglass: queued · "
-    ":warning: permissions blocked"
-)
 
 
 def _should_show(event_type: str, verbosity: str) -> bool:
@@ -894,12 +884,6 @@ async def _process_message(
                         channel, thread_ts, summary,
                     )
 
-                # Post emoji legend on the first completion in a thread
-                # (only for follow-up messages where thread-root emojis are used)
-                if session_info.total_requests == 1 and thread_ts != event["ts"]:
-                    await queue.post_message(
-                        channel, thread_ts, _EMOJI_LEGEND,
-                    )
 
                 # Surface permission denials so users know why tools were blocked
                 denials = result_event.permission_denials

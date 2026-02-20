@@ -35,7 +35,6 @@ from chicane.handlers import (
     _has_question,
     _sync_thread_reactions,
     _text_ends_with_question,
-    _EMOJI_LEGEND,
 )
 from tests.conftest import (
     make_event,
@@ -890,102 +889,6 @@ class TestCumulativeStatsAccumulation:
         assert info.total_requests == 2
         assert info.total_turns == 8
         assert abs(info.total_cost_usd - 0.15) < 0.001
-
-
-# ---------------------------------------------------------------------------
-# Emoji legend — posted once on first follow-up completion
-# ---------------------------------------------------------------------------
-
-
-class TestEmojiLegend:
-    """Emoji legend is posted once after the first follow-up completion."""
-
-    @pytest.mark.asyncio
-    async def test_legend_posted_on_first_follow_up(self, config, sessions, queue):
-        """First follow-up message in a thread posts the emoji legend."""
-        async def fake_stream(prompt):
-            yield make_event("result", text="done", num_turns=1, duration_ms=3000)
-
-        mock_session = MagicMock()
-        mock_session.stream = fake_stream
-        mock_session.session_id = "s1"
-
-        client = mock_client()
-
-        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
-            event = {
-                "ts": "2000.0",
-                "thread_ts": "1000.0",
-                "channel": "C_CHAN",
-                "user": "UHUMAN1",
-            }
-            await _process_message(event, "do stuff", client, config, sessions, queue)
-
-        legend_posts = [
-            c for c in client.chat_postMessage.call_args_list
-            if _EMOJI_LEGEND in c.kwargs.get("text", "")
-        ]
-        assert len(legend_posts) == 1
-
-    @pytest.mark.asyncio
-    async def test_no_legend_on_first_message(self, config, sessions, queue):
-        """First message (thread root, ts == thread_ts) — no legend needed."""
-        async def fake_stream(prompt):
-            yield make_event("result", text="done", num_turns=1, duration_ms=3000)
-
-        mock_session = MagicMock()
-        mock_session.stream = fake_stream
-        mock_session.session_id = "s1"
-
-        client = mock_client()
-
-        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
-            event = {
-                "ts": "1000.0",
-                "channel": "C_CHAN",
-                "user": "UHUMAN1",
-            }
-            await _process_message(event, "hello", client, config, sessions, queue)
-
-        legend_posts = [
-            c for c in client.chat_postMessage.call_args_list
-            if _EMOJI_LEGEND in c.kwargs.get("text", "")
-        ]
-        assert len(legend_posts) == 0
-
-    @pytest.mark.asyncio
-    async def test_legend_not_repeated_on_second_request(self, config, sessions, queue):
-        """Legend is only posted once — not on subsequent follow-ups."""
-        call_count = 0
-
-        async def fake_stream(prompt):
-            nonlocal call_count
-            call_count += 1
-            yield make_event("result", text="done", num_turns=1, duration_ms=3000)
-
-        mock_session = MagicMock()
-        mock_session.stream = fake_stream
-        mock_session.session_id = "s1"
-
-        client = mock_client()
-        info = mock_session_info(mock_session)
-
-        with patch.object(sessions, "get_or_create", return_value=info):
-            for i in range(3):
-                event = {
-                    "ts": f"200{i}.0",
-                    "thread_ts": "1000.0",
-                    "channel": "C_CHAN",
-                    "user": "UHUMAN1",
-                }
-                await _process_message(event, f"msg {i}", client, config, sessions, queue)
-
-        legend_posts = [
-            c for c in client.chat_postMessage.call_args_list
-            if _EMOJI_LEGEND in c.kwargs.get("text", "")
-        ]
-        # Only once — on the first follow-up
-        assert len(legend_posts) == 1
 
 
 # ---------------------------------------------------------------------------
