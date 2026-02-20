@@ -14,6 +14,7 @@ from platformdirs import user_cache_dir
 from slack_bolt.async_app import AsyncApp
 from slack_sdk.web.async_client import AsyncWebClient
 
+from .claude import ClaudeEvent
 from .config import Config, generate_session_alias, load_handoff_session, save_handoff_session
 from .emoji_map import emojis_for_alias
 from .sessions import SessionInfo, SessionStore
