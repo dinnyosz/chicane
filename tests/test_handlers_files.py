@@ -274,7 +274,7 @@ class TestProcessMessageWithFiles:
     """Test that file attachments are downloaded and injected into the prompt."""
 
     @pytest.mark.asyncio
-    async def test_files_appended_to_prompt(self, config, sessions, tmp_path):
+    async def test_files_appended_to_prompt(self, config, sessions, queue, tmp_path):
         captured_prompt = None
 
         async def capturing_stream(prompt):
@@ -303,7 +303,7 @@ class TestProcessMessageWithFiles:
                 "user": "UHUMAN1",
                 "files": [{"name": "screenshot.png"}],
             }
-            await _process_message(event, "what's wrong here?", client, config, sessions)
+            await _process_message(event, "what's wrong here?", client, config, sessions, queue)
 
         assert captured_prompt is not None
         assert "what's wrong here?" in captured_prompt
@@ -312,7 +312,7 @@ class TestProcessMessageWithFiles:
         assert "Image:" in captured_prompt
 
     @pytest.mark.asyncio
-    async def test_text_files_labeled_as_file(self, config, sessions, tmp_path):
+    async def test_text_files_labeled_as_file(self, config, sessions, queue, tmp_path):
         captured_prompt = None
 
         async def capturing_stream(prompt):
@@ -341,13 +341,13 @@ class TestProcessMessageWithFiles:
                 "user": "UHUMAN1",
                 "files": [{"name": "main.py"}],
             }
-            await _process_message(event, "review this code", client, config, sessions)
+            await _process_message(event, "review this code", client, config, sessions, queue)
 
         assert "File:" in captured_prompt
         assert "Image:" not in captured_prompt
 
     @pytest.mark.asyncio
-    async def test_file_only_no_text(self, config, sessions, tmp_path):
+    async def test_file_only_no_text(self, config, sessions, queue, tmp_path):
         """When a user sends only a file with no text, the prompt should still work."""
         captured_prompt = None
 
@@ -377,14 +377,14 @@ class TestProcessMessageWithFiles:
                 "user": "UHUMAN1",
                 "files": [{"name": "error.log"}],
             }
-            await _process_message(event, "", client, config, sessions)
+            await _process_message(event, "", client, config, sessions, queue)
 
         assert captured_prompt is not None
         assert "error.log" in captured_prompt
         assert "Read tool" in captured_prompt
 
     @pytest.mark.asyncio
-    async def test_no_files_prompt_unchanged(self, config, sessions):
+    async def test_no_files_prompt_unchanged(self, config, sessions, queue):
         captured_prompt = None
 
         async def capturing_stream(prompt):
@@ -407,6 +407,6 @@ class TestProcessMessageWithFiles:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "just text", client, config, sessions)
+            await _process_message(event, "just text", client, config, sessions, queue)
 
         assert captured_prompt == "just text"

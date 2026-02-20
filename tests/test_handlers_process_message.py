@@ -15,7 +15,7 @@ class TestProcessMessageFormatting:
 
     @pytest.mark.asyncio
     async def test_streamed_text_with_newlines_not_overwritten_by_result(
-        self, config, sessions
+        self, config, sessions, queue
     ):
         """The result event often flattens newlines. Streamed text should win."""
         streamed = "First paragraph.\n\nSecond paragraph.\n\n- bullet 1\n- bullet 2"
@@ -38,7 +38,7 @@ class TestProcessMessageFormatting:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "hello", client, config, sessions)
+            await _process_message(event, "hello", client, config, sessions, queue)
 
         # Find the posted text (not the session init or completion summary)
         text_posts = [
@@ -53,7 +53,7 @@ class TestProcessMessageFormatting:
 
     @pytest.mark.asyncio
     async def test_result_text_used_when_no_streamed_content(
-        self, config, sessions
+        self, config, sessions, queue
     ):
         """When no assistant events arrive, fall back to result text."""
         result_text = "Fallback result text."
@@ -74,7 +74,7 @@ class TestProcessMessageFormatting:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "hello", client, config, sessions)
+            await _process_message(event, "hello", client, config, sessions, queue)
 
         text_posts = [
             c for c in client.chat_postMessage.call_args_list
@@ -87,7 +87,7 @@ class TestProcessMessageEdgeCases:
     """Test _process_message error paths and edge cases."""
 
     @pytest.mark.asyncio
-    async def test_handoff_session_id_extracted(self, config, sessions):
+    async def test_handoff_session_id_extracted(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event("result", text="done")
 
@@ -102,12 +102,12 @@ class TestProcessMessageEdgeCases:
             await _process_message(
                 event,
                 "do stuff (session_id: abc-123)",
-                client, config, sessions,
+                client, config, sessions, queue,
             )
             assert mock_create.call_args.kwargs["session_id"] == "abc-123"
 
     @pytest.mark.asyncio
-    async def test_reaction_add_failure_doesnt_block(self, config, sessions):
+    async def test_reaction_add_failure_doesnt_block(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event("result", text="ok")
 
@@ -120,12 +120,12 @@ class TestProcessMessageEdgeCases:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "5001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "hello", client, config, sessions)
+            await _process_message(event, "hello", client, config, sessions, queue)
 
         client.chat_postMessage.assert_called()
 
     @pytest.mark.asyncio
-    async def test_empty_response_posts_warning(self, config, sessions):
+    async def test_empty_response_posts_warning(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event("system", subtype="init", session_id="s1")
 
@@ -137,7 +137,7 @@ class TestProcessMessageEdgeCases:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "5002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "hello", client, config, sessions)
+            await _process_message(event, "hello", client, config, sessions, queue)
 
         warning_posts = [
             c for c in client.chat_postMessage.call_args_list
@@ -146,7 +146,7 @@ class TestProcessMessageEdgeCases:
         assert len(warning_posts) == 1
 
     @pytest.mark.asyncio
-    async def test_stream_exception_posts_error(self, config, sessions):
+    async def test_stream_exception_posts_error(self, config, sessions, queue):
         async def exploding_stream(prompt):
             yield make_event("system", subtype="init", session_id="s1")
             raise RuntimeError("stream exploded")
@@ -159,7 +159,7 @@ class TestProcessMessageEdgeCases:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "5003.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "hello", client, config, sessions)
+            await _process_message(event, "hello", client, config, sessions, queue)
 
         error_posts = [
             c for c in client.chat_postMessage.call_args_list
@@ -173,7 +173,7 @@ class TestProcessMessageEdgeCases:
         assert "stream exploded" not in error_text
 
     @pytest.mark.asyncio
-    async def test_long_response_uploaded_as_snippet(self, config, sessions):
+    async def test_long_response_uploaded_as_snippet(self, config, sessions, queue):
         """Responses exceeding SNIPPET_THRESHOLD are uploaded as a file snippet."""
         long_text = "a" * 8000
 
@@ -188,7 +188,7 @@ class TestProcessMessageEdgeCases:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "5004.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "hello", client, config, sessions)
+            await _process_message(event, "hello", client, config, sessions, queue)
 
         # Snippet uploaded via files_upload_v2
         client.files_upload_v2.assert_called_once()
@@ -196,7 +196,7 @@ class TestProcessMessageEdgeCases:
         assert upload_kwargs["channel"] == "C_CHAN"
 
     @pytest.mark.asyncio
-    async def test_moderate_response_split_into_chunks(self, config, sessions):
+    async def test_moderate_response_split_into_chunks(self, config, sessions, queue):
         """Responses between SLACK_MAX_LENGTH and SNIPPET_THRESHOLD still chunk."""
         # 3950 chars: above SLACK_MAX_LENGTH (3900) but below SNIPPET_THRESHOLD (4000)
         text = "a" * 3950
@@ -212,7 +212,7 @@ class TestProcessMessageEdgeCases:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "5004.1", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "hello", client, config, sessions)
+            await _process_message(event, "hello", client, config, sessions, queue)
 
         # Should be split into multiple messages, not uploaded as snippet
         client.files_upload_v2.assert_not_called()
@@ -220,7 +220,7 @@ class TestProcessMessageEdgeCases:
         assert client.chat_postMessage.call_count >= 2
 
     @pytest.mark.asyncio
-    async def test_text_only_response_posted_as_reply(self, config, sessions):
+    async def test_text_only_response_posted_as_reply(self, config, sessions, queue):
         """When there are no tool calls, the final text is posted as a thread reply."""
         chunk_text = "x" * 150
 
@@ -236,7 +236,7 @@ class TestProcessMessageEdgeCases:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "5005.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "hello", client, config, sessions)
+            await _process_message(event, "hello", client, config, sessions, queue)
 
         text_posts = [
             c for c in client.chat_postMessage.call_args_list
@@ -246,7 +246,7 @@ class TestProcessMessageEdgeCases:
         client.chat_update.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_reconnect_rebuilds_context(self, config, sessions):
+    async def test_reconnect_rebuilds_context(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event("result", text="ok")
 
@@ -280,14 +280,14 @@ class TestProcessMessageEdgeCases:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "follow up", client, config, sessions)
+            await _process_message(event, "follow up", client, config, sessions, queue)
 
         assert captured_prompt is not None
         assert "conversation history" in captured_prompt
         assert "follow up" in captured_prompt
 
     @pytest.mark.asyncio
-    async def test_reconnect_finds_session_id(self, config, sessions):
+    async def test_reconnect_finds_session_id(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event("result", text="ok")
 
@@ -313,12 +313,12 @@ class TestProcessMessageEdgeCases:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "continue", client, config, sessions)
+            await _process_message(event, "continue", client, config, sessions, queue)
 
             assert mock_create.call_args.kwargs["session_id"] == "abc-123-def"
 
     @pytest.mark.asyncio
-    async def test_reconnect_finds_session_alias(self, config, sessions, tmp_path):
+    async def test_reconnect_finds_session_alias(self, config, sessions, queue, tmp_path):
         """Reconnect resolves a funky alias to the real session_id."""
         async def fake_stream(prompt):
             yield make_event("result", text="ok")
@@ -350,12 +350,12 @@ class TestProcessMessageEdgeCases:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "continue", client, config, sessions)
+            await _process_message(event, "continue", client, config, sessions, queue)
 
             assert mock_create.call_args.kwargs["session_id"] == "real-uuid-here"
 
     @pytest.mark.asyncio
-    async def test_reconnect_with_alias_announces_continuing(self, config, sessions, tmp_path):
+    async def test_reconnect_with_alias_announces_continuing(self, config, sessions, queue, tmp_path):
         """When reconnecting via alias, 'Continuing session' is posted
         with the original alias name."""
         async def fake_stream(prompt):
@@ -389,7 +389,7 @@ class TestProcessMessageEdgeCases:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "continue", client, config, sessions)
+            await _process_message(event, "continue", client, config, sessions, queue)
 
             continuing_posts = [
                 c for c in client.chat_postMessage.call_args_list
@@ -401,7 +401,7 @@ class TestProcessMessageEdgeCases:
             assert "sneaky-octopus-pizza" in text
 
     @pytest.mark.asyncio
-    async def test_reconnect_finds_bot_session_message(self, config, sessions, tmp_path):
+    async def test_reconnect_finds_bot_session_message(self, config, sessions, queue, tmp_path):
         """The bot's own ':sparkles: New session' message contains
         _(session: alias)_ and should be found on reconnect."""
         async def fake_stream(prompt):
@@ -438,7 +438,7 @@ class TestProcessMessageEdgeCases:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "follow up", client, config, sessions)
+            await _process_message(event, "follow up", client, config, sessions, queue)
 
             # Should have found the session_id from the bot's own message
             assert mock_create.call_args.kwargs["session_id"] == "bot-sess-id"
@@ -452,7 +452,7 @@ class TestProcessMessageEdgeCases:
             assert "clever-fox-rainbow" in continuing_posts[0].kwargs["text"]
 
     @pytest.mark.asyncio
-    async def test_reconnect_picks_last_session_in_thread(self, config, sessions, tmp_path):
+    async def test_reconnect_picks_last_session_in_thread(self, config, sessions, queue, tmp_path):
         """When a thread has multiple session aliases (e.g. bot restarted),
         the most recent one should be used."""
         async def fake_stream(prompt):
@@ -493,7 +493,7 @@ class TestProcessMessageEdgeCases:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "pick up", client, config, sessions)
+            await _process_message(event, "pick up", client, config, sessions, queue)
 
             # Should have used the LAST session (fresh-shiny-eagle)
             assert mock_create.call_args.kwargs["session_id"] == "second-sess"
@@ -510,7 +510,7 @@ class TestProcessMessageEdgeCases:
             assert "old-dusty-parrot" in text
 
     @pytest.mark.asyncio
-    async def test_reconnect_unmapped_alias_warns(self, config, sessions, tmp_path):
+    async def test_reconnect_unmapped_alias_warns(self, config, sessions, queue, tmp_path):
         """When reconnecting and the alias can't be mapped, a warning is
         shown and a new session starts."""
         async def fake_stream(prompt):
@@ -544,7 +544,7 @@ class TestProcessMessageEdgeCases:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "hello again", client, config, sessions)
+            await _process_message(event, "hello again", client, config, sessions, queue)
 
             # No session_id should be passed (couldn't map)
             assert mock_create.call_args.kwargs.get("session_id") is None
@@ -559,7 +559,7 @@ class TestProcessMessageEdgeCases:
             assert "lost-ghost-cat" in text
 
     @pytest.mark.asyncio
-    async def test_reconnect_fallback_to_older_session(self, config, sessions, tmp_path):
+    async def test_reconnect_fallback_to_older_session(self, config, sessions, queue, tmp_path):
         """When the newest alias can't be mapped, fall back to the next
         older one and mention the unmapped one."""
         async def fake_stream(prompt):
@@ -599,7 +599,7 @@ class TestProcessMessageEdgeCases:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "pick up", client, config, sessions)
+            await _process_message(event, "pick up", client, config, sessions, queue)
 
             # Should have fallen back to old-good-parrot
             assert mock_create.call_args.kwargs["session_id"] == "old-good-sess"
@@ -616,7 +616,7 @@ class TestProcessMessageEdgeCases:
             assert "couldn't map" in text
 
     @pytest.mark.asyncio
-    async def test_new_session_saves_alias_and_announces(self, config, sessions, tmp_path):
+    async def test_new_session_saves_alias_and_announces(self, config, sessions, queue, tmp_path):
         """When a new session starts (init event), an alias is generated,
         saved to disk, and announced as a new session in the thread."""
         async def fake_stream(prompt):
@@ -634,7 +634,7 @@ class TestProcessMessageEdgeCases:
             patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)),
         ):
             event = {"ts": "9000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "hello", client, config, sessions)
+            await _process_message(event, "hello", client, config, sessions, queue)
 
             # Should have posted the "New session" announcement
             alias_posts = [
@@ -653,7 +653,7 @@ class TestProcessMessageEdgeCases:
             assert load_handoff_session(alias) == "new-sess-id"
 
     @pytest.mark.asyncio
-    async def test_handoff_session_announces_continuing(self, config, sessions, tmp_path):
+    async def test_handoff_session_announces_continuing(self, config, sessions, queue, tmp_path):
         """When resuming a handoff session, a 'Continuing session' message
         should be posted with the alias."""
         async def fake_stream(prompt):
@@ -674,7 +674,7 @@ class TestProcessMessageEdgeCases:
             await _process_message(
                 event,
                 "continue (session_id: abc-def-123)",
-                client, config, sessions,
+                client, config, sessions, queue,
             )
 
             # Should have posted a "Continuing session" announcement
@@ -691,7 +691,7 @@ class TestProcessMessageEdgeCases:
 
     @pytest.mark.asyncio
     async def test_repeated_init_events_do_not_generate_new_alias(
-        self, config, sessions, tmp_path
+        self, config, sessions, queue, tmp_path
     ):
         """When the SDK emits init on every query(), only the first should
         generate an alias.  Regression test for duplicate session aliases."""
@@ -717,7 +717,7 @@ class TestProcessMessageEdgeCases:
         ):
             # First message — should generate alias
             event1 = {"ts": "9200.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event1, "hello", client, config, sessions)
+            await _process_message(event1, "hello", client, config, sessions, queue)
 
             alias_posts_1 = [
                 c for c in client.chat_postMessage.call_args_list
@@ -736,7 +736,7 @@ class TestProcessMessageEdgeCases:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event2, "follow up", client, config, sessions)
+            await _process_message(event2, "follow up", client, config, sessions, queue)
 
             alias_posts_2 = [
                 c for c in client.chat_postMessage.call_args_list

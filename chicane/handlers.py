@@ -18,12 +18,16 @@ from .claude import ClaudeEvent
 from .config import Config, generate_session_alias, load_handoff_session, save_handoff_session
 from .emoji_map import emojis_for_alias
 from .sessions import SessionInfo, SessionStore
+from .slack_queue import SlackMessageQueue
 
 logger = logging.getLogger(__name__)
 security_logger = logging.getLogger("chicane.security")
 
 # Max message length for Slack
 SLACK_MAX_LENGTH = 3900
+
+# Maximum tool activities to batch before flushing to Slack.
+_MAX_ACTIVITY_BATCH = 10
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +124,11 @@ _SESSION_ALIAS_RE = re.compile(r"_?\(session:\s*([a-z]+(?:-[a-z]+)+)\)_?\s*$")
 # Their tool_result blocks are silently dropped even in verbose mode.
 _QUIET_TOOLS = frozenset({"Read"})
 
+# Tools that are completely suppressed — no activity notifications, no error
+# messages.  These are interactive tools that always fail in streamed mode
+# (the system prompt says not to use them, but Claude sometimes tries anyway).
+_SILENT_TOOLS = frozenset({"EnterPlanMode", "ExitPlanMode", "AskUserQuestion"})
+
 # Emoji legend posted once per thread (after first completion).
 _EMOJI_LEGEND = (
     ":eyes: working · "
@@ -148,6 +157,7 @@ def _should_show(event_type: str, verbosity: str) -> bool:
 
 def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> None:
     """Register all Slack event handlers on the app."""
+    queue = SlackMessageQueue()
     bot_user_id: str | None = None
     processed_ts: dict[str, None] = {}  # ordered dict (insertion order) for LRU eviction
 
@@ -207,7 +217,7 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
         if not text and not event.get("files") and not is_thread_reply:
             return
 
-        await _process_message(event, text or "", client, config, sessions)
+        await _process_message(event, text or "", client, config, sessions, queue)
 
     @app.event("message")
     async def handle_message(event: dict, client: AsyncWebClient) -> None:
@@ -237,7 +247,7 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
                 return
             if await _check_rate_limit(event, client):
                 return
-            await _process_message(event, text, client, config, sessions)
+            await _process_message(event, text, client, config, sessions, queue)
             return
 
         # Channel thread follow-ups: respond if it's a reply in a thread
@@ -259,7 +269,7 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
                     return
                 if await _check_rate_limit(event, client):
                     return
-                await _process_message(event, text, client, config, sessions)
+                await _process_message(event, text, client, config, sessions, queue)
                 return
             # Not a Chicane thread — don't claim the ts so app_mention
             # can still handle @mentions in unknown threads.
@@ -279,7 +289,7 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
                 return
             clean_text = re.sub(r"<@[A-Z0-9]+>\s*", "", text).strip()
             if clean_text:
-                await _process_message(event, clean_text, client, config, sessions)
+                await _process_message(event, clean_text, client, config, sessions, queue)
 
     @app.event("reaction_added")
     async def handle_reaction(event: dict, client: AsyncWebClient) -> None:
@@ -309,10 +319,10 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
 
         if session_info.session.is_streaming:
             await session_info.session.interrupt()
-            await client.chat_postMessage(
-                channel=item_channel,
-                thread_ts=thread_ts,
-                text=":stop_sign: _Interrupted by user_",
+            queue.ensure_client(client)
+            await queue.post_message(
+                item_channel, thread_ts,
+                ":stop_sign: _Interrupted by user_",
             )
 
 
@@ -334,8 +344,10 @@ async def _process_message(
     client: AsyncWebClient,
     config: Config,
     sessions: SessionStore,
+    queue: SlackMessageQueue,
 ) -> None:
     """Process a message by sending it to Claude and streaming the response."""
+    queue.ensure_client(client)
     channel = event["channel"]
     thread_ts = event.get("thread_ts", event["ts"])
     user = event.get("user", "unknown")
@@ -502,6 +514,22 @@ async def _process_message(
         tool_id_to_name: dict[str, str] = {}  # tool_use_id → tool name
         stale_context_prompt: str | None = None  # set during init if session was stale
 
+        # Tool activity batching — accumulate consecutive activities and
+        # post as a single message to reduce Slack API calls.
+        pending_activities: list[str] = []
+        first_activity_posted = False  # reset per tool sequence
+
+        async def _flush_activities() -> None:
+            """Post accumulated tool activities as a single combined message."""
+            nonlocal pending_activities
+            if not pending_activities:
+                return
+            combined = "\n".join(pending_activities)
+            pending_activities = []
+            for act_chunk in _split_message(combined):
+                act_result = await queue.post_message(channel, thread_ts, act_chunk)
+                sessions.register_bot_message(act_result.ts, thread_ts)
+
         try:
             async for event_data in session.stream(prompt):
                 event_count += 1
@@ -520,20 +548,28 @@ async def _process_message(
                     show_activities = _should_show("tool_activity", config.verbosity)
 
                     if show_activities and activities and full_text:
+                        await _flush_activities()
                         for chunk in _split_message(_markdown_to_mrkdwn(full_text)):
-                            r = await client.chat_postMessage(
-                                channel=channel, thread_ts=thread_ts, text=chunk,
-                            )
-                            sessions.register_bot_message(r["ts"], thread_ts)
+                            r = await queue.post_message(channel, thread_ts, chunk)
+                            sessions.register_bot_message(r.ts, thread_ts)
                         full_text = ""
+                        first_activity_posted = False
 
-                    # Post tool activity
-                    if show_activities:
-                        for activity in activities:
-                            r = await client.chat_postMessage(
-                                channel=channel, thread_ts=thread_ts, text=activity,
+                    # Post tool activity (first one immediately, rest batched)
+                    if show_activities and activities:
+                        if not first_activity_posted:
+                            # Post first activity immediately for instant feedback
+                            r = await queue.post_message(
+                                channel, thread_ts, activities[0],
                             )
-                            sessions.register_bot_message(r["ts"], thread_ts)
+                            sessions.register_bot_message(r.ts, thread_ts)
+                            first_activity_posted = True
+                            pending_activities.extend(activities[1:])
+                        else:
+                            pending_activities.extend(activities)
+                        # Flush if batch is getting large
+                        if len(pending_activities) >= _MAX_ACTIVITY_BATCH:
+                            await _flush_activities()
 
                     # Detect file edits — add pencil reaction to thread root
                     if not files_changed and _has_file_edit(event_data):
@@ -574,6 +610,8 @@ async def _process_message(
                         full_text += chunk
 
                 elif event_data.type == "result":
+                    await _flush_activities()
+                    first_activity_posted = False
                     result_event = event_data
                     # Prefer whichever is longer — streamed text preserves
                     # formatting but could miss chunks; result blob is
@@ -583,14 +621,18 @@ async def _process_message(
                         full_text = result_text
 
                 elif event_data.type == "user":
+                    await _flush_activities()
+                    first_activity_posted = False
                     # Check for tool errors in user events (tool results)
                     if _should_show("tool_error", config.verbosity):
-                        for error_msg in event_data.tool_errors:
+                        for tool_use_id, error_msg in event_data.tool_errors:
+                            tool_name = tool_id_to_name.get(tool_use_id, "")
+                            if tool_name in _SILENT_TOOLS:
+                                continue
                             truncated = (error_msg[:200] + "...") if len(error_msg) > 200 else error_msg
-                            await client.chat_postMessage(
-                                channel=channel,
-                                thread_ts=thread_ts,
-                                text=f":warning: Tool error: {truncated}",
+                            await queue.post_message(
+                                channel, thread_ts,
+                                f":warning: Tool error: {truncated}",
                             )
 
                     # Show tool outputs in verbose mode (skip noisy tools)
@@ -605,16 +647,17 @@ async def _process_message(
                                     client, channel, thread_ts,
                                     result_text,
                                     initial_comment=":clipboard: Tool output (uploaded as snippet):",
+                                    queue=queue,
                                 )
                             else:
                                 wrapped = f":clipboard: Tool output:\n```\n{result_text}\n```"
-                                await client.chat_postMessage(
-                                    channel=channel,
-                                    thread_ts=thread_ts,
-                                    text=wrapped,
+                                await queue.post_message(
+                                    channel, thread_ts, wrapped,
                                 )
 
                 elif event_data.type == "system" and event_data.subtype == "init":
+                    await _flush_activities()
+                    first_activity_posted = False
                     # Session init — either resuming an existing session or
                     # starting a brand new one.  Post an informative message
                     # so users know which case it is.
@@ -659,15 +702,12 @@ async def _process_message(
                             save_handoff_session(alias, sid)
                             session_info.session_alias = alias
                             old_ref = resumed_alias or handoff_session_id[:12] + "…"
-                            await client.chat_postMessage(
-                                channel=channel,
-                                thread_ts=thread_ts,
-                                text=(
-                                    f":warning: Couldn't restore previous session"
-                                    f" _{old_ref}_ (session data no longer exists)."
-                                    f" Rebuilding context from thread history."
-                                    f"\n_(session: {alias})_"
-                                ),
+                            await queue.post_message(
+                                channel, thread_ts,
+                                f":warning: Couldn't restore previous session"
+                                f" _{old_ref}_ (session data no longer exists)."
+                                f" Rebuilding context from thread history."
+                                f"\n_(session: {alias})_",
                             )
                         elif handoff_session_id or resumed_alias:
                             # Resuming an existing session (handoff or reconnect)
@@ -692,10 +732,8 @@ async def _process_message(
                                 else:
                                     msg += f"\n({session_search.total_found} sessions found in thread, using most recent)"
                             msg += f"\n_(session: {alias})_"
-                            await client.chat_postMessage(
-                                channel=channel,
-                                thread_ts=thread_ts,
-                                text=msg,
+                            await queue.post_message(
+                                channel, thread_ts, msg,
                             )
                         elif (
                             session_search
@@ -711,25 +749,21 @@ async def _process_message(
                             unmapped_list = ", ".join(
                                 f"_{a}_" for a in session_search.unmapped_aliases
                             )
-                            await client.chat_postMessage(
-                                channel=channel,
-                                thread_ts=thread_ts,
-                                text=(
-                                    f":warning: Found previous session(s)"
-                                    f" {unmapped_list} in thread but"
-                                    f" couldn't reconnect (session map lost)."
-                                    f" Starting fresh.\n_(session: {alias})_"
-                                ),
+                            await queue.post_message(
+                                channel, thread_ts,
+                                f":warning: Found previous session(s)"
+                                f" {unmapped_list} in thread but"
+                                f" couldn't reconnect (session map lost)."
+                                f" Starting fresh.\n_(session: {alias})_",
                             )
                         else:
                             # Brand new session — no prior references found
                             alias = generate_session_alias()
                             save_handoff_session(alias, sid)
                             session_info.session_alias = alias
-                            await client.chat_postMessage(
-                                channel=channel,
-                                thread_ts=thread_ts,
-                                text=f":sparkles: New session\n_(session: {alias})_",
+                            await queue.post_message(
+                                channel, thread_ts,
+                                f":sparkles: New session\n_(session: {alias})_",
                             )
 
                         # Add emoji reactions matching the alias
@@ -742,6 +776,8 @@ async def _process_message(
                         )
 
                 elif event_data.type == "system" and event_data.subtype == "compact_boundary":
+                    await _flush_activities()
+                    first_activity_posted = False
                     if _should_show("compact_boundary", config.verbosity):
                         meta = event_data.compact_metadata or {}
                         trigger = meta.get("trigger", "auto")
@@ -753,26 +789,27 @@ async def _process_message(
                         if pre_tokens:
                             note += f" ({pre_tokens:,} tokens before)"
                         note += " — earlier messages may be summarized"
-                        await client.chat_postMessage(
-                            channel=channel, thread_ts=thread_ts, text=note,
+                        await queue.post_message(
+                            channel, thread_ts, note,
                         )
 
                 else:
                     logger.debug(f"Event type={event_data.type} subtype={event_data.subtype}")
 
             # Handle interrupted stream — skip normal completion flow
+            await _flush_activities()
             if session.was_interrupted:
                 if session.interrupt_source == "new_message":
                     # New message will process next — post partial text, then note
                     if full_text:
                         mrkdwn = _markdown_to_mrkdwn(full_text)
                         for chunk in _split_message(mrkdwn):
-                            await client.chat_postMessage(
-                                channel=channel, thread_ts=thread_ts, text=chunk,
+                            await queue.post_message(
+                                channel, thread_ts, chunk,
                             )
-                    await client.chat_postMessage(
-                        channel=channel, thread_ts=thread_ts,
-                        text=":bulb: _Thought added_",
+                    await queue.post_message(
+                        channel, thread_ts,
+                        ":bulb: _Thought added_",
                     )
                     try:
                         await client.reactions_remove(
@@ -787,12 +824,12 @@ async def _process_message(
                     if full_text:
                         mrkdwn = _markdown_to_mrkdwn(full_text)
                         for chunk in _split_message(mrkdwn):
-                            await client.chat_postMessage(
-                                channel=channel, thread_ts=thread_ts, text=chunk,
+                            await queue.post_message(
+                                channel, thread_ts, chunk,
                             )
-                    await client.chat_postMessage(
-                        channel=channel, thread_ts=thread_ts,
-                        text=":stop_sign: _Interrupted_",
+                    await queue.post_message(
+                        channel, thread_ts,
+                        ":stop_sign: _Interrupted_",
                     )
                     # Swap eyes → stop sign reaction on user's message
                     try:
@@ -818,11 +855,11 @@ async def _process_message(
                 mrkdwn = _markdown_to_mrkdwn(full_text)
 
                 if len(mrkdwn) > SNIPPET_THRESHOLD:
-                    await _send_snippet(client, channel, thread_ts, mrkdwn)
+                    await _send_snippet(client, channel, thread_ts, mrkdwn, queue=queue)
                 else:
                     for chunk in _split_message(mrkdwn):
-                        await client.chat_postMessage(
-                            channel=channel, thread_ts=thread_ts, text=chunk,
+                        await queue.post_message(
+                            channel, thread_ts, chunk,
                         )
             else:
                 logger.warning(
@@ -836,10 +873,8 @@ async def _process_message(
                     "Please close that Claude Code session first (type `/exit` or quit), "
                     "then try again."
                 )
-                await client.chat_postMessage(
-                    channel=channel,
-                    thread_ts=thread_ts,
-                    text=msg,
+                await queue.post_message(
+                    channel, thread_ts, msg,
                 )
 
             # Update cumulative session stats and post completion summary
@@ -852,17 +887,15 @@ async def _process_message(
 
                 summary = _format_completion_summary(result_event, session_info)
                 if summary:
-                    await client.chat_postMessage(
-                        channel=channel, thread_ts=thread_ts, text=summary,
+                    await queue.post_message(
+                        channel, thread_ts, summary,
                     )
 
                 # Post emoji legend on the first completion in a thread
                 # (only for follow-up messages where thread-root emojis are used)
                 if session_info.total_requests == 1 and thread_ts != event["ts"]:
-                    await client.chat_postMessage(
-                        channel=channel,
-                        thread_ts=thread_ts,
-                        text=_EMOJI_LEGEND,
+                    await queue.post_message(
+                        channel, thread_ts, _EMOJI_LEGEND,
                     )
 
                 # Surface permission denials so users know why tools were blocked
@@ -878,8 +911,8 @@ async def _process_message(
                         f"{'s' if len(denials) != 1 else ''}"
                         f" denied: {', '.join(f'`{n}`' for n in names)}"
                     )
-                    await client.chat_postMessage(
-                        channel=channel, thread_ts=thread_ts, text=note,
+                    await queue.post_message(
+                        channel, thread_ts, note,
                     )
                     # Thread-root: :warning: signals "completed but something was blocked"
                     await _add_thread_reaction(client, channel, session_info, "warning")
@@ -1418,6 +1451,10 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
         tool_name = block.get("name", "unknown")
         tool_input = block.get("input", {})
 
+        # Skip tools that always fail in streamed mode — no point showing them.
+        if tool_name in _SILENT_TOOLS:
+            continue
+
         if tool_name == "Read":
             file_path = tool_input.get("file_path", "")
             basename = Path(file_path).name if file_path else "file"
@@ -1569,10 +1606,6 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
                 activities.append(f":notebook: {verb} notebook `{basename}` — {detail}")
             else:
                 activities.append(f":notebook: {verb} notebook `{basename}`")
-        elif tool_name == "EnterPlanMode":
-            activities.append(":clipboard: Entering plan mode")
-        elif tool_name == "ExitPlanMode":
-            activities.append(":clipboard: Exiting plan mode")
         elif tool_name == "ToolSearch":
             query = tool_input.get("query", "")
             if query:
@@ -1612,25 +1645,6 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
                 activities.append("\n".join(lines))
             else:
                 activities.append(":clipboard: Updating tasks")
-        elif tool_name == "AskUserQuestion":
-            questions = tool_input.get("questions", [])
-            if questions:
-                lines = [":question: *Claude is asking:*"]
-                for q in questions:
-                    text = q.get("question", "")
-                    if text:
-                        lines.append(f"  {text}")
-                    options = q.get("options", [])
-                    for opt in options:
-                        label = opt.get("label", "")
-                        desc = opt.get("description", "")
-                        if label and desc:
-                            lines.append(f"    • *{label}* — {desc}")
-                        elif label:
-                            lines.append(f"    • *{label}*")
-                activities.append("\n".join(lines))
-            else:
-                activities.append(":question: Asking user a question")
         else:
             # Clean up tool names for display: strip MCP prefixes
             # (mcp__server__tool → Tool), split snake/camel case.
@@ -1851,6 +1865,7 @@ async def _send_snippet(
     *,
     filename: str = "response.txt",
     snippet_type: str | None = None,
+    queue: SlackMessageQueue | None = None,
     _max_attempts: int = 2,
     _retry_delay: float = 2.0,
     _step_delay: float = 0.5,
@@ -1862,6 +1877,9 @@ async def _send_snippet(
 
     Pass *snippet_type* (e.g. ``"diff"``) to request Slack syntax
     highlighting for that file type.
+
+    If *queue* is provided, fallback ``chat_postMessage`` calls are
+    routed through the throttled queue.
     """
     # Strip control characters (except \n, \r, \t) that can cause Slack
     # to classify the upload as "Binary" instead of displayable text.
@@ -1898,14 +1916,20 @@ async def _send_snippet(
         _max_attempts,
         exc_info=last_exc,
     )
-    if initial_comment:
-        await client.chat_postMessage(
-            channel=channel, thread_ts=thread_ts, text=initial_comment,
-        )
-    for chunk in _split_message(text):
-        await client.chat_postMessage(
-            channel=channel, thread_ts=thread_ts, text=chunk,
-        )
+    if queue is not None:
+        if initial_comment:
+            await queue.post_message(channel, thread_ts, initial_comment)
+        for chunk in _split_message(text):
+            await queue.post_message(channel, thread_ts, chunk)
+    else:
+        if initial_comment:
+            await client.chat_postMessage(
+                channel=channel, thread_ts=thread_ts, text=initial_comment,
+            )
+        for chunk in _split_message(text):
+            await client.chat_postMessage(
+                channel=channel, thread_ts=thread_ts, text=chunk,
+            )
 
 
 def _split_message(text: str) -> list[str]:

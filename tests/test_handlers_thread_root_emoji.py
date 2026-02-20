@@ -65,7 +65,7 @@ class TestThreadRootEyesOnStart:
     """On follow-up messages, :eyes: is added to the thread root."""
 
     @pytest.mark.asyncio
-    async def test_eyes_added_to_thread_root(self, config, sessions):
+    async def test_eyes_added_to_thread_root(self, config, sessions, queue):
         """Follow-up message adds :eyes: to thread_ts."""
         async def fake_stream(prompt):
             yield make_event("result", text="done")
@@ -83,14 +83,14 @@ class TestThreadRootEyesOnStart:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "follow up", client, config, sessions)
+            await _process_message(event, "follow up", client, config, sessions, queue)
 
         # :eyes: added to both user message and thread root
         assert _reactions_by_name(client, "reactions_add", "eyes", "2000.0") >= 1
         assert _reactions_by_name(client, "reactions_add", "eyes", "1000.0") >= 1
 
     @pytest.mark.asyncio
-    async def test_no_duplicate_eyes_on_first_message(self, config, sessions):
+    async def test_no_duplicate_eyes_on_first_message(self, config, sessions, queue):
         """First message in thread (thread_ts == event ts) — no double :eyes:."""
         async def fake_stream(prompt):
             yield make_event("result", text="done")
@@ -107,7 +107,7 @@ class TestThreadRootEyesOnStart:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "hello", client, config, sessions)
+            await _process_message(event, "hello", client, config, sessions, queue)
 
         # :eyes: only added once (to event ts, which IS the thread root)
         assert _reactions_by_name(client, "reactions_add", "eyes", "1000.0") == 1
@@ -117,7 +117,7 @@ class TestThreadRootClearsPreviousState:
     """New messages clear previous status emojis from thread root."""
 
     @pytest.mark.asyncio
-    async def test_checkmark_removed_on_new_message(self, config, sessions):
+    async def test_checkmark_removed_on_new_message(self, config, sessions, queue):
         """Previous :white_check_mark: is removed when a new message arrives."""
         async def fake_stream(prompt):
             yield make_event("result", text="done")
@@ -138,12 +138,12 @@ class TestThreadRootClearsPreviousState:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "follow up", client, config, sessions)
+            await _process_message(event, "follow up", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_remove", "white_check_mark", "1000.0") >= 1
 
     @pytest.mark.asyncio
-    async def test_error_x_removed_on_new_message(self, config, sessions):
+    async def test_error_x_removed_on_new_message(self, config, sessions, queue):
         """Previous :x: is removed when a new message arrives."""
         async def fake_stream(prompt):
             yield make_event("result", text="done")
@@ -163,12 +163,12 @@ class TestThreadRootClearsPreviousState:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "retry", client, config, sessions)
+            await _process_message(event, "retry", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_remove", "x", "1000.0") >= 1
 
     @pytest.mark.asyncio
-    async def test_stop_sign_removed_on_new_message(self, config, sessions):
+    async def test_stop_sign_removed_on_new_message(self, config, sessions, queue):
         """Previous :octagonal_sign: is removed when a new message arrives."""
         async def fake_stream(prompt):
             yield make_event("result", text="done")
@@ -188,12 +188,12 @@ class TestThreadRootClearsPreviousState:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "continue", client, config, sessions)
+            await _process_message(event, "continue", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_remove", "octagonal_sign", "1000.0") >= 1
 
     @pytest.mark.asyncio
-    async def test_speech_balloon_removed_on_new_message(self, config, sessions):
+    async def test_speech_balloon_removed_on_new_message(self, config, sessions, queue):
         """Previous :speech_balloon: is removed when a new message arrives."""
         async def fake_stream(prompt):
             yield make_event("result", text="done")
@@ -213,12 +213,12 @@ class TestThreadRootClearsPreviousState:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "answer", client, config, sessions)
+            await _process_message(event, "answer", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_remove", "speech_balloon", "1000.0") >= 1
 
     @pytest.mark.asyncio
-    async def test_warning_removed_on_new_message(self, config, sessions):
+    async def test_warning_removed_on_new_message(self, config, sessions, queue):
         """Previous :warning: is removed when a new message arrives."""
         async def fake_stream(prompt):
             yield make_event("result", text="done")
@@ -238,7 +238,7 @@ class TestThreadRootClearsPreviousState:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "retry", client, config, sessions)
+            await _process_message(event, "retry", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_remove", "warning", "1000.0") >= 1
 
@@ -248,7 +248,7 @@ class TestThreadRootCheckmarkOnCompletion:
     """On successful completion, :white_check_mark: is added to thread root."""
 
     @pytest.mark.asyncio
-    async def test_checkmark_added_to_thread_root(self, config, sessions):
+    async def test_checkmark_added_to_thread_root(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event("result", text="all done")
 
@@ -265,12 +265,12 @@ class TestThreadRootCheckmarkOnCompletion:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "do it", client, config, sessions)
+            await _process_message(event, "do it", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_add", "white_check_mark", "1000.0") >= 1
 
     @pytest.mark.asyncio
-    async def test_eyes_removed_from_thread_root_on_completion(self, config, sessions):
+    async def test_eyes_removed_from_thread_root_on_completion(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event("result", text="done")
 
@@ -287,12 +287,12 @@ class TestThreadRootCheckmarkOnCompletion:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "go", client, config, sessions)
+            await _process_message(event, "go", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_remove", "eyes", "1000.0") >= 1
 
     @pytest.mark.asyncio
-    async def test_speech_balloon_removed_on_completion(self, config, sessions):
+    async def test_speech_balloon_removed_on_completion(self, config, sessions, queue):
         """If :speech_balloon: was added during stream, it's cleared at completion."""
         async def fake_stream(prompt):
             yield make_tool_event(
@@ -314,7 +314,7 @@ class TestThreadRootCheckmarkOnCompletion:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "do", client, config, sessions)
+            await _process_message(event, "do", client, config, sessions, queue)
 
         # speech_balloon should be added during stream then removed at completion
         assert _reactions_by_name(client, "reactions_add", "speech_balloon", "1000.0") >= 1
@@ -325,7 +325,7 @@ class TestThreadRootErrorState:
     """On errors, :x: is added to thread root."""
 
     @pytest.mark.asyncio
-    async def test_x_added_to_thread_root_on_error(self, config, sessions):
+    async def test_x_added_to_thread_root_on_error(self, config, sessions, queue):
         async def exploding_stream(prompt):
             yield make_event("system", subtype="init", session_id="s1")
             raise RuntimeError("kaboom")
@@ -343,12 +343,12 @@ class TestThreadRootErrorState:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "break", client, config, sessions)
+            await _process_message(event, "break", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_add", "x", "1000.0") >= 1
 
     @pytest.mark.asyncio
-    async def test_eyes_removed_from_thread_root_on_error(self, config, sessions):
+    async def test_eyes_removed_from_thread_root_on_error(self, config, sessions, queue):
         async def exploding_stream(prompt):
             raise RuntimeError("boom")
 
@@ -365,7 +365,7 @@ class TestThreadRootErrorState:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "fail", client, config, sessions)
+            await _process_message(event, "fail", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_remove", "eyes", "1000.0") >= 1
 
@@ -374,7 +374,7 @@ class TestThreadRootInterruptState:
     """On user interrupt, :octagonal_sign: replaces :eyes: on thread root."""
 
     @pytest.mark.asyncio
-    async def test_stop_sign_on_thread_root_after_reaction_interrupt(self, config, sessions):
+    async def test_stop_sign_on_thread_root_after_reaction_interrupt(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event("assistant", text="partial")
 
@@ -396,7 +396,7 @@ class TestThreadRootInterruptState:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "work", client, config, sessions)
+            await _process_message(event, "work", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_add", "octagonal_sign", "1000.0") >= 1
         assert _reactions_by_name(client, "reactions_remove", "eyes", "1000.0") >= 1
@@ -406,7 +406,7 @@ class TestThreadRootFirstMessage:
     """First message in thread — thread_ts == event ts, no separate thread-root reactions."""
 
     @pytest.mark.asyncio
-    async def test_first_message_no_thread_root_remove(self, config, sessions):
+    async def test_first_message_no_thread_root_remove(self, config, sessions, queue):
         """For the first message, we don't try to remove old reactions from thread root
         (since thread_ts == event ts, the per-message reactions serve as thread root)."""
         async def fake_stream(prompt):
@@ -424,7 +424,7 @@ class TestThreadRootFirstMessage:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "hello", client, config, sessions)
+            await _process_message(event, "hello", client, config, sessions, queue)
 
         # Should not try to remove white_check_mark/x/octagonal_sign from thread root
         # separately — only the per-message swap (eyes → checkmark) happens
@@ -441,7 +441,7 @@ class TestThreadRootReactionFailuresIgnored:
     """Thread-root reaction failures don't break the flow."""
 
     @pytest.mark.asyncio
-    async def test_reaction_api_errors_swallowed(self, config, sessions):
+    async def test_reaction_api_errors_swallowed(self, config, sessions, queue):
         """If the Slack API rejects reaction calls, processing continues."""
         async def fake_stream(prompt):
             yield make_event("result", text="done")
@@ -463,7 +463,7 @@ class TestThreadRootReactionFailuresIgnored:
                 "user": "UHUMAN1",
             }
             # Should complete without raising
-            await _process_message(event, "hello", client, config, sessions)
+            await _process_message(event, "hello", client, config, sessions, queue)
 
         # The text response should still be posted
         client.chat_postMessage.assert_called()
@@ -497,7 +497,7 @@ class TestThreadRootSpeechBalloon:
     """AskUserQuestion adds :speech_balloon: to thread root."""
 
     @pytest.mark.asyncio
-    async def test_speech_balloon_added_when_question_asked(self, config, sessions):
+    async def test_speech_balloon_added_when_question_asked(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_tool_event(
                 tool_block("AskUserQuestion",
@@ -518,12 +518,12 @@ class TestThreadRootSpeechBalloon:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "do stuff", client, config, sessions)
+            await _process_message(event, "do stuff", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_add", "speech_balloon", "1000.0") >= 1
 
     @pytest.mark.asyncio
-    async def test_no_speech_balloon_without_question(self, config, sessions):
+    async def test_no_speech_balloon_without_question(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_tool_event(tool_block("Read", file_path="/tmp/x"))
             yield make_event("result", text="ok")
@@ -541,7 +541,7 @@ class TestThreadRootSpeechBalloon:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "read file", client, config, sessions)
+            await _process_message(event, "read file", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_add", "speech_balloon", "1000.0") == 0
 
@@ -555,7 +555,7 @@ class TestThreadRootHourglass:
     """Hourglass is shown when a message is queued behind the lock."""
 
     @pytest.mark.asyncio
-    async def test_hourglass_added_when_lock_contended(self, config, sessions):
+    async def test_hourglass_added_when_lock_contended(self, config, sessions, queue):
         """When the lock is already held, :hourglass: is added then removed."""
         async def fake_stream(prompt):
             yield make_event("result", text="done")
@@ -595,7 +595,7 @@ class TestThreadRootHourglass:
                 "user": "UHUMAN1",
             }
             with patch.object(sessions, "get_or_create", return_value=info):
-                await _process_message(event, "queued msg", client, config, sessions)
+                await _process_message(event, "queued msg", client, config, sessions, queue)
 
         # Start _process_message (will block on lock)
         task = asyncio.create_task(run_process())
@@ -612,7 +612,7 @@ class TestThreadRootHourglass:
         assert _reactions_by_name(client, "reactions_remove", "hourglass", "1000.0") >= 1
 
     @pytest.mark.asyncio
-    async def test_no_hourglass_when_lock_free(self, config, sessions):
+    async def test_no_hourglass_when_lock_free(self, config, sessions, queue):
         """When the lock is free, no :hourglass: is added."""
         async def fake_stream(prompt):
             yield make_event("result", text="done")
@@ -630,7 +630,7 @@ class TestThreadRootHourglass:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "no wait", client, config, sessions)
+            await _process_message(event, "no wait", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_add", "hourglass", "1000.0") == 0
 
@@ -644,7 +644,7 @@ class TestThreadRootWarning:
     """Warning emoji added when permissions were denied."""
 
     @pytest.mark.asyncio
-    async def test_warning_added_on_permission_denial(self, config, sessions):
+    async def test_warning_added_on_permission_denial(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event(
                 "result",
@@ -669,12 +669,12 @@ class TestThreadRootWarning:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "run bash", client, config, sessions)
+            await _process_message(event, "run bash", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_add", "warning", "1000.0") >= 1
 
     @pytest.mark.asyncio
-    async def test_no_warning_without_denials(self, config, sessions):
+    async def test_no_warning_without_denials(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event(
                 "result",
@@ -696,7 +696,7 @@ class TestThreadRootWarning:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "ok", client, config, sessions)
+            await _process_message(event, "ok", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_add", "warning", "1000.0") == 0
 
@@ -740,7 +740,7 @@ class TestThreadRootQuestionCompletion:
     """When Claude's final response ends with ?, speech_balloon is set instead of checkmark."""
 
     @pytest.mark.asyncio
-    async def test_speech_balloon_on_question_text(self, config, sessions):
+    async def test_speech_balloon_on_question_text(self, config, sessions, queue):
         """Response ending with '?' gets speech_balloon, not white_check_mark."""
         async def fake_stream(prompt):
             yield make_event("assistant", text="Should I proceed with this approach?")
@@ -759,14 +759,14 @@ class TestThreadRootQuestionCompletion:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "do stuff", client, config, sessions)
+            await _process_message(event, "do stuff", client, config, sessions, queue)
 
         # Should have speech_balloon, NOT white_check_mark
         assert _reactions_by_name(client, "reactions_add", "speech_balloon", "1000.0") >= 1
         assert _reactions_by_name(client, "reactions_add", "white_check_mark", "1000.0") == 0
 
     @pytest.mark.asyncio
-    async def test_checkmark_on_non_question_text(self, config, sessions):
+    async def test_checkmark_on_non_question_text(self, config, sessions, queue):
         """Response NOT ending with '?' gets white_check_mark as usual."""
         async def fake_stream(prompt):
             yield make_event("assistant", text="All done.")
@@ -785,14 +785,14 @@ class TestThreadRootQuestionCompletion:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "do stuff", client, config, sessions)
+            await _process_message(event, "do stuff", client, config, sessions, queue)
 
         # Should have white_check_mark, NOT speech_balloon
         assert _reactions_by_name(client, "reactions_add", "white_check_mark", "1000.0") >= 1
         assert _reactions_by_name(client, "reactions_add", "speech_balloon", "1000.0") == 0
 
     @pytest.mark.asyncio
-    async def test_speech_balloon_cleared_when_next_msg_arrives(self, config, sessions):
+    async def test_speech_balloon_cleared_when_next_msg_arrives(self, config, sessions, queue):
         """When a new message arrives, old speech_balloon is cleared."""
         async def fake_stream(prompt):
             yield make_event("result", text="done")
@@ -814,7 +814,7 @@ class TestThreadRootQuestionCompletion:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "here's my answer", client, config, sessions)
+            await _process_message(event, "here's my answer", client, config, sessions, queue)
 
         # speech_balloon from previous turn should be removed during cleanup
         assert _reactions_by_name(client, "reactions_remove", "speech_balloon", "1000.0") >= 1
@@ -829,7 +829,7 @@ class TestCumulativeStatsAccumulation:
     """Stats (requests, turns, cost) accumulate across multiple messages."""
 
     @pytest.mark.asyncio
-    async def test_stats_updated_on_completion(self, config, sessions):
+    async def test_stats_updated_on_completion(self, config, sessions, queue):
         """total_requests, total_turns, total_cost_usd are updated from result event."""
         async def fake_stream(prompt):
             yield make_event("result", text="done", num_turns=5, duration_ms=8000,
@@ -850,14 +850,14 @@ class TestCumulativeStatsAccumulation:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "do stuff", client, config, sessions)
+            await _process_message(event, "do stuff", client, config, sessions, queue)
 
         assert info.total_requests == 1
         assert info.total_turns == 5
         assert info.total_cost_usd == 0.10
 
     @pytest.mark.asyncio
-    async def test_stats_accumulate_across_requests(self, config, sessions):
+    async def test_stats_accumulate_across_requests(self, config, sessions, queue):
         """Running two messages accumulates stats."""
         call_count = 0
 
@@ -885,7 +885,7 @@ class TestCumulativeStatsAccumulation:
                     "channel": "C_CHAN",
                     "user": "UHUMAN1",
                 }
-                await _process_message(event, f"msg {i}", client, config, sessions)
+                await _process_message(event, f"msg {i}", client, config, sessions, queue)
 
         assert info.total_requests == 2
         assert info.total_turns == 8
@@ -901,7 +901,7 @@ class TestEmojiLegend:
     """Emoji legend is posted once after the first follow-up completion."""
 
     @pytest.mark.asyncio
-    async def test_legend_posted_on_first_follow_up(self, config, sessions):
+    async def test_legend_posted_on_first_follow_up(self, config, sessions, queue):
         """First follow-up message in a thread posts the emoji legend."""
         async def fake_stream(prompt):
             yield make_event("result", text="done", num_turns=1, duration_ms=3000)
@@ -919,7 +919,7 @@ class TestEmojiLegend:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "do stuff", client, config, sessions)
+            await _process_message(event, "do stuff", client, config, sessions, queue)
 
         legend_posts = [
             c for c in client.chat_postMessage.call_args_list
@@ -928,7 +928,7 @@ class TestEmojiLegend:
         assert len(legend_posts) == 1
 
     @pytest.mark.asyncio
-    async def test_no_legend_on_first_message(self, config, sessions):
+    async def test_no_legend_on_first_message(self, config, sessions, queue):
         """First message (thread root, ts == thread_ts) — no legend needed."""
         async def fake_stream(prompt):
             yield make_event("result", text="done", num_turns=1, duration_ms=3000)
@@ -945,7 +945,7 @@ class TestEmojiLegend:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "hello", client, config, sessions)
+            await _process_message(event, "hello", client, config, sessions, queue)
 
         legend_posts = [
             c for c in client.chat_postMessage.call_args_list
@@ -954,7 +954,7 @@ class TestEmojiLegend:
         assert len(legend_posts) == 0
 
     @pytest.mark.asyncio
-    async def test_legend_not_repeated_on_second_request(self, config, sessions):
+    async def test_legend_not_repeated_on_second_request(self, config, sessions, queue):
         """Legend is only posted once — not on subsequent follow-ups."""
         call_count = 0
 
@@ -978,7 +978,7 @@ class TestEmojiLegend:
                     "channel": "C_CHAN",
                     "user": "UHUMAN1",
                 }
-                await _process_message(event, f"msg {i}", client, config, sessions)
+                await _process_message(event, f"msg {i}", client, config, sessions, queue)
 
         legend_posts = [
             c for c in client.chat_postMessage.call_args_list
@@ -1077,7 +1077,7 @@ class TestReconnectEmojiSync:
     """After restart, stale thread-root emojis are cleaned via sync."""
 
     @pytest.mark.asyncio
-    async def test_stale_checkmark_removed_on_reconnect(self, config, sessions):
+    async def test_stale_checkmark_removed_on_reconnect(self, config, sessions, queue):
         """After restart, old checkmark on thread root is synced and removed."""
         async def fake_stream(prompt):
             yield make_event("result", text="done")
@@ -1106,7 +1106,7 @@ class TestReconnectEmojiSync:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "follow up after restart", client, config, sessions)
+            await _process_message(event, "follow up after restart", client, config, sessions, queue)
 
         # Sync should have been called (reactions_get)
         client.reactions_get.assert_called_once()
@@ -1114,7 +1114,7 @@ class TestReconnectEmojiSync:
         assert _reactions_by_name(client, "reactions_remove", "white_check_mark", "1000.0") >= 1
 
     @pytest.mark.asyncio
-    async def test_stale_pencil2_removed_on_reconnect(self, config, sessions):
+    async def test_stale_pencil2_removed_on_reconnect(self, config, sessions, queue):
         """After restart, stale pencil2 on thread root is cleaned."""
         async def fake_stream(prompt):
             yield make_event("result", text="done")
@@ -1142,13 +1142,13 @@ class TestReconnectEmojiSync:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "after restart", client, config, sessions)
+            await _process_message(event, "after restart", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_remove", "pencil2", "1000.0") >= 1
         assert _reactions_by_name(client, "reactions_remove", "white_check_mark", "1000.0") >= 1
 
     @pytest.mark.asyncio
-    async def test_no_sync_for_existing_session(self, config, sessions):
+    async def test_no_sync_for_existing_session(self, config, sessions, queue):
         """Sync is skipped when session already has reactions tracked."""
         async def fake_stream(prompt):
             yield make_event("result", text="done")
@@ -1170,7 +1170,7 @@ class TestReconnectEmojiSync:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "follow up", client, config, sessions)
+            await _process_message(event, "follow up", client, config, sessions, queue)
 
         # reactions_get should NOT be called — we already have local state
         client.reactions_get.assert_not_called()
@@ -1185,7 +1185,7 @@ class TestErrorInterruptCleanupPencilPackage:
     """Error and interrupt paths clean up pencil2/package from streaming."""
 
     @pytest.mark.asyncio
-    async def test_pencil2_removed_on_error(self, config, sessions):
+    async def test_pencil2_removed_on_error(self, config, sessions, queue):
         """If pencil2 was added during streaming, error path removes it."""
         async def exploding_stream(prompt):
             yield make_event("system", subtype="init", session_id="s1")
@@ -1207,12 +1207,12 @@ class TestErrorInterruptCleanupPencilPackage:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "fail", client, config, sessions)
+            await _process_message(event, "fail", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_remove", "pencil2", "1000.0") >= 1
 
     @pytest.mark.asyncio
-    async def test_package_removed_on_error(self, config, sessions):
+    async def test_package_removed_on_error(self, config, sessions, queue):
         """If package was added during streaming, error path removes it."""
         async def exploding_stream(prompt):
             yield make_event("system", subtype="init", session_id="s1")
@@ -1233,12 +1233,12 @@ class TestErrorInterruptCleanupPencilPackage:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "fail", client, config, sessions)
+            await _process_message(event, "fail", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_remove", "package", "1000.0") >= 1
 
     @pytest.mark.asyncio
-    async def test_pencil2_removed_on_interrupt(self, config, sessions):
+    async def test_pencil2_removed_on_interrupt(self, config, sessions, queue):
         """If pencil2 was added during streaming, interrupt path removes it."""
         async def fake_stream(prompt):
             yield make_event("assistant", text="partial")
@@ -1262,12 +1262,12 @@ class TestErrorInterruptCleanupPencilPackage:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "work", client, config, sessions)
+            await _process_message(event, "work", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_remove", "pencil2", "1000.0") >= 1
 
     @pytest.mark.asyncio
-    async def test_package_removed_on_interrupt(self, config, sessions):
+    async def test_package_removed_on_interrupt(self, config, sessions, queue):
         """If package was added during streaming, interrupt path removes it."""
         async def fake_stream(prompt):
             yield make_event("assistant", text="partial")
@@ -1290,7 +1290,7 @@ class TestErrorInterruptCleanupPencilPackage:
                 "channel": "C_CHAN",
                 "user": "UHUMAN1",
             }
-            await _process_message(event, "work", client, config, sessions)
+            await _process_message(event, "work", client, config, sessions, queue)
 
         assert _reactions_by_name(client, "reactions_remove", "package", "1000.0") >= 1
 

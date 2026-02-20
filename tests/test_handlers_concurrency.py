@@ -15,7 +15,7 @@ class TestSessionLock:
     """Test that the per-session lock serializes concurrent messages."""
 
     @pytest.mark.asyncio
-    async def test_lock_serializes_concurrent_streams(self, config, sessions):
+    async def test_lock_serializes_concurrent_streams(self, config, sessions, queue):
         """Two concurrent _process_message calls on the same thread should
         serialize via the session lock — the first completes fully before
         the second starts streaming."""
@@ -45,8 +45,8 @@ class TestSessionLock:
             event_b = {"ts": "5001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
 
             await asyncio.gather(
-                _process_message(event_a, "first", client, config, sessions),
-                _process_message(event_b, "second", client, config, sessions),
+                _process_message(event_a, "first", client, config, sessions, queue),
+                _process_message(event_b, "second", client, config, sessions, queue),
             )
 
         # Both streams should have started and completed
@@ -62,7 +62,7 @@ class TestSessionLock:
         assert first_end < second_start
 
     @pytest.mark.asyncio
-    async def test_queued_message_processed_after_current(self, config, sessions):
+    async def test_queued_message_processed_after_current(self, config, sessions, queue):
         """When a second message arrives during streaming, it should be
         processed after the first completes — not dropped."""
         results = []
@@ -89,8 +89,8 @@ class TestSessionLock:
             event_b = {"ts": "6001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
 
             await asyncio.gather(
-                _process_message(event_a, "do X", client, config, sessions),
-                _process_message(event_b, "do Y", client, config, sessions),
+                _process_message(event_a, "do X", client, config, sessions, queue),
+                _process_message(event_b, "do Y", client, config, sessions, queue),
             )
 
         # Both messages should have been processed (not dropped)
@@ -98,7 +98,7 @@ class TestSessionLock:
         assert "do Y" in results
 
     @pytest.mark.asyncio
-    async def test_each_message_gets_own_response(self, config, sessions):
+    async def test_each_message_gets_own_response(self, config, sessions, queue):
         """Each queued message should produce its own response."""
         lock = asyncio.Lock()
 
@@ -122,8 +122,8 @@ class TestSessionLock:
             event_b = {"ts": "7001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
 
             await asyncio.gather(
-                _process_message(event_a, "first", client, config, sessions),
-                _process_message(event_b, "second", client, config, sessions),
+                _process_message(event_a, "first", client, config, sessions, queue),
+                _process_message(event_b, "second", client, config, sessions, queue),
             )
 
         # Each message should produce a "done" response
@@ -134,7 +134,7 @@ class TestSessionLock:
         assert len(done_posts) == 2
 
     @pytest.mark.asyncio
-    async def test_first_error_doesnt_block_second(self, config, sessions):
+    async def test_first_error_doesnt_block_second(self, config, sessions, queue):
         """If the first stream errors, the second should still be processed."""
         call_count = 0
         lock = asyncio.Lock()
@@ -163,8 +163,8 @@ class TestSessionLock:
             event_b = {"ts": "8001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
 
             await asyncio.gather(
-                _process_message(event_a, "first", client, config, sessions),
-                _process_message(event_b, "second", client, config, sessions),
+                _process_message(event_a, "first", client, config, sessions, queue),
+                _process_message(event_b, "second", client, config, sessions, queue),
             )
 
         # Both should have been attempted
@@ -178,7 +178,7 @@ class TestSessionLock:
         assert len(error_posts) == 1
 
     @pytest.mark.asyncio
-    async def test_different_threads_not_serialized(self, config):
+    async def test_different_threads_not_serialized(self, config, queue):
         """Messages in different threads should stream concurrently,
         not block each other."""
         sessions = SessionStore()
@@ -208,8 +208,8 @@ class TestSessionLock:
             config_obj = config  # avoid fixture naming conflict
 
             await asyncio.gather(
-                _process_message(event_a, "thread A msg", client, config_obj, sessions),
-                _process_message(event_b, "thread B msg", client, config_obj, sessions),
+                _process_message(event_a, "thread A msg", client, config_obj, sessions, queue),
+                _process_message(event_b, "thread B msg", client, config_obj, sessions, queue),
             )
 
         # Both should start before either ends (concurrent, not serialized)

@@ -9,6 +9,7 @@ import pytest
 from chicane.config import Config
 from chicane.claude import ClaudeEvent
 from chicane.sessions import SessionStore
+from chicane.slack_queue import SlackMessageQueue
 
 # Auto-incrementing counter for unique tool_use IDs in tests.
 _tool_id_counter = itertools.count(1)
@@ -36,6 +37,12 @@ def config_restricted():
 @pytest.fixture
 def sessions():
     return SessionStore()
+
+
+@pytest.fixture
+def queue():
+    """A SlackMessageQueue with zero throttle for tests."""
+    return SlackMessageQueue(min_interval=0.0)
 
 
 def make_event(type: str, text: str = "", **kwargs) -> ClaudeEvent:
@@ -156,7 +163,7 @@ def _make_fake_http_session():
 
 @pytest.fixture(autouse=True)
 def _patch_snippet_io():
-    """Eliminate real I/O and sleeps from _send_snippet in all tests."""
+    """Eliminate real I/O and sleeps from _send_snippet and slack_queue in all tests."""
 
     async def _instant_sleep(_delay):
         return
@@ -164,6 +171,7 @@ def _patch_snippet_io():
     with (
         patch("chicane.handlers.aiohttp.ClientSession", return_value=_make_fake_http_session()),
         patch("chicane.handlers.asyncio.sleep", side_effect=_instant_sleep),
+        patch("chicane.slack_queue.asyncio.sleep", side_effect=_instant_sleep),
     ):
         yield
 

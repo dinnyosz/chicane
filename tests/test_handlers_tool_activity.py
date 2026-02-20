@@ -381,15 +381,15 @@ class TestFormatToolActivity:
             ":notebook: Editing notebook `nb.ipynb` \u2014 markdown"
         ]
 
-    # --- Plan mode ---
+    # --- Silent tools (suppressed) ---
 
-    def test_enter_plan_mode_tool(self):
+    def test_enter_plan_mode_suppressed(self):
         event = make_tool_event(tool_block("EnterPlanMode"))
-        assert _format_tool_activity(event) == [":clipboard: Entering plan mode"]
+        assert _format_tool_activity(event) == []
 
-    def test_exit_plan_mode_tool(self):
+    def test_exit_plan_mode_suppressed(self):
         event = make_tool_event(tool_block("ExitPlanMode"))
-        assert _format_tool_activity(event) == [":clipboard: Exiting plan mode"]
+        assert _format_tool_activity(event) == []
 
     # --- ToolSearch ---
 
@@ -451,13 +451,13 @@ class TestFormatToolActivity:
         event = make_tool_event(tool_block("ReadMcpResourceTool"))
         assert _format_tool_activity(event) == [":card_index: Reading MCP resource"]
 
-    # --- AskUserQuestion ---
+    # --- AskUserQuestion (suppressed as silent tool) ---
 
-    def test_ask_user_question_tool(self):
+    def test_ask_user_question_suppressed(self):
         event = make_tool_event(tool_block("AskUserQuestion"))
-        assert _format_tool_activity(event) == [":question: Asking user a question"]
+        assert _format_tool_activity(event) == []
 
-    def test_ask_user_question_with_content(self):
+    def test_ask_user_question_with_content_suppressed(self):
         event = make_tool_event(
             tool_block(
                 "AskUserQuestion",
@@ -475,15 +475,9 @@ class TestFormatToolActivity:
             )
         )
         result = _format_tool_activity(event)
-        assert len(result) == 1
-        text = result[0]
-        assert ":question: *Claude is asking:*" in text
-        assert "Which database should we use?" in text
-        assert "*PostgreSQL*" in text
-        assert "Relational, battle-tested" in text
-        assert "*SQLite*" in text
+        assert result == []
 
-    def test_ask_user_question_label_only_option(self):
+    def test_ask_user_question_label_only_suppressed(self):
         event = make_tool_event(
             tool_block(
                 "AskUserQuestion",
@@ -500,10 +494,7 @@ class TestFormatToolActivity:
                 ],
             )
         )
-        result = _format_tool_activity(event)
-        text = result[0]
-        assert "*Yes*" in text
-        assert "*No*" in text
+        assert _format_tool_activity(event) == []
 
     def test_todo_write_with_tasks(self):
         event = make_tool_event(
@@ -680,7 +671,7 @@ class TestToolActivityStreaming:
     """Test that tool activities are posted correctly during streaming."""
 
     @pytest.mark.asyncio
-    async def test_first_tool_activity_posted_as_reply(self, config, sessions):
+    async def test_first_tool_activity_posted_as_reply(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_tool_event(
                 tool_block("Read", file_path="/src/config.py")
@@ -696,7 +687,7 @@ class TestToolActivityStreaming:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "show config", client, config, sessions)
+            await _process_message(event, "show config", client, config, sessions, queue)
 
         activity_posts = [
             c for c in client.chat_postMessage.call_args_list
@@ -706,7 +697,7 @@ class TestToolActivityStreaming:
         assert activity_posts[0].kwargs["text"] == ":mag: Reading `config.py`"
 
     @pytest.mark.asyncio
-    async def test_subsequent_activities_posted_as_replies(self, config, sessions):
+    async def test_subsequent_activities_posted_as_replies(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_tool_event(
                 tool_block("Read", file_path="/src/a.py")
@@ -728,18 +719,19 @@ class TestToolActivityStreaming:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "fix tests", client, config, sessions)
+            await _process_message(event, "fix tests", client, config, sessions, queue)
 
         post_calls = client.chat_postMessage.call_args_list
-        activity_texts = [c.kwargs["text"] for c in post_calls]
-        assert ":mag: Reading `a.py`" in activity_texts
-        assert ":pencil2: Editing `a.py`" in activity_texts
-        assert ":computer: Running `pytest`" in activity_texts
-        assert "Done." in activity_texts
+        all_text = "\n".join(c.kwargs["text"] for c in post_calls)
+        # First activity posted immediately; subsequent ones batched together
+        assert ":mag: Reading `a.py`" in all_text
+        assert ":pencil2: Editing `a.py`" in all_text
+        assert ":computer: Running `pytest`" in all_text
+        assert "Done." in all_text
 
     @pytest.mark.asyncio
     async def test_final_text_as_thread_replies_when_activities_exist(
-        self, config, sessions
+        self, config, sessions, queue
     ):
         async def fake_stream(prompt):
             yield make_tool_event(
@@ -756,7 +748,7 @@ class TestToolActivityStreaming:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "hello", client, config, sessions)
+            await _process_message(event, "hello", client, config, sessions, queue)
 
         post_calls = client.chat_postMessage.call_args_list
         final_post = post_calls[-1]
@@ -764,7 +756,7 @@ class TestToolActivityStreaming:
         assert final_post.kwargs["thread_ts"] == "1000.0"
 
     @pytest.mark.asyncio
-    async def test_no_activities_posts_text_as_reply(self, config, sessions):
+    async def test_no_activities_posts_text_as_reply(self, config, sessions, queue):
         """When there are no tool calls, the response is posted as a thread reply."""
 
         async def fake_stream(prompt):
@@ -779,7 +771,7 @@ class TestToolActivityStreaming:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "hello", client, config, sessions)
+            await _process_message(event, "hello", client, config, sessions, queue)
 
         text_posts = [
             c for c in client.chat_postMessage.call_args_list
@@ -789,7 +781,7 @@ class TestToolActivityStreaming:
         client.chat_update.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_text_flushed_before_next_tool_activity(self, config, sessions):
+    async def test_text_flushed_before_next_tool_activity(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_tool_event(
                 tool_block("Read", file_path="/src/a.py")
@@ -809,7 +801,7 @@ class TestToolActivityStreaming:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "fix it", client, config, sessions)
+            await _process_message(event, "fix it", client, config, sessions, queue)
 
         post_calls = client.chat_postMessage.call_args_list
         texts = [c.kwargs["text"] for c in post_calls]
@@ -822,7 +814,7 @@ class TestToolActivityStreaming:
 
     @pytest.mark.asyncio
     async def test_long_text_with_activities_uploaded_as_snippet(
-        self, config, sessions
+        self, config, sessions, queue
     ):
         long_text = "a" * 8000
 
@@ -840,7 +832,7 @@ class TestToolActivityStreaming:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "hello", client, config, sessions)
+            await _process_message(event, "hello", client, config, sessions, queue)
 
         # Long text should be uploaded as a snippet via files_upload_v2
         client.files_upload_v2.assert_called_once()
@@ -852,7 +844,7 @@ class TestToolErrorHandling:
     """Test that tool errors from user events are posted to Slack."""
 
     @pytest.mark.asyncio
-    async def test_tool_error_posted_as_warning(self, config, sessions):
+    async def test_tool_error_posted_as_warning(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event(
                 "user",
@@ -877,7 +869,7 @@ class TestToolErrorHandling:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "10000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "run tests", client, config, sessions)
+            await _process_message(event, "run tests", client, config, sessions, queue)
 
         warning_calls = [
             c for c in client.chat_postMessage.call_args_list
@@ -887,7 +879,7 @@ class TestToolErrorHandling:
         assert "Command failed: exit code 1" in warning_calls[0].kwargs["text"]
 
     @pytest.mark.asyncio
-    async def test_long_tool_error_truncated(self, config, sessions):
+    async def test_long_tool_error_truncated(self, config, sessions, queue):
         long_error = "x" * 500
 
         async def fake_stream(prompt):
@@ -913,7 +905,7 @@ class TestToolErrorHandling:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "10001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "do it", client, config, sessions)
+            await _process_message(event, "do it", client, config, sessions, queue)
 
         warning_calls = [
             c for c in client.chat_postMessage.call_args_list
@@ -923,7 +915,7 @@ class TestToolErrorHandling:
         assert warning_calls[0].kwargs["text"].endswith("...")
 
     @pytest.mark.asyncio
-    async def test_non_error_tool_result_ignored(self, config, sessions):
+    async def test_non_error_tool_result_ignored(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event(
                 "user",
@@ -947,7 +939,7 @@ class TestToolErrorHandling:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "10002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "do it", client, config, sessions)
+            await _process_message(event, "do it", client, config, sessions, queue)
 
         warning_calls = [
             c for c in client.chat_postMessage.call_args_list
@@ -960,7 +952,7 @@ class TestGitCommitReaction:
     """Test that a :package: emoji is added when a git commit happens."""
 
     @pytest.mark.asyncio
-    async def test_git_commit_adds_package_reaction(self, config, sessions):
+    async def test_git_commit_adds_package_reaction(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_tool_event(
                 tool_block("Bash", command='git commit -m "feat: add thing"')
@@ -976,7 +968,7 @@ class TestGitCommitReaction:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "commit it", client, config, sessions)
+            await _process_message(event, "commit it", client, config, sessions, queue)
 
         reaction_calls = [
             c for c in client.reactions_add.call_args_list
@@ -986,7 +978,7 @@ class TestGitCommitReaction:
         assert reaction_calls[0].kwargs["timestamp"] == "1000.0"
 
     @pytest.mark.asyncio
-    async def test_no_git_commit_no_package_reaction(self, config, sessions):
+    async def test_no_git_commit_no_package_reaction(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_tool_event(
                 tool_block("Bash", command="pytest tests/")
@@ -1002,7 +994,7 @@ class TestGitCommitReaction:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "run tests", client, config, sessions)
+            await _process_message(event, "run tests", client, config, sessions, queue)
 
         reaction_calls = [
             c for c in client.reactions_add.call_args_list
@@ -1011,7 +1003,7 @@ class TestGitCommitReaction:
         assert len(reaction_calls) == 0
 
     @pytest.mark.asyncio
-    async def test_multiple_commits_only_one_reaction(self, config, sessions):
+    async def test_multiple_commits_only_one_reaction(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_tool_event(
                 tool_block("Bash", command='git commit -m "first"')
@@ -1030,7 +1022,7 @@ class TestGitCommitReaction:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "commit both", client, config, sessions)
+            await _process_message(event, "commit both", client, config, sessions, queue)
 
         reaction_calls = [
             c for c in client.reactions_add.call_args_list
@@ -1084,7 +1076,7 @@ class TestFileChangedReaction:
     """Test that a :pencil2: reaction is added on file edits and removed on commit."""
 
     @pytest.mark.asyncio
-    async def test_file_edit_adds_pencil_reaction(self, config, sessions):
+    async def test_file_edit_adds_pencil_reaction(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_tool_event(
                 tool_block("Edit", file_path="/src/app.py")
@@ -1100,7 +1092,7 @@ class TestFileChangedReaction:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "fix it", client, config, sessions)
+            await _process_message(event, "fix it", client, config, sessions, queue)
 
         pencil_calls = [
             c for c in client.reactions_add.call_args_list
@@ -1110,7 +1102,7 @@ class TestFileChangedReaction:
         assert pencil_calls[0].kwargs["timestamp"] == "1000.0"  # thread_ts
 
     @pytest.mark.asyncio
-    async def test_write_tool_adds_pencil_reaction(self, config, sessions):
+    async def test_write_tool_adds_pencil_reaction(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_tool_event(
                 tool_block("Write", file_path="/src/new.py")
@@ -1126,7 +1118,7 @@ class TestFileChangedReaction:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "create file", client, config, sessions)
+            await _process_message(event, "create file", client, config, sessions, queue)
 
         pencil_calls = [
             c for c in client.reactions_add.call_args_list
@@ -1135,7 +1127,7 @@ class TestFileChangedReaction:
         assert len(pencil_calls) == 1
 
     @pytest.mark.asyncio
-    async def test_no_file_edit_no_pencil_reaction(self, config, sessions):
+    async def test_no_file_edit_no_pencil_reaction(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_tool_event(
                 tool_block("Read", file_path="/src/app.py")
@@ -1151,7 +1143,7 @@ class TestFileChangedReaction:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "show file", client, config, sessions)
+            await _process_message(event, "show file", client, config, sessions, queue)
 
         pencil_calls = [
             c for c in client.reactions_add.call_args_list
@@ -1160,7 +1152,7 @@ class TestFileChangedReaction:
         assert len(pencil_calls) == 0
 
     @pytest.mark.asyncio
-    async def test_commit_removes_pencil_reaction(self, config, sessions):
+    async def test_commit_removes_pencil_reaction(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_tool_event(
                 tool_block("Edit", file_path="/src/app.py")
@@ -1179,7 +1171,7 @@ class TestFileChangedReaction:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "fix and commit", client, config, sessions)
+            await _process_message(event, "fix and commit", client, config, sessions, queue)
 
         # Pencil was added then removed
         pencil_add_calls = [
@@ -1196,7 +1188,7 @@ class TestFileChangedReaction:
         assert pencil_remove_calls[0].kwargs["timestamp"] == "1000.0"
 
     @pytest.mark.asyncio
-    async def test_multiple_edits_only_one_pencil_reaction(self, config, sessions):
+    async def test_multiple_edits_only_one_pencil_reaction(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_tool_event(
                 tool_block("Edit", file_path="/src/a.py")
@@ -1218,7 +1210,7 @@ class TestFileChangedReaction:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "edit all", client, config, sessions)
+            await _process_message(event, "edit all", client, config, sessions, queue)
 
         pencil_calls = [
             c for c in client.reactions_add.call_args_list
@@ -1227,7 +1219,7 @@ class TestFileChangedReaction:
         assert len(pencil_calls) == 1
 
     @pytest.mark.asyncio
-    async def test_commit_without_edits_no_pencil_removal(self, config, sessions):
+    async def test_commit_without_edits_no_pencil_removal(self, config, sessions, queue):
         """If only a commit happens (no tracked edits), don't try to remove pencil."""
         async def fake_stream(prompt):
             yield make_tool_event(
@@ -1244,7 +1236,7 @@ class TestFileChangedReaction:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "commit it", client, config, sessions)
+            await _process_message(event, "commit it", client, config, sessions, queue)
 
         pencil_remove_calls = [
             c for c in client.reactions_remove.call_args_list
@@ -1253,7 +1245,7 @@ class TestFileChangedReaction:
         assert len(pencil_remove_calls) == 0
 
     @pytest.mark.asyncio
-    async def test_edit_after_commit_removes_package_adds_pencil(self, config, sessions):
+    async def test_edit_after_commit_removes_package_adds_pencil(self, config, sessions, queue):
         """Edit → commit → edit again: package removed, pencil re-added."""
         async def fake_stream(prompt):
             yield make_tool_event(
@@ -1276,7 +1268,7 @@ class TestFileChangedReaction:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "edit commit edit", client, config, sessions)
+            await _process_message(event, "edit commit edit", client, config, sessions, queue)
 
         # Pencil added twice (once per edit cycle)
         pencil_add = [
@@ -1308,7 +1300,7 @@ class TestFileChangedReaction:
         assert package_remove[0].kwargs["timestamp"] == "1000.0"
 
     @pytest.mark.asyncio
-    async def test_full_cycle_edit_commit_edit_commit(self, config, sessions):
+    async def test_full_cycle_edit_commit_edit_commit(self, config, sessions, queue):
         """Edit → commit → edit → commit: both cycles complete cleanly."""
         async def fake_stream(prompt):
             yield make_tool_event(tool_block("Edit", file_path="/src/a.py"))
@@ -1325,7 +1317,7 @@ class TestFileChangedReaction:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "cycle", client, config, sessions)
+            await _process_message(event, "cycle", client, config, sessions, queue)
 
         # Pencil added twice, removed twice
         pencil_add = [c for c in client.reactions_add.call_args_list if c.kwargs.get("name") == "pencil2"]

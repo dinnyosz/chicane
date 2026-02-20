@@ -354,7 +354,7 @@ class TestStaleSessionDetection:
     the bot should notify the user and inject thread history."""
 
     @pytest.mark.asyncio
-    async def test_stale_session_notifies_user(self, config, sessions):
+    async def test_stale_session_notifies_user(self, config, sessions, queue):
         """When the SDK returns a different session_id, a warning is posted."""
         requested_sid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
         actual_sid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -402,7 +402,7 @@ class TestStaleSessionDetection:
                 "user": "UHUMAN1",
                 "text": "continue",
             }
-            await _process_message(event, "continue", client, config, sessions)
+            await _process_message(event, "continue", client, config, sessions, queue)
 
         # Check that a warning about stale session was posted
         post_calls = client.chat_postMessage.call_args_list
@@ -413,7 +413,7 @@ class TestStaleSessionDetection:
         assert len(stale_messages) >= 1
 
     @pytest.mark.asyncio
-    async def test_stale_session_injects_context(self, config, sessions):
+    async def test_stale_session_injects_context(self, config, sessions, queue):
         """When session is stale, thread history is injected via session.run()."""
         requested_sid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
         actual_sid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -457,7 +457,7 @@ class TestStaleSessionDetection:
                 "user": "UHUMAN1",
                 "text": "continue",
             }
-            await _process_message(event, "continue", client, config, sessions)
+            await _process_message(event, "continue", client, config, sessions, queue)
 
         # session.run should have been called with thread history
         mock_session.run.assert_called_once()
@@ -466,7 +466,7 @@ class TestStaleSessionDetection:
         assert "UNTRUSTED DATA" in context_arg
 
     @pytest.mark.asyncio
-    async def test_matching_session_id_no_stale_warning(self, config, sessions):
+    async def test_matching_session_id_no_stale_warning(self, config, sessions, queue):
         """When session_id matches, no stale warning should be posted."""
         session_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 
@@ -507,7 +507,7 @@ class TestStaleSessionDetection:
                 "user": "UHUMAN1",
                 "text": "continue",
             }
-            await _process_message(event, "continue", client, config, sessions)
+            await _process_message(event, "continue", client, config, sessions, queue)
 
         # No stale warning
         post_calls = client.chat_postMessage.call_args_list
@@ -522,7 +522,7 @@ class TestStaleSessionDetection:
 
     @pytest.mark.asyncio
     async def test_stale_session_no_user_history_still_injects_bot_context(
-        self, config, sessions
+        self, config, sessions, queue
     ):
         """When session is stale and thread has only bot messages (no user
         messages besides current), the bot's own messages still form history
@@ -568,7 +568,7 @@ class TestStaleSessionDetection:
                 "user": "UHUMAN1",
                 "text": "continue",
             }
-            await _process_message(event, "continue", client, config, sessions)
+            await _process_message(event, "continue", client, config, sessions, queue)
 
         # Bot's own message forms history, so context injection still happens
         mock_session.run.assert_called_once()

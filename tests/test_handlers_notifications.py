@@ -7,6 +7,7 @@ import pytest
 from chicane.config import Config
 from chicane.handlers import _process_message
 from chicane.sessions import SessionStore
+from chicane.slack_queue import SlackMessageQueue
 from tests.conftest import make_event, make_tool_event, make_user_event_with_results, mock_client, mock_session_info, tool_block
 
 
@@ -14,7 +15,7 @@ class TestCompletionSummaryPosting:
     """Test that completion summary is posted after streaming."""
 
     @pytest.mark.asyncio
-    async def test_summary_posted_after_response(self, config, sessions):
+    async def test_summary_posted_after_response(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event("assistant", text="Done!")
             yield make_event(
@@ -30,7 +31,7 @@ class TestCompletionSummaryPosting:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "11000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "hello", client, config, sessions)
+            await _process_message(event, "hello", client, config, sessions, queue)
 
         post_calls = client.chat_postMessage.call_args_list
         summary_calls = [
@@ -41,7 +42,7 @@ class TestCompletionSummaryPosting:
         assert "3 turns" in summary_calls[0].kwargs["text"]
 
     @pytest.mark.asyncio
-    async def test_no_summary_when_no_result_event(self, config, sessions):
+    async def test_no_summary_when_no_result_event(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event("assistant", text="Partial response")
 
@@ -53,7 +54,7 @@ class TestCompletionSummaryPosting:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "11001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "hello", client, config, sessions)
+            await _process_message(event, "hello", client, config, sessions, queue)
 
         summary_calls = [
             c for c in client.chat_postMessage.call_args_list
@@ -74,7 +75,7 @@ class TestCompactBoundaryNotification:
         )
 
     @pytest.mark.asyncio
-    async def test_auto_compaction_notifies_user(self, config, sessions):
+    async def test_auto_compaction_notifies_user(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event("assistant", text="Working on it...")
             yield make_event(
@@ -93,7 +94,7 @@ class TestCompactBoundaryNotification:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "12000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "big task", client, config, sessions)
+            await _process_message(event, "big task", client, config, sessions, queue)
 
         brain_calls = [
             c for c in client.chat_postMessage.call_args_list
@@ -106,7 +107,7 @@ class TestCompactBoundaryNotification:
         assert "earlier messages may be summarized" in msg
 
     @pytest.mark.asyncio
-    async def test_manual_compaction_notifies_user(self, config, sessions):
+    async def test_manual_compaction_notifies_user(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event(
                 "system",
@@ -123,7 +124,7 @@ class TestCompactBoundaryNotification:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "12001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "compact", client, config, sessions)
+            await _process_message(event, "compact", client, config, sessions, queue)
 
         brain_calls = [
             c for c in client.chat_postMessage.call_args_list
@@ -133,7 +134,7 @@ class TestCompactBoundaryNotification:
         assert "manually compacted" in brain_calls[0].kwargs["text"]
 
     @pytest.mark.asyncio
-    async def test_compaction_without_pre_tokens(self, config, sessions):
+    async def test_compaction_without_pre_tokens(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event(
                 "system",
@@ -150,7 +151,7 @@ class TestCompactBoundaryNotification:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "12002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "hi", client, config, sessions)
+            await _process_message(event, "hi", client, config, sessions, queue)
 
         brain_calls = [
             c for c in client.chat_postMessage.call_args_list
@@ -162,7 +163,7 @@ class TestCompactBoundaryNotification:
         assert "earlier messages may be summarized" in msg
 
     @pytest.mark.asyncio
-    async def test_compaction_without_metadata(self, config, sessions):
+    async def test_compaction_without_metadata(self, config, sessions, queue):
         """Handle edge case where compact_metadata is missing entirely."""
 
         async def fake_stream(prompt):
@@ -180,7 +181,7 @@ class TestCompactBoundaryNotification:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "12003.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "hi", client, config, sessions)
+            await _process_message(event, "hi", client, config, sessions, queue)
 
         brain_calls = [
             c for c in client.chat_postMessage.call_args_list
@@ -194,7 +195,7 @@ class TestPermissionDenialNotification:
     """Test that permission denials from result events are surfaced."""
 
     @pytest.mark.asyncio
-    async def test_denials_posted(self, config, sessions):
+    async def test_denials_posted(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event("assistant", text="I tried but couldn't.")
             yield make_event(
@@ -215,7 +216,7 @@ class TestPermissionDenialNotification:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "13000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "do it", client, config, sessions)
+            await _process_message(event, "do it", client, config, sessions, queue)
 
         denial_calls = [
             c for c in client.chat_postMessage.call_args_list
@@ -228,7 +229,7 @@ class TestPermissionDenialNotification:
         assert "`Write`" in msg
 
     @pytest.mark.asyncio
-    async def test_single_denial_singular(self, config, sessions):
+    async def test_single_denial_singular(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event(
                 "result", text="blocked",
@@ -246,7 +247,7 @@ class TestPermissionDenialNotification:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "13001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "edit it", client, config, sessions)
+            await _process_message(event, "edit it", client, config, sessions, queue)
 
         denial_calls = [
             c for c in client.chat_postMessage.call_args_list
@@ -256,7 +257,7 @@ class TestPermissionDenialNotification:
         assert "1 tool permission denied" in denial_calls[0].kwargs["text"]
 
     @pytest.mark.asyncio
-    async def test_no_denials_no_message(self, config, sessions):
+    async def test_no_denials_no_message(self, config, sessions, queue):
         async def fake_stream(prompt):
             yield make_event(
                 "result", text="all good",
@@ -272,7 +273,7 @@ class TestPermissionDenialNotification:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "13002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "hi", client, config, sessions)
+            await _process_message(event, "hi", client, config, sessions, queue)
 
         denial_calls = [
             c for c in client.chat_postMessage.call_args_list
@@ -288,6 +289,7 @@ class TestVerbosityFiltering:
     async def test_minimal_hides_tool_activities(self):
         config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="minimal")
         sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
 
         async def fake_stream(prompt):
             yield make_tool_event(tool_block("Read", file_path="/tmp/test.py"))
@@ -301,7 +303,7 @@ class TestVerbosityFiltering:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "read file", client, config, sessions)
+            await _process_message(event, "read file", client, config, sessions, queue)
 
         all_texts = [
             c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list
@@ -314,6 +316,7 @@ class TestVerbosityFiltering:
     async def test_minimal_hides_tool_errors(self):
         config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="minimal")
         sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
 
         async def fake_stream(prompt):
             yield make_user_event_with_results([
@@ -329,7 +332,7 @@ class TestVerbosityFiltering:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "run cmd", client, config, sessions)
+            await _process_message(event, "run cmd", client, config, sessions, queue)
 
         all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
         assert not any(":warning: Tool error:" in t for t in all_texts)
@@ -338,6 +341,7 @@ class TestVerbosityFiltering:
     async def test_normal_shows_tool_activities(self):
         config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="normal")
         sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
 
         async def fake_stream(prompt):
             yield make_tool_event(tool_block("Read", file_path="/tmp/test.py"))
@@ -351,7 +355,7 @@ class TestVerbosityFiltering:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "read file", client, config, sessions)
+            await _process_message(event, "read file", client, config, sessions, queue)
 
         all_texts = [
             c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list
@@ -362,6 +366,7 @@ class TestVerbosityFiltering:
     async def test_normal_hides_tool_results(self):
         config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="normal")
         sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
 
         async def fake_stream(prompt):
             yield make_user_event_with_results([
@@ -377,7 +382,7 @@ class TestVerbosityFiltering:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20003.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "do thing", client, config, sessions)
+            await _process_message(event, "do thing", client, config, sessions, queue)
 
         all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
         assert not any(":clipboard: Tool output:" in t for t in all_texts)
@@ -387,6 +392,7 @@ class TestVerbosityFiltering:
         """Verbose mode shows tool results for non-quiet tools like Bash."""
         config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="verbose")
         sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
 
         async def fake_stream(prompt):
             # Assistant calls Bash (not a quiet tool)
@@ -405,7 +411,7 @@ class TestVerbosityFiltering:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20004.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "do thing", client, config, sessions)
+            await _process_message(event, "do thing", client, config, sessions, queue)
 
         all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
         assert any(":clipboard: Tool output:" in t and "hello" in t for t in all_texts)
@@ -415,6 +421,7 @@ class TestVerbosityFiltering:
         """Even in verbose mode, Read tool output is suppressed."""
         config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="verbose")
         sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
 
         async def fake_stream(prompt):
             yield make_tool_event(tool_block("Read", id="tu_read_1", file_path="/tmp/test.py"))
@@ -431,7 +438,7 @@ class TestVerbosityFiltering:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20007.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "read file", client, config, sessions)
+            await _process_message(event, "read file", client, config, sessions, queue)
 
         all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
         assert not any(":clipboard: Tool output:" in t for t in all_texts)
@@ -441,6 +448,7 @@ class TestVerbosityFiltering:
         """Long tool output in verbose mode is uploaded as a snippet instead of inline."""
         config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="verbose")
         sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
 
         long_output = "x" * 501
 
@@ -459,7 +467,7 @@ class TestVerbosityFiltering:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20008.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "show log", client, config, sessions)
+            await _process_message(event, "show log", client, config, sessions, queue)
 
         # Should upload as snippet via files_upload_v2, not post inline
         client.files_upload_v2.assert_called_once()
@@ -475,6 +483,7 @@ class TestVerbosityFiltering:
         """Short tool output in verbose mode is still posted as a regular message."""
         config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="verbose")
         sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
 
         async def fake_stream(prompt):
             yield make_tool_event(tool_block("Bash", id="tu_bash_3", command="echo hi"))
@@ -491,7 +500,7 @@ class TestVerbosityFiltering:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20009.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "say hi", client, config, sessions)
+            await _process_message(event, "say hi", client, config, sessions, queue)
 
         all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
         assert any(":clipboard: Tool output:\n```\nhi\n```" in t for t in all_texts)
@@ -501,6 +510,7 @@ class TestVerbosityFiltering:
     async def test_verbose_shows_compact_boundary(self):
         config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="verbose")
         sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
 
         async def fake_stream(prompt):
             yield make_event(
@@ -517,7 +527,7 @@ class TestVerbosityFiltering:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20005.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "hi", client, config, sessions)
+            await _process_message(event, "hi", client, config, sessions, queue)
 
         all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
         assert any(":brain:" in t for t in all_texts)
@@ -526,6 +536,7 @@ class TestVerbosityFiltering:
     async def test_minimal_hides_compact_boundary(self):
         config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="minimal")
         sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
 
         async def fake_stream(prompt):
             yield make_event(
@@ -542,7 +553,7 @@ class TestVerbosityFiltering:
 
         with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20006.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "hi", client, config, sessions)
+            await _process_message(event, "hi", client, config, sessions, queue)
 
         all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
         assert not any(":brain:" in t for t in all_texts)
@@ -553,6 +564,7 @@ class TestVerbosityFiltering:
         for verbosity in ("minimal", "normal", "verbose"):
             config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity=verbosity)
             sessions = SessionStore()
+            queue = SlackMessageQueue(min_interval=0.0)
 
             async def fake_stream(prompt):
                 yield make_event("assistant", text="Tried but denied.")
@@ -571,7 +583,7 @@ class TestVerbosityFiltering:
 
             with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
                 event = {"ts": f"2100{verbosity}.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-                await _process_message(event, "try bash", client, config, sessions)
+                await _process_message(event, "try bash", client, config, sessions, queue)
 
             all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
             assert any(":no_entry_sign:" in t for t in all_texts), f"Permission denial not shown at {verbosity}"

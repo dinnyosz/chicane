@@ -23,7 +23,7 @@ from tests.conftest import (
 class TestReactionInterrupt:
     """Tests for the reaction_added handler that interrupts active streams."""
 
-    def _setup_reaction_handler(self, config, sessions):
+    def _setup_reaction_handler(self, config, sessions, queue):
         """Register handlers and return the reaction_added handler."""
         mock_app = MagicMock()
         handlers = capture_app_handlers(mock_app)
@@ -31,8 +31,8 @@ class TestReactionInterrupt:
         return handlers["reaction_added"]
 
     @pytest.mark.asyncio
-    async def test_stop_reaction_interrupts_active_stream(self, config, sessions):
-        handler = self._setup_reaction_handler(config, sessions)
+    async def test_stop_reaction_interrupts_active_stream(self, config, sessions, queue):
+        handler = self._setup_reaction_handler(config, sessions, queue)
         client = mock_client()
 
         # Create a session and register a bot message
@@ -57,8 +57,8 @@ class TestReactionInterrupt:
         )
 
     @pytest.mark.asyncio
-    async def test_stop_reaction_ignored_when_not_streaming(self, config, sessions):
-        handler = self._setup_reaction_handler(config, sessions)
+    async def test_stop_reaction_ignored_when_not_streaming(self, config, sessions, queue):
+        handler = self._setup_reaction_handler(config, sessions, queue)
         client = mock_client()
 
         info = sessions.get_or_create("thread-1", config)
@@ -77,8 +77,8 @@ class TestReactionInterrupt:
         client.chat_postMessage.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_non_stop_reaction_ignored(self, config, sessions):
-        handler = self._setup_reaction_handler(config, sessions)
+    async def test_non_stop_reaction_ignored(self, config, sessions, queue):
+        handler = self._setup_reaction_handler(config, sessions, queue)
         client = mock_client()
 
         info = sessions.get_or_create("thread-1", config)
@@ -96,8 +96,8 @@ class TestReactionInterrupt:
         info.session.interrupt.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_reaction_on_unknown_message_ignored(self, config, sessions):
-        handler = self._setup_reaction_handler(config, sessions)
+    async def test_reaction_on_unknown_message_ignored(self, config, sessions, queue):
+        handler = self._setup_reaction_handler(config, sessions, queue)
         client = mock_client()
 
         event = {
@@ -110,9 +110,9 @@ class TestReactionInterrupt:
         client.chat_postMessage.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_reaction_on_thread_starter(self, config, sessions):
+    async def test_reaction_on_thread_starter(self, config, sessions, queue):
         """Reacting on the thread starter message (which IS the thread_ts) should work."""
-        handler = self._setup_reaction_handler(config, sessions)
+        handler = self._setup_reaction_handler(config, sessions, queue)
         client = mock_client()
 
         info = sessions.get_or_create("thread-1", config)
@@ -139,7 +139,7 @@ class TestNewMessageInterrupt:
     """Tests for new messages interrupting active streams."""
 
     @pytest.mark.asyncio
-    async def test_new_message_interrupts_active_stream(self, config, sessions):
+    async def test_new_message_interrupts_active_stream(self, config, sessions, queue):
         """When a second message arrives while streaming, it should call interrupt()."""
         stream_started = asyncio.Event()
         interrupt_called = asyncio.Event()
@@ -182,11 +182,11 @@ class TestNewMessageInterrupt:
                 mock_session.is_streaming = True
                 event_b = {"ts": "5001.0", "channel": "C_CHAN", "user": "UHUMAN"}
                 with patch.object(sessions, "get_or_create", return_value=info):
-                    await _process_message(event_b, "second", client, config, sessions)
+                    await _process_message(event_b, "second", client, config, sessions, queue)
 
             with patch.object(sessions, "get_or_create", return_value=info):
                 await asyncio.gather(
-                    _process_message(event_a, "first", client, config, sessions),
+                    _process_message(event_a, "first", client, config, sessions, queue),
                     send_second(),
                 )
 
@@ -205,7 +205,7 @@ class TestInterruptedStreamDisplay:
     """Tests for how interrupted streams are displayed in Slack."""
 
     @pytest.mark.asyncio
-    async def test_interrupted_stream_shows_partial_text(self, config, sessions):
+    async def test_interrupted_stream_shows_partial_text(self, config, sessions, queue):
         """Interrupted stream with accumulated text shows text + stop indicator."""
         async def interrupting_stream(prompt):
             yield make_event("assistant", text="Partial response")
@@ -227,7 +227,7 @@ class TestInterruptedStreamDisplay:
 
         with patch.object(sessions, "get_or_create", return_value=info):
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN"}
-            await _process_message(event, "do something", client, config, sessions)
+            await _process_message(event, "do something", client, config, sessions, queue)
 
         # Partial text and stop indicator should be posted as thread replies
         post_calls = client.chat_postMessage.call_args_list
@@ -243,7 +243,7 @@ class TestInterruptedStreamDisplay:
         assert len(stop_posts) == 1
 
     @pytest.mark.asyncio
-    async def test_interrupted_stream_no_text_shows_indicator(self, config, sessions):
+    async def test_interrupted_stream_no_text_shows_indicator(self, config, sessions, queue):
         """Interrupted stream with no text shows just the stop indicator."""
         async def empty_stream(prompt):
             # Only tool activity, no text
@@ -265,7 +265,7 @@ class TestInterruptedStreamDisplay:
 
         with patch.object(sessions, "get_or_create", return_value=info):
             event = {"ts": "2000.0", "channel": "C_CHAN", "user": "UHUMAN"}
-            await _process_message(event, "do something", client, config, sessions)
+            await _process_message(event, "do something", client, config, sessions, queue)
 
         # Stop indicator should be posted as a thread reply
         post_calls = client.chat_postMessage.call_args_list
@@ -276,7 +276,7 @@ class TestInterruptedStreamDisplay:
         assert len(stop_posts) == 1
 
     @pytest.mark.asyncio
-    async def test_interrupted_stream_swaps_eyes_to_stop(self, config, sessions):
+    async def test_interrupted_stream_swaps_eyes_to_stop(self, config, sessions, queue):
         """Interrupted stream should swap eyes reaction to stop sign."""
         async def quick_stream(prompt):
             yield make_event("result", text="")
@@ -297,7 +297,7 @@ class TestInterruptedStreamDisplay:
 
         with patch.object(sessions, "get_or_create", return_value=info):
             event = {"ts": "3000.0", "channel": "C_CHAN", "user": "UHUMAN"}
-            await _process_message(event, "do something", client, config, sessions)
+            await _process_message(event, "do something", client, config, sessions, queue)
 
         # Should remove eyes and add stop sign
         client.reactions_remove.assert_called_with(
@@ -308,7 +308,7 @@ class TestInterruptedStreamDisplay:
         )
 
     @pytest.mark.asyncio
-    async def test_interrupted_stream_skips_completion_summary(self, config, sessions):
+    async def test_interrupted_stream_skips_completion_summary(self, config, sessions, queue):
         """Interrupted stream should NOT post a completion summary."""
         async def stream_with_result(prompt):
             yield make_event("assistant", text="Some text")
@@ -330,7 +330,7 @@ class TestInterruptedStreamDisplay:
 
         with patch.object(sessions, "get_or_create", return_value=info):
             event = {"ts": "4000.0", "channel": "C_CHAN", "user": "UHUMAN"}
-            await _process_message(event, "do something", client, config, sessions)
+            await _process_message(event, "do something", client, config, sessions, queue)
 
         # No completion summary (checkered_flag) should be posted
         post_calls = client.chat_postMessage.call_args_list
@@ -348,7 +348,7 @@ class TestInterruptedStreamDisplay:
         assert len(checkmark_calls) == 0
 
     @pytest.mark.asyncio
-    async def test_new_message_interrupt_stays_silent(self, config, sessions):
+    async def test_new_message_interrupt_stays_silent(self, config, sessions, queue):
         """New-message interrupt should NOT post stop indicator or swap reactions."""
         async def some_stream(prompt):
             yield make_event("assistant", text="Partial work")
@@ -370,7 +370,7 @@ class TestInterruptedStreamDisplay:
 
         with patch.object(sessions, "get_or_create", return_value=info):
             event = {"ts": "6000.0", "channel": "C_CHAN", "user": "UHUMAN"}
-            await _process_message(event, "do something", client, config, sessions)
+            await _process_message(event, "do something", client, config, sessions, queue)
 
         # Should NOT post any ":stop_sign:" messages
         all_texts = [
