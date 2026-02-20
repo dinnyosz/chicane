@@ -112,13 +112,16 @@ SNIPPET_THRESHOLD = 4000
 # Max file size to download from Slack (10 MB)
 MAX_FILE_SIZE = 10 * 1024 * 1024
 
-# Regex to detect a handoff session_id at the end of a prompt.
+# Regex to detect a handoff session_id in message text.
 # Matches both plain  (session_id: uuid)  and Slack-italicised  _(session_id: uuid)_
-_HANDOFF_RE = re.compile(r"_?\(session_id:\s*([a-f0-9\-]+)\)_?\s*$")
+# No end-of-line anchor — the tag may appear mid-message when the bot appends
+# response text after the session line.
+_HANDOFF_RE = re.compile(r"_?\(session_id:\s*([a-f0-9\-]+)\)_?")
 
 # Regex for session alias format: _(session: adjective-noun)_
 # Matches 2+ hyphenated words to stay compatible with old coolname aliases.
-_SESSION_ALIAS_RE = re.compile(r"_?\(session:\s*([a-z]+(?:-[a-z]+)+)\)_?\s*$")
+# No end-of-line anchor — same reason as _HANDOFF_RE above.
+_SESSION_ALIAS_RE = re.compile(r"_?\(session:\s*([a-z]+(?:-[a-z]+)+)\)_?")
 
 # Tools whose output is too noisy for Slack (file contents).
 # Their tool_result blocks are silently dropped even in verbose mode.
@@ -1115,15 +1118,21 @@ async def _find_session_id_in_thread(
         return SessionSearchResult()
 
     try:
-        replies = await client.conversations_replies(
-            channel=channel, ts=thread_ts, limit=100
-        )
-        for msg in replies.get("messages", []):
-            if msg.get("user") != bot_id:
-                continue
-            val, fmt = _extract_ref(msg.get("text", ""))
-            if val:
-                refs.append((val, fmt))
+        cursor = None
+        while True:
+            kwargs: dict = dict(channel=channel, ts=thread_ts, limit=200)
+            if cursor:
+                kwargs["cursor"] = cursor
+            replies = await client.conversations_replies(**kwargs)
+            for msg in replies.get("messages", []):
+                if msg.get("user") != bot_id:
+                    continue
+                val, fmt = _extract_ref(msg.get("text", ""))
+                if val:
+                    refs.append((val, fmt))
+            cursor = replies.get("response_metadata", {}).get("next_cursor")
+            if not cursor:
+                break
     except Exception:
         logger.warning(
             f"Could not scan thread {thread_ts} for session_id", exc_info=True

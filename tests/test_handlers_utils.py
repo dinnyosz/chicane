@@ -13,6 +13,7 @@ from chicane.handlers import (
     _find_session_id_in_thread,
     _has_git_commit,
     _HANDOFF_RE,
+    _SESSION_ALIAS_RE,
     _resolve_channel_cwd,
     _should_ignore,
     _should_show,
@@ -267,10 +268,12 @@ class TestHandoffRegex:
         text = "Just a normal message with no handoff"
         assert _HANDOFF_RE.search(text) is None
 
-    def test_no_match_mid_text(self):
-        """session_id pattern must be at the end of the prompt."""
+    def test_match_mid_text(self):
+        """session_id pattern matches even when followed by more text."""
         text = "(session_id: abc-123) and then more text"
-        assert _HANDOFF_RE.search(text) is None
+        m = _HANDOFF_RE.search(text)
+        assert m is not None
+        assert m.group(1) == "abc-123"
 
     def test_strips_session_id_from_prompt(self):
         """Verify the extraction + stripping logic that _process_message uses."""
@@ -286,6 +289,56 @@ class TestHandoffRegex:
         m = _HANDOFF_RE.search(text)
         assert m is not None
         assert m.group(1) == "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
+
+class TestSessionAliasRegex:
+    """Test the _SESSION_ALIAS_RE pattern used to find session aliases."""
+
+    def test_standard_format(self):
+        text = ":sparkles: New session\n_(session: clever-fox-rainbow)_"
+        m = _SESSION_ALIAS_RE.search(text)
+        assert m is not None
+        assert m.group(1) == "clever-fox-rainbow"
+
+    def test_two_word_alias(self):
+        text = "_(session: cool-cat)_"
+        m = _SESSION_ALIAS_RE.search(text)
+        assert m is not None
+        assert m.group(1) == "cool-cat"
+
+    def test_match_mid_line(self):
+        """Alias followed by more text on the same line should still match."""
+        text = "_(session: laughing-frosty-wheel)_ and then response text"
+        m = _SESSION_ALIAS_RE.search(text)
+        assert m is not None
+        assert m.group(1) == "laughing-frosty-wheel"
+
+    def test_match_mid_message(self):
+        """Alias in the middle of a multi-line message should match."""
+        text = (
+            ":sparkles: New session\n"
+            "_(session: dancing-cosmic-falcon)_\n\n"
+            "Let me look into that.\n"
+            ":mag: Reading `file.py`"
+        )
+        m = _SESSION_ALIAS_RE.search(text)
+        assert m is not None
+        assert m.group(1) == "dancing-cosmic-falcon"
+
+    def test_no_match_when_absent(self):
+        text = "Just a normal message"
+        assert _SESSION_ALIAS_RE.search(text) is None
+
+    def test_no_match_single_word(self):
+        """Single word (no hyphens) should not match."""
+        text = "_(session: singleword)_"
+        assert _SESSION_ALIAS_RE.search(text) is None
+
+    def test_without_underscores(self):
+        text = "(session: cool-fox-hat)"
+        m = _SESSION_ALIAS_RE.search(text)
+        assert m is not None
+        assert m.group(1) == "cool-fox-hat"
 
 
 class TestFindSessionIdInThread:
@@ -402,6 +455,38 @@ class TestFindSessionIdInThread:
 
         assert result.session_id == "sess-abc-123"
         assert result.alias == "clever-fox-rainbow"
+        assert result.total_found == 1
+
+    @pytest.mark.asyncio
+    async def test_finds_alias_when_response_text_appended(self, tmp_path):
+        """Session alias should be found even when the bot appends response
+        text after the _(session: alias)_ line in the same message."""
+        from unittest.mock import patch
+        from chicane.config import save_handoff_session
+
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+        client.conversations_replies.return_value = {
+            "messages": [
+                {
+                    "user": "UBOT123",
+                    "ts": "1001.0",
+                    "text": (
+                        ":sparkles: New session\n"
+                        "_(session: laughing-frosty-wheel)_\n\n"
+                        "Let me look into the rate limiting situation.\n\n"
+                        ":mag: Searching for `rate_limit`"
+                    ),
+                },
+            ]
+        }
+
+        with patch("chicane.config._HANDOFF_MAP_FILE", tmp_path / "sessions.json"):
+            save_handoff_session("laughing-frosty-wheel", "sess-lfw-123")
+            result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
+
+        assert result.session_id == "sess-lfw-123"
+        assert result.alias == "laughing-frosty-wheel"
         assert result.total_found == 1
 
     @pytest.mark.asyncio
@@ -559,6 +644,89 @@ class TestFindSessionIdInThread:
         assert result.session_id is None
         assert result.total_found == 2
         assert set(result.unmapped_aliases) == {"ghost-one-alpha", "ghost-two-beta"}
+
+
+    @pytest.mark.asyncio
+    async def test_paginates_long_threads(self, tmp_path):
+        """Thread scanning should paginate through all replies, not just the first page."""
+        from unittest.mock import patch
+        from chicane.config import save_handoff_session
+
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+
+        # Page 1: no session refs, has cursor
+        page1 = {
+            "messages": [
+                {"user": "UHUMAN1", "ts": "1000.0", "text": "start"},
+                {"user": "UBOT123", "ts": "1001.0", "text": "working on it"},
+            ],
+            "response_metadata": {"next_cursor": "page2_cursor"},
+        }
+        # Page 2: has the session ref, no cursor
+        page2 = {
+            "messages": [
+                {
+                    "user": "UBOT123",
+                    "ts": "1050.0",
+                    "text": ":sparkles: New session\n_(session: paginated-cool-fox)_",
+                },
+            ],
+        }
+        client.conversations_replies.side_effect = [page1, page2]
+
+        with patch("chicane.config._HANDOFF_MAP_FILE", tmp_path / "sessions.json"):
+            save_handoff_session("paginated-cool-fox", "sess-paginated")
+            result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
+
+        assert result.session_id == "sess-paginated"
+        assert result.alias == "paginated-cool-fox"
+        assert client.conversations_replies.call_count == 2
+        # Second call should include the cursor
+        second_call = client.conversations_replies.call_args_list[1]
+        assert second_call.kwargs.get("cursor") == "page2_cursor"
+
+    @pytest.mark.asyncio
+    async def test_session_on_first_page_with_more_pages(self, tmp_path):
+        """Session found on first page should still scan remaining pages
+        to find newer sessions."""
+        from unittest.mock import patch
+        from chicane.config import save_handoff_session
+
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+
+        page1 = {
+            "messages": [
+                {
+                    "user": "UBOT123",
+                    "ts": "1000.0",
+                    "text": ":sparkles: New session\n_(session: old-early-bird)_",
+                },
+            ],
+            "response_metadata": {"next_cursor": "page2_cursor"},
+        }
+        page2 = {
+            "messages": [
+                {
+                    "user": "UBOT123",
+                    "ts": "1050.0",
+                    "text": ":arrows_counterclockwise: Continuing\n_(session: new-late-owl)_",
+                },
+            ],
+        }
+        client.conversations_replies.side_effect = [page1, page2]
+
+        with patch("chicane.config._HANDOFF_MAP_FILE", tmp_path / "sessions.json"):
+            save_handoff_session("old-early-bird", "sess-old")
+            save_handoff_session("new-late-owl", "sess-new")
+            result = await _find_session_id_in_thread("C_CHAN", "1000.0", client)
+
+        # Should pick the newer one from page 2
+        assert result.session_id == "sess-new"
+        assert result.alias == "new-late-owl"
+        assert result.total_found == 2
+        assert "old-early-bird" in result.skipped_aliases
 
 
 class TestResolveChannelCwd:
