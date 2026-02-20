@@ -1132,7 +1132,7 @@ async def _find_session_id_in_thread(
                     result.session_id = sid
                     result.alias = val
                     resolved = True
-                    logger.debug(f"Resolved alias {val} → {sid[:8]}...")
+                    logger.debug(f"Resolved alias {val} -> {sid[:8]}...")
                 else:
                     result.skipped_aliases.append(val)
             else:
@@ -1191,7 +1191,7 @@ async def _resolve_channel_cwd(
 
     resolved = config.resolve_channel_dir(channel_name)
     if resolved:
-        logger.debug(f"Channel #{channel_name} → cwd {resolved}")
+        logger.debug(f"Channel #{channel_name} -> cwd {resolved}")
     return resolved
 
 
@@ -1263,7 +1263,7 @@ async def _download_files(
 
                 local_path.write_bytes(data)
                 downloaded.append((name, local_path, mimetype))
-                logger.info(f"Downloaded {name} ({len(data)} bytes) → {local_path}")
+                logger.info(f"Downloaded {name} ({len(data)} bytes) -> {local_path}")
             except Exception:
                 logger.exception(f"Failed to download file {name}")
 

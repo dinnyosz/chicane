@@ -250,7 +250,7 @@ def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
             name = name.lstrip("#")
             path = Prompt.ask("  Path", default=name, console=console).strip()
             mappings[name] = path
-            console.print(f"  [green]✓[/green] Added #{name} → {path}\n")
+            console.print(f"  [green]✓[/green] Added #{name} -> {path}\n")
             _show_channel_table(mappings)
         elif action == "r":
             if not mappings:
@@ -625,7 +625,7 @@ def _step_logging(defaults: dict[str, str]) -> tuple[str, str]:
     valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR"}
     console.print("\n  [bold]Log Level[/bold]")
     console.print("  Messages below this level are suppressed.")
-    console.print("  DEBUG > INFO > WARNING > ERROR (most → least verbose)")
+    console.print("  DEBUG > INFO > WARNING > ERROR (most -> least verbose)")
     while True:
         log_level = _prompt_with_default(
             "Log level",

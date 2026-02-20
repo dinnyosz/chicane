@@ -407,7 +407,7 @@ def _run_detached() -> None:
     pid = os.fork()
     if pid > 0:
         # Parent — print PID and exit
-        print(f"Chicane running in background (PID {pid}). Logs → {config.log_dir}")
+        print(f"Chicane running in background (PID {pid}). Logs -> {config.log_dir}")
         sys.exit(0)
 
     # Child — detach from terminal
