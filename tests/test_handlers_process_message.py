@@ -510,6 +510,61 @@ class TestProcessMessageEdgeCases:
             assert "old-dusty-parrot" in text
 
     @pytest.mark.asyncio
+    async def test_reconnect_duplicate_alias_not_shown_as_skipped(self, config, sessions, queue, tmp_path):
+        """When the same alias appears multiple times in a thread (e.g. from
+        the original handoff + a previous reconnect message), the duplicate
+        should NOT be displayed as 'skipped older'."""
+        async def fake_stream(prompt):
+            yield make_event("system", subtype="init", session_id="the-sess")
+            yield make_event("result", text="ok")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "the-sess"
+
+        client = mock_client()
+        client.conversations_replies.return_value = {
+            "messages": [
+                {
+                    "user": "UBOT123",
+                    "ts": "6000.0",
+                    "text": ":sparkles: Handoff\n_(session: gardening-ruby-scroll)_",
+                },
+                {
+                    "user": "UBOT123",
+                    "ts": "6001.0",
+                    "text": ":arrows_counterclockwise: Continuing session _gardening-ruby-scroll_\n_(session: gardening-ruby-scroll)_",
+                },
+            ]
+        }
+
+        with (
+            patch("chicane.config._HANDOFF_MAP_FILE", tmp_path / "sessions.json"),
+            patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)) as mock_create,
+        ):
+            save_handoff_session("gardening-ruby-scroll", "the-sess")
+
+            event = {
+                "ts": "6003.0",
+                "thread_ts": "6000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event, "hello again", client, config, sessions, queue)
+
+            assert mock_create.call_args.kwargs["session_id"] == "the-sess"
+
+            continuing_posts = [
+                c for c in client.chat_postMessage.call_args_list
+                if ":arrows_counterclockwise:" in c.kwargs.get("text", "")
+            ]
+            assert len(continuing_posts) == 1
+            text = continuing_posts[0].kwargs["text"]
+            assert "gardening-ruby-scroll" in text
+            # The duplicate alias should NOT appear as "skipped older"
+            assert "skipped older" not in text
+
+    @pytest.mark.asyncio
     async def test_reconnect_unmapped_alias_warns(self, config, sessions, queue, tmp_path):
         """When reconnecting and the alias can't be mapped, a warning is
         shown and a new session starts."""

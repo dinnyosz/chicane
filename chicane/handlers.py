@@ -714,9 +714,16 @@ async def _process_message(
                             # Add context about other sessions in the thread
                             if session_search and session_search.total_found > 1:
                                 extras: list[str] = []
-                                if session_search.skipped_aliases:
+                                # Filter out the resolved alias from skipped —
+                                # duplicate refs to the *same* session aren't
+                                # interesting to the user.
+                                other_skipped = [
+                                    a for a in session_search.skipped_aliases
+                                    if a != alias
+                                ]
+                                if other_skipped:
                                     extras.append(
-                                        f"skipped older: {', '.join(f'_{a}_' for a in session_search.skipped_aliases)}"
+                                        f"skipped older: {', '.join(f'_{a}_' for a in other_skipped)}"
                                     )
                                 if session_search.unmapped_aliases:
                                     extras.append(
@@ -724,8 +731,6 @@ async def _process_message(
                                     )
                                 if extras:
                                     msg += f"\n({'; '.join(extras)})"
-                                else:
-                                    msg += f"\n({session_search.total_found} sessions found in thread, using most recent)"
                             msg += f"\n_(session: {alias})_"
                             await queue.post_message(
                                 channel, thread_ts, msg,
