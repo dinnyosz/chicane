@@ -1849,7 +1849,7 @@ async def _send_snippet(
     text: str,
     initial_comment: str = "",
     *,
-    filename: str = "response.md",
+    filename: str = "response.txt",
     snippet_type: str | None = None,
     _max_attempts: int = 2,
     _retry_delay: float = 2.0,
@@ -1872,8 +1872,9 @@ async def _send_snippet(
                 title=Path(filename).stem or "snippet",
                 channel=channel,
                 thread_ts=thread_ts,
-                snippet_type=snippet_type or "text",
             )
+            if snippet_type:
+                upload_kwargs["snippet_type"] = snippet_type
             if initial_comment:
                 upload_kwargs["initial_comment"] = initial_comment
             await client.files_upload_v2(**upload_kwargs)
