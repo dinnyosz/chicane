@@ -118,7 +118,7 @@ async def chicane_handoff(
     client = await _get_client()
     await client.chat_postMessage(channel=channel_id, text=text)
 
-    return f"Handoff posted to #{channel_name}. The team can pick it up from there."
+    return f"Handoff posted to #{channel_name}. You can pick it up from Slack."
 
 
 @mcp.tool(annotations=_SLACK_ANNOTATIONS)
@@ -130,8 +130,8 @@ async def chicane_send_message(
 
     The channel is resolved from the current working directory via
     CHANNEL_DIRS if not provided. Use for any project-related communication:
-    progress updates, completed work, errors, questions, or anything the
-    team should know about.
+    progress updates, completed work, errors, questions, or anything
+    worth logging to Slack.
     """
     try:
         channel_name, channel_id = await _resolve_channel(channel or None)

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Chicane** is a Slack bot that bridges Claude Code sessions into team chat. It connects Slack (via Socket Mode) to the Claude Agent SDK for persistent, multi-turn coding sessions. The killer feature is **session handoff** — passing coding sessions between desktop Claude Code and Slack (and back).
+**Chicane** is a Slack bot that bridges Claude Code sessions into Slack. It connects Slack (via Socket Mode) to the Claude Agent SDK for persistent, multi-turn coding sessions. The killer feature is **session handoff** — passing coding sessions between desktop Claude Code and Slack (and back).
 
 *"When Claude Code can't go straight, take the chicane."*
 

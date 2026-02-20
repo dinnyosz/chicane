@@ -6,7 +6,7 @@ A Slack bridge for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 
 ## Why "Chicane"?
 
-In motorsport, a **chicane** is a sequence of tight turns that forces drivers off the straight line — an engineered detour that still gets you to the finish. When you can't go straight to your Claude Code session (you're away from your desk, on your phone, or want your team involved), **Chicane** is the engineered path through Slack. The session continues, the context is preserved, you just took a different route.
+In motorsport, a **chicane** is a sequence of tight turns that forces drivers off the straight line — an engineered detour that still gets you to the finish. When you can't go straight to your Claude Code session (you're away from your desk, on your phone, or just prefer a chat interface), **Chicane** is the engineered path through Slack. The session continues, the context is preserved, you just took a different route.
 
 ## How it works
 
@@ -139,7 +139,7 @@ A separate `chicane-mcp-dev` binary is provided so it can coexist with a PyPI-in
 claude mcp add chicane-dev -- chicane-mcp-dev
 ```
 
-Once added, Claude Code discovers the tools automatically. You can say "hand this off to Slack" or "send a message to the team" and Claude will use the MCP tools.
+Once added, Claude Code discovers the tools automatically. You can say "hand this off to Slack" or "send an update to Slack" and Claude will use the MCP tools.
 
 **Tools:**
 
