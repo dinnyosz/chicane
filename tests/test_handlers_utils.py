@@ -11,6 +11,7 @@ from chicane.handlers import (
     _bot_in_thread,
     _fetch_thread_history,
     _find_session_id_in_thread,
+    _guess_snippet_type,
     _has_git_commit,
     _HANDOFF_RE,
     _SESSION_ALIAS_RE,
@@ -920,3 +921,42 @@ class TestHasGitCommit:
             tool_block("Bash", command='git commit -m "done"'),
         )
         assert _has_git_commit(event) is True
+
+
+class TestGuessSnippetType:
+    """Tests for _guess_snippet_type which prevents Slack 'Binary' classification."""
+
+    def test_diff_output(self):
+        text = "diff --git a/foo.py b/foo.py\nindex abc..def 100644\n--- a/foo.py\n+++ b/foo.py\n"
+        assert _guess_snippet_type(text) == "diff"
+
+    def test_diff_with_leading_whitespace(self):
+        text = "  diff --git a/foo.py b/foo.py\n"
+        assert _guess_snippet_type(text) == "diff"
+
+    def test_unified_diff_header(self):
+        text = "--- a/foo.py\n+++ b/foo.py\n@@ -1,3 +1,4 @@\n"
+        assert _guess_snippet_type(text) == "diff"
+
+    def test_json_output(self):
+        text = '{"key": "value", "nested": {"a": 1}}'
+        assert _guess_snippet_type(text) == "javascript"
+
+    def test_xml_output(self):
+        text = '<?xml version="1.0"?><root></root>'
+        assert _guess_snippet_type(text) == "xml"
+
+    def test_html_output(self):
+        text = "<html><body>hello</body></html>"
+        assert _guess_snippet_type(text) == "xml"
+
+    def test_plain_text_fallback(self):
+        text = "just some regular output from a command"
+        assert _guess_snippet_type(text) == "text"
+
+    def test_empty_string(self):
+        assert _guess_snippet_type("") == "text"
+
+    def test_multiline_plain_text(self):
+        text = "line one\nline two\nline three\n"
+        assert _guess_snippet_type(text) == "text"

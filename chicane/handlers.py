@@ -636,10 +636,12 @@ async def _process_message(
                                 continue
                             # Upload long tool output as a snippet (>500 chars)
                             if len(result_text) > 500:
+                                stype = _guess_snippet_type(result_text)
                                 await _send_snippet(
                                     client, channel, thread_ts,
                                     result_text,
                                     initial_comment=":clipboard: Tool output (uploaded as snippet):",
+                                    snippet_type=stype,
                                     queue=queue,
                                 )
                             else:
@@ -1849,6 +1851,22 @@ def _markdown_to_mrkdwn(text: str) -> str:
     return text
 
 
+def _guess_snippet_type(text: str) -> str:
+    """Guess a Slack snippet_type from content so Slack doesn't classify it as Binary.
+
+    Returns a Slack-recognised filetype string (e.g. "diff", "python",
+    "javascript") or "text" as a safe fallback.
+    """
+    first_line = text.lstrip()[:120]
+    if first_line.startswith("diff --git ") or first_line.startswith("--- a/"):
+        return "diff"
+    if first_line.startswith("{"):
+        return "javascript"  # Slack uses this for JSON too
+    if first_line.startswith("<?xml") or first_line.startswith("<html"):
+        return "xml"
+    return "text"
+
+
 async def _send_snippet(
     client: AsyncWebClient,
     channel: str,
@@ -1877,6 +1895,10 @@ async def _send_snippet(
     # Strip control characters (except \n, \r, \t) that can cause Slack
     # to classify the upload as "Binary" instead of displayable text.
     text = re.sub(r"[^\x09\x0a\x0d\x20-\x7e\x80-\uffff]", "", text)
+
+    # Always provide a snippet_type so Slack doesn't guess "Binary".
+    if not snippet_type:
+        snippet_type = "text"
 
     last_exc: BaseException | None = None
     for attempt in range(1, _max_attempts + 1):
