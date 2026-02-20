@@ -164,7 +164,7 @@ class TestClaudeEvent:
             },
         )
         errors = event.tool_errors
-        assert errors == ["Command failed"]
+        assert errors == [("", "Command failed")]
 
     def test_tool_errors_with_list_content(self):
         event = ClaudeEvent(
@@ -182,7 +182,7 @@ class TestClaudeEvent:
                 },
             },
         )
-        assert event.tool_errors == ["error part 1 part 2"]
+        assert event.tool_errors == [("", "error part 1 part 2")]
 
     def test_tool_errors_empty_for_non_user_event(self):
         event = ClaudeEvent(
@@ -267,7 +267,7 @@ class TestClaudeEvent:
                 },
             },
         )
-        assert event.tool_errors == ["Sibling tool call errored"]
+        assert event.tool_errors == [("", "Sibling tool call errored")]
 
     def test_tool_errors_strips_raw_xml_tags(self):
         event = ClaudeEvent(
@@ -285,7 +285,7 @@ class TestClaudeEvent:
                 },
             },
         )
-        assert event.tool_errors == ["Something failed"]
+        assert event.tool_errors == [("", "Something failed")]
 
     def test_tool_errors_empty_when_no_errors(self):
         event = ClaudeEvent(
@@ -534,7 +534,7 @@ class TestSdkMessageConversion:
         raw = _sdk_message_to_raw(msg)
         event = ClaudeEvent(type="user", raw=raw)
         assert len(event.tool_errors) == 1
-        assert "Connection refused" in event.tool_errors[0]
+        assert event.tool_errors[0] == ("toolu_mcp", "Connection refused")
 
     def test_sdk_message_to_raw_system_init(self):
         from claude_agent_sdk import SystemMessage

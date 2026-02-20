@@ -197,15 +197,16 @@ class ClaudeEvent:
         return self.raw.get("parent_tool_use_id")
 
     @property
-    def tool_errors(self) -> list[str]:
-        """Extract error messages from tool_result blocks in user events."""
+    def tool_errors(self) -> list[tuple[str, str]]:
+        """Extract (tool_use_id, error_msg) from tool_result blocks in user events."""
         if self.type != "user":
             return []
         message = self.raw.get("message", {})
         content = message.get("content", [])
-        errors = []
+        errors: list[tuple[str, str]] = []
         for block in content:
             if block.get("type") == "tool_result" and block.get("is_error"):
+                tool_use_id = block.get("tool_use_id", "")
                 text = block.get("content", "")
                 if isinstance(text, list):
                     text = "".join(
@@ -218,7 +219,7 @@ class ClaudeEvent:
                     text = html.unescape(text)
                     text = re.sub(r"</?[a-z_]+>", "", text).strip()
                     if text:
-                        errors.append(text)
+                        errors.append((tool_use_id, text))
         return errors
 
     @property
