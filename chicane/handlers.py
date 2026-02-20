@@ -1919,11 +1919,20 @@ async def _send_snippet(
     stem = Path(filename).stem or "response"
     filename = f"{stem}{ext}"
 
+    # Encode as bytes with a UTF-8 BOM prefix.  The SDK's
+    # _to_v2_file_upload_item accepts ``content`` as ``bytes`` and
+    # sends them directly via the raw POST to Slack's upload URL.
+    # That POST carries *no* Content-Type header, so Slack's
+    # server-side detector inspects the raw bytes.  The BOM
+    # (EF BB BF) is a universally recognised signal that the
+    # payload is UTF-8 text, preventing "Binary" misclassification.
+    content_bytes: bytes = b"\xef\xbb\xbf" + text.encode("utf-8")
+
     last_exc: BaseException | None = None
     for attempt in range(1, _max_attempts + 1):
         try:
             upload_kwargs: dict = dict(
-                content=text,
+                content=content_bytes,
                 filename=filename,
                 title=stem or "snippet",
                 channel=channel,

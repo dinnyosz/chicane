@@ -982,6 +982,9 @@ class TestSnippetExt:
 class TestSendSnippetFilenameAlignment:
     """Tests that _send_snippet aligns filename extension with snippet_type."""
 
+    # UTF-8 BOM that _send_snippet prepends to all uploads.
+    _BOM = b"\xef\xbb\xbf"
+
     @pytest.mark.asyncio
     async def test_diff_snippet_gets_diff_extension(self):
         """When snippet_type='diff', filename should end with .diff."""
@@ -1018,3 +1021,33 @@ class TestSendSnippetFilenameAlignment:
 
         kwargs = client.files_upload_v2.call_args.kwargs
         assert kwargs["filename"] == "output.json"
+
+    @pytest.mark.asyncio
+    async def test_content_uploaded_as_bytes_with_bom(self):
+        """Content should be uploaded as bytes prefixed with a UTF-8 BOM."""
+        client = AsyncMock()
+        client.files_upload_v2 = AsyncMock()
+
+        from chicane.handlers import _send_snippet
+        await _send_snippet(client, "C123", "t1", "hello world")
+
+        kwargs = client.files_upload_v2.call_args.kwargs
+        content = kwargs["content"]
+        assert isinstance(content, bytes), "content should be bytes, not str"
+        assert content.startswith(self._BOM), "content should start with UTF-8 BOM"
+        assert content == self._BOM + b"hello world"
+
+    @pytest.mark.asyncio
+    async def test_bom_with_unicode_content(self):
+        """Unicode content (e.g. en-dash) should survive BOM encoding."""
+        client = AsyncMock()
+        client.files_upload_v2 = AsyncMock()
+
+        from chicane.handlers import _send_snippet
+        text = "range: 1\u20133"
+        await _send_snippet(client, "C123", "t1", text)
+
+        kwargs = client.files_upload_v2.call_args.kwargs
+        content = kwargs["content"]
+        assert isinstance(content, bytes)
+        assert content == self._BOM + text.encode("utf-8")
