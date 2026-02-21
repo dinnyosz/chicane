@@ -139,7 +139,7 @@ def _show_channel_table(mappings: dict[str, str]) -> None:
 
 def _step_create_app(has_tokens: bool) -> None:
     """Step 1: Print manifest and wait for user to create the app."""
-    console.rule("Step 1 of 16: Create Slack App")
+    console.rule("Step 1 of 17: Create Slack App")
 
     if has_tokens:
         console.print("\n  Tokens found in config -- Slack app likely already configured.")
@@ -171,7 +171,7 @@ def _step_create_app(has_tokens: bool) -> None:
 
 def _step_bot_token(default: str = "") -> str:
     """Step 2: Get Bot Token."""
-    console.rule("Step 2 of 16: Get Bot Token")
+    console.rule("Step 2 of 17: Get Bot Token")
 
     if default:
         console.print("\n  Bot token found in config. Press Enter to keep it,")
@@ -189,7 +189,7 @@ def _step_bot_token(default: str = "") -> str:
 
 def _step_app_token(default: str = "") -> str:
     """Step 3: Get App Token."""
-    console.rule("Step 3 of 16: Get App Token")
+    console.rule("Step 3 of 17: Get App Token")
 
     if default:
         console.print("\n  App token found in config. Press Enter to keep it,")
@@ -212,7 +212,7 @@ def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
 
     Returns (base_directory, channel_dirs_string).
     """
-    console.rule("Step 4 of 16: Directory Settings")
+    console.rule("Step 4 of 17: Directory Settings")
     console.print("\n  [yellow]Note:[/yellow] Chicane will run Claude Code in these directories remotely.")
     console.print("  Only add directories you trust and are okay to tinker with.\n")
 
@@ -270,7 +270,7 @@ def _step_channel_dirs(defaults: dict[str, str]) -> tuple[str, str]:
 
 def _step_allowed_users(defaults: dict[str, str]) -> str:
     """Step 5: Configure allowed users interactively. Returns comma-separated IDs or empty."""
-    console.rule("Step 5 of 16: Allowed Users")
+    console.rule("Step 5 of 17: Allowed Users")
     console.print("\n  Restrict who can use the bot by Slack member ID.")
     console.print("  (Find yours: Slack profile -> ... menu -> Copy member ID)\n")
 
@@ -313,7 +313,7 @@ def _step_allowed_users(defaults: dict[str, str]) -> str:
 
 def _step_claude_model(default: str = "") -> str:
     """Step 6: Configure Claude model."""
-    console.rule("Step 6 of 16: Claude Model")
+    console.rule("Step 6 of 17: Claude Model")
     console.print("\n  Override the Claude model used for tasks.")
     console.print("  Options: sonnet, opus, haiku (or any Claude model ID).")
     console.print("  Leave empty to use the Claude CLI default.")
@@ -322,7 +322,7 @@ def _step_claude_model(default: str = "") -> str:
 
 def _step_permission_mode(default: str = "acceptEdits", *, allowed_users: str = "") -> str:
     """Step 7: Configure permission mode."""
-    console.rule("Step 7 of 16: Permission Mode")
+    console.rule("Step 7 of 17: Permission Mode")
     console.print("\n  Controls what Claude Code can do autonomously.")
     console.print("  [dim]acceptEdits[/dim]       -- auto-accepts file edits, use allowed tools for shell")
     console.print("  [dim]dontAsk[/dim]           -- auto-denies everything except allowed tools")
@@ -380,7 +380,7 @@ def _show_allowed_tools(tools: list[str]) -> None:
 
 def _step_allowed_tools(default: str = "") -> str:
     """Step 8: Configure allowed tools interactively. Returns comma-separated rules."""
-    console.rule("Step 8 of 16: Allowed Tools")
+    console.rule("Step 8 of 17: Allowed Tools")
     console.print("\n  Pre-approve specific tools so Claude doesn't prompt for them.")
     console.print("  These extend your existing Claude settings.json permissions.")
     console.print("  Leave empty to use your existing Claude config as-is.")
@@ -438,7 +438,7 @@ def _show_disallowed_tools(tools: list[str]) -> None:
 
 def _step_disallowed_tools(default: str = "") -> str:
     """Step 9: Configure disallowed tools interactively. Returns comma-separated rules."""
-    console.rule("Step 9 of 16: Disallowed Tools")
+    console.rule("Step 9 of 17: Disallowed Tools")
     console.print("\n  Block specific tools so Claude cannot use them.")
     console.print("  Complement to allowed tools -- these are always denied.")
     console.print("  Patterns: [dim]Bash[/dim], [dim]Edit(./secrets/**)[/dim], [dim]WebFetch[/dim]\n")
@@ -501,7 +501,7 @@ def _show_setting_sources(sources: list[str]) -> None:
 
 def _step_setting_sources(default: str = "user,project,local") -> str:
     """Step 10: Configure which Claude config scopes are loaded. Returns comma-separated sources."""
-    console.rule("Step 10 of 16: Setting Sources")
+    console.rule("Step 10 of 17: Setting Sources")
     console.print("\n  Which Claude config scopes to load.")
     console.print("  [dim]user[/dim]     -- ~/.claude/settings.json (global user preferences)")
     console.print("  [dim]project[/dim]  -- .claude/settings.json (project-level, checked into git)")
@@ -551,7 +551,7 @@ def _step_setting_sources(default: str = "user,project,local") -> str:
 
 def _step_max_turns(default: str = "") -> str:
     """Step 11: Configure max turns per message."""
-    console.rule("Step 11 of 16: Max Turns")
+    console.rule("Step 11 of 17: Max Turns")
     console.print("\n  Maximum number of agentic turns Claude can take per message.")
     console.print("  Each turn is one API call; complex tasks may need 20-50+ turns.")
     console.print("  Leave empty for unlimited (Claude decides when to stop).")
@@ -571,7 +571,7 @@ def _step_max_turns(default: str = "") -> str:
 
 def _step_max_budget(default: str = "") -> str:
     """Step 12: Configure max budget per message."""
-    console.rule("Step 12 of 16: Max Budget")
+    console.rule("Step 12 of 17: Max Budget")
     console.print("\n  Maximum cost in USD that Claude can spend per message.")
     console.print("  Prevents runaway spending on long-running tasks.")
     console.print("  Leave empty for no budget limit.")
@@ -590,8 +590,8 @@ def _step_max_budget(default: str = "") -> str:
 
 
 def _step_rate_limit(default: str = "10") -> str:
-    """Step 13 of 16: Configure rate limit."""
-    console.rule("Step 13 of 16: Rate Limit")
+    """Step 13 of 17: Configure rate limit."""
+    console.rule("Step 13 of 17: Rate Limit")
     console.print("\n  Maximum messages per user per minute.")
     console.print("  Prevents abuse and runaway costs from message floods.")
     console.print("  Default: 10 messages/minute per user.")
@@ -611,7 +611,7 @@ def _step_rate_limit(default: str = "10") -> str:
 
 def _step_logging(defaults: dict[str, str]) -> tuple[str, str]:
     """Step 14: Configure log directory and log level. Returns (log_dir, log_level)."""
-    console.rule("Step 14 of 16: Logging")
+    console.rule("Step 14 of 17: Logging")
     from platformdirs import user_log_dir
 
     default_log_dir = defaults.get("LOG_DIR", "") or user_log_dir("chicane", appauthor=False)
@@ -641,7 +641,7 @@ def _step_logging(defaults: dict[str, str]) -> tuple[str, str]:
 
 def _step_verbosity(default: str = "verbose") -> str:
     """Step 15: Configure verbosity level."""
-    console.rule("Step 15 of 16: Verbosity")
+    console.rule("Step 15 of 17: Verbosity")
     console.print("\n  Controls how much detail is shown in Slack during Claude sessions.")
     console.print("  [dim]minimal[/dim]  -- Only final text responses and completion summaries")
     console.print("  [dim]normal[/dim]   -- Text + tool call summaries and errors")
@@ -654,6 +654,21 @@ def _step_verbosity(default: str = "verbose") -> str:
         if val in valid_levels:
             return val
         console.print(f"  [red]Invalid level '{val}'. Choose from: {', '.join(sorted(valid_levels))}[/red]\n")
+
+
+def _step_react_to_strangers(default: str = "yes") -> str:
+    """Step 16: Configure stranger reactions."""
+    console.rule("Step 16 of 17: React to Strangers")
+    console.print("\n  When an unauthorized user messages in a Chicane thread,")
+    console.print("  react to their message with a random fun emoji.")
+    console.print("  (e.g. :hear_no_evil: :ghost: :shushing_face:)\n")
+    while True:
+        val = _prompt_with_default("React to strangers (yes/no)", default).lower()
+        if not val:
+            val = default
+        if val in ("yes", "no"):
+            return "true" if val == "yes" else "false"
+        console.print("  [red]Please enter 'yes' or 'no'.[/red]\n")
 
 
 def _write_env(path: Path, values: dict[str, str]) -> None:
@@ -770,8 +785,14 @@ def _run_wizard(args) -> None:
     _set_or_clear("VERBOSITY", _step_verbosity(existing.get("VERBOSITY", "verbose")))
     _save()
 
-    # Step 16: Done
-    console.rule("Step 16 of 16: Done")
+    # Step 16: React to Strangers
+    _set_or_clear("REACT_TO_STRANGERS", _step_react_to_strangers(
+        "yes" if existing.get("REACT_TO_STRANGERS", "true").lower() in ("true", "1", "yes", "") else "no"
+    ))
+    _save()
+
+    # Step 17: Done
+    console.rule("Step 17 of 17: Done")
     console.print()
     console.print(Panel(
         f"[green][ok][/green] Config saved to {env_path}\n"

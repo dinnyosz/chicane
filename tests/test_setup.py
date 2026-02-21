@@ -885,8 +885,8 @@ class TestSetupCommand:
 
     def test_fresh_setup_writes_env(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CHICANE_CONFIG_DIR", str(tmp_path))
-        # Prompt.ask: base dir, done(channels), done(users), model, permission, done(tools), done(disallowed), done(sources), max_turns, max_budget, rate_limit, log_dir, log_level, verbosity
-        prompt_values = ["", "d", "d", "", "", "d", "d", "d", "", "", "10", "", "INFO", "normal"]
+        # Prompt.ask: base dir, done(channels), done(users), model, permission, done(tools), done(disallowed), done(sources), max_turns, max_budget, rate_limit, log_dir, log_level, verbosity, react_to_strangers
+        prompt_values = ["", "d", "d", "", "", "d", "d", "d", "", "", "10", "", "INFO", "normal", "yes"]
         # console.input: press Enter (step1), bot token, app token
         input_values = [
             "",              # Step 1: press Enter
@@ -912,8 +912,8 @@ class TestSetupCommand:
         (tmp_path / ".env").write_text(
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nBASE_DIRECTORY=/old\n"
         )
-        # Prompt.ask: base dir (keep), done(channels), done(users), model, permission, done(tools), done(disallowed), done(sources), max_turns, max_budget, rate_limit, log_dir, log_level, verbosity
-        prompt_values = ["/old", "d", "d", "", "", "d", "d", "d", "", "", "10", "", "INFO", "normal"]
+        # Prompt.ask: base dir (keep), done(channels), done(users), model, permission, done(tools), done(disallowed), done(sources), max_turns, max_budget, rate_limit, log_dir, log_level, verbosity, react_to_strangers
+        prompt_values = ["/old", "d", "d", "", "", "d", "d", "d", "", "", "10", "", "INFO", "normal", "yes"]
         # Confirm.ask: skip step1=True
         confirm_values = [True]
         # console.input: bot token (empty=keep), app token (empty=keep)
@@ -940,8 +940,8 @@ class TestSetupCommand:
         (tmp_path / ".env").write_text(
             "SLACK_BOT_TOKEN=xoxb-old\nSLACK_APP_TOKEN=xapp-old\nCHANNEL_DIRS=old-proj\n"
         )
-        # Prompt.ask: base dir, add channels, done(users), model, permission, done(tools), done(disallowed), done(sources), max_turns, max_budget, rate_limit, log_dir, log_level, verbosity
-        prompt_values = ["", "a", "new-proj", "new-proj", "a", "extra", "extra", "d", "d", "", "", "d", "d", "d", "", "", "10", "", "INFO", "normal"]
+        # Prompt.ask: base dir, add channels, done(users), model, permission, done(tools), done(disallowed), done(sources), max_turns, max_budget, rate_limit, log_dir, log_level, verbosity, react_to_strangers
+        prompt_values = ["", "a", "new-proj", "new-proj", "a", "extra", "extra", "d", "d", "", "", "d", "d", "d", "", "", "10", "", "INFO", "normal", "yes"]
         # Confirm.ask: skip step1=True
         confirm_values = [True]
         # console.input: bot token override, app token keep
@@ -966,8 +966,8 @@ class TestSetupCommand:
 
     def test_token_validation_reprompts(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CHICANE_CONFIG_DIR", str(tmp_path))
-        # Prompt.ask: base dir, done (channels), done (users), model, permission, done (tools), done(disallowed), done(sources), max_turns, max_budget, rate_limit, log_dir, log_level, verbosity
-        prompt_values = ["", "d", "d", "", "", "d", "d", "d", "", "", "10", "", "INFO", "normal"]
+        # Prompt.ask: base dir, done (channels), done (users), model, permission, done (tools), done(disallowed), done(sources), max_turns, max_budget, rate_limit, log_dir, log_level, verbosity, react_to_strangers
+        prompt_values = ["", "d", "d", "", "", "d", "d", "d", "", "", "10", "", "INFO", "normal", "yes"]
         # console.input: press Enter (step1), bad bot, good bot, bad app, good app
         input_values = [
             "",              # Step 1: press Enter

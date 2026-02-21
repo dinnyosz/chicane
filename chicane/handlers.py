@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import random
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -199,7 +200,7 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
         if not _mark_processed(event["ts"]):
             return
 
-        if _should_ignore(event, config):
+        if await _should_ignore(event, config, client):
             return
 
         if await _check_rate_limit(event, client):
@@ -236,7 +237,7 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
         if channel_type == "im":
             if not _mark_processed(event["ts"]):
                 return
-            if _should_ignore(event, config):
+            if await _should_ignore(event, config, client):
                 return
             if await _check_rate_limit(event, client):
                 return
@@ -258,7 +259,7 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
             if is_chicane_thread:
                 if not _mark_processed(event["ts"]):
                     return
-                if _should_ignore(event, config):
+                if await _should_ignore(event, config, client):
                     return
                 if await _check_rate_limit(event, client):
                     return
@@ -276,7 +277,7 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
         if f"<@{bot_user_id}>" in text:
             if not _mark_processed(event["ts"]):
                 return
-            if _should_ignore(event, config):
+            if await _should_ignore(event, config, client):
                 return
             if await _check_rate_limit(event, client):
                 return
@@ -319,7 +320,19 @@ def register_handlers(app: AsyncApp, config: Config, sessions: SessionStore) -> 
             )
 
 
-def _should_ignore(event: dict, config: Config) -> bool:
+# Emojis used to react to messages from unauthorized users.
+_STRANGER_REACTIONS: tuple[str, ...] = (
+    "hear_no_evil",
+    "see_no_evil",
+    "speak_no_evil",
+    "zipper_mouth_face",
+    "shushing_face",
+    "ghost",
+    "alien",
+)
+
+
+async def _should_ignore(event: dict, config: Config, client: AsyncWebClient) -> bool:
     """Check if this event should be ignored."""
     user = event.get("user", "")
     if not config.allowed_users:
@@ -327,6 +340,14 @@ def _should_ignore(event: dict, config: Config) -> bool:
         return True
     if user not in config.allowed_users:
         security_logger.warning("BLOCKED: message from unauthorized user=%s", user)
+        if config.react_to_strangers:
+            try:
+                emoji = random.choice(_STRANGER_REACTIONS)
+                await client.reactions_add(
+                    channel=event["channel"], name=emoji, timestamp=event["ts"],
+                )
+            except Exception:
+                pass
         return True
     return False
 

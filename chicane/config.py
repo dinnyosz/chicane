@@ -79,6 +79,7 @@ class Config:
     claude_max_budget_usd: float | None = None
     rate_limit: int = 10
     verbosity: str = "verbose"
+    react_to_strangers: bool = True
 
     def __repr__(self) -> str:
         """Mask sensitive tokens in repr to prevent accidental leakage."""
@@ -232,6 +233,9 @@ class Config:
 
         verbosity = _validate_verbosity(os.environ.get("VERBOSITY", "verbose"))
 
+        raw_react = os.environ.get("REACT_TO_STRANGERS", "true").lower()
+        react_to_strangers = raw_react in ("true", "1", "yes")
+
         return cls(
             slack_bot_token=bot_token,
             slack_app_token=app_token,
@@ -249,6 +253,7 @@ class Config:
             claude_max_budget_usd=max_budget,
             rate_limit=rate_limit,
             verbosity=verbosity,
+            react_to_strangers=react_to_strangers,
         )
 
 

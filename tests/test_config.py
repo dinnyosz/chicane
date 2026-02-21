@@ -392,6 +392,28 @@ class TestVerbosityConfig:
             Config.from_env()
 
 
+class TestReactToStrangersConfig:
+    def test_default_true(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.delenv("REACT_TO_STRANGERS", raising=False)
+        assert Config.from_env().react_to_strangers is True
+
+    def test_truthy_values(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        for val in ("true", "True", "TRUE", "1", "yes", "Yes"):
+            monkeypatch.setenv("REACT_TO_STRANGERS", val)
+            assert Config.from_env().react_to_strangers is True, f"Expected True for '{val}'"
+
+    def test_falsy_values(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        for val in ("false", "False", "0", "no", "No"):
+            monkeypatch.setenv("REACT_TO_STRANGERS", val)
+            assert Config.from_env().react_to_strangers is False, f"Expected False for '{val}'"
+
+
 class TestConfigDir:
     def test_override_via_env(self, monkeypatch):
         monkeypatch.setenv("CHICANE_CONFIG_DIR", "/custom/path")

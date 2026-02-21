@@ -1,7 +1,7 @@
 """Tests for small utility/helper functions in chicane.handlers."""
 
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -24,32 +24,40 @@ from chicane.handlers import (
     SessionSearchResult,
     SLACK_MAX_LENGTH,
 )
-from tests.conftest import make_tool_event, tool_block
+from tests.conftest import make_tool_event, mock_client, tool_block
 
 
 class TestShouldIgnore:
-    def test_empty_allowed_users_blocks_all(self):
+    @pytest.mark.asyncio
+    async def test_empty_allowed_users_blocks_all(self):
         """When allowed_users is empty, all messages are blocked."""
         empty_config = Config(
             slack_bot_token="xoxb-test",
             slack_app_token="xapp-test",
             allowed_users=[],
         )
-        event = {"user": "U_ANYONE"}
-        assert _should_ignore(event, empty_config) is True
+        event = {"user": "U_ANYONE", "channel": "C_CHAN", "ts": "1.0"}
+        client = mock_client()
+        assert await _should_ignore(event, empty_config, client) is True
 
-    def test_allowed_user_in_list(self, config):
+    @pytest.mark.asyncio
+    async def test_allowed_user_in_list(self, config):
         """Users in the config's allowed_users list are not ignored."""
-        event = {"user": "UHUMAN1"}
-        assert _should_ignore(event, config) is False
+        event = {"user": "UHUMAN1", "channel": "C_CHAN", "ts": "1.0"}
+        client = mock_client()
+        assert await _should_ignore(event, config, client) is False
 
-    def test_allowed_user(self, config_restricted):
-        event = {"user": "U_ALLOWED"}
-        assert _should_ignore(event, config_restricted) is False
+    @pytest.mark.asyncio
+    async def test_allowed_user(self, config_restricted):
+        event = {"user": "U_ALLOWED", "channel": "C_CHAN", "ts": "1.0"}
+        client = mock_client()
+        assert await _should_ignore(event, config_restricted, client) is False
 
-    def test_blocked_user(self, config_restricted):
-        event = {"user": "U_BLOCKED"}
-        assert _should_ignore(event, config_restricted) is True
+    @pytest.mark.asyncio
+    async def test_blocked_user(self, config_restricted):
+        event = {"user": "U_BLOCKED", "channel": "C_CHAN", "ts": "1.0"}
+        client = mock_client()
+        assert await _should_ignore(event, config_restricted, client) is True
 
 
 class TestBotInThread:

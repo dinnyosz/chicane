@@ -19,32 +19,98 @@ from tests.conftest import (
 class TestShouldIgnore:
     """Tests for _should_ignore access control."""
 
-    def test_blocks_when_allowed_users_empty(self):
+    @pytest.mark.asyncio
+    async def test_blocks_when_allowed_users_empty(self):
         config = Config(
             slack_bot_token="xoxb-test",
             slack_app_token="xapp-test",
             allowed_users=[],
         )
-        event = {"user": "U_ANYONE"}
-        assert _should_ignore(event, config) is True
+        event = {"user": "U_ANYONE", "channel": "C_CHAN", "ts": "1.0"}
+        client = mock_client()
+        assert await _should_ignore(event, config, client) is True
 
-    def test_blocks_unauthorized_user(self):
+    @pytest.mark.asyncio
+    async def test_blocks_unauthorized_user(self):
         config = Config(
             slack_bot_token="xoxb-test",
             slack_app_token="xapp-test",
             allowed_users=["U_ALLOWED"],
         )
-        event = {"user": "U_BLOCKED"}
-        assert _should_ignore(event, config) is True
+        event = {"user": "U_BLOCKED", "channel": "C_CHAN", "ts": "1.0"}
+        client = mock_client()
+        assert await _should_ignore(event, config, client) is True
 
-    def test_allows_authorized_user(self):
+    @pytest.mark.asyncio
+    async def test_allows_authorized_user(self):
         config = Config(
             slack_bot_token="xoxb-test",
             slack_app_token="xapp-test",
             allowed_users=["U_ALLOWED"],
         )
-        event = {"user": "U_ALLOWED"}
-        assert _should_ignore(event, config) is False
+        event = {"user": "U_ALLOWED", "channel": "C_CHAN", "ts": "1.0"}
+        client = mock_client()
+        assert await _should_ignore(event, config, client) is False
+
+    @pytest.mark.asyncio
+    async def test_reacts_to_stranger_when_enabled(self):
+        config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            allowed_users=["U_ALLOWED"],
+            react_to_strangers=True,
+        )
+        event = {"user": "U_STRANGER", "channel": "C_CHAN", "ts": "2.0"}
+        client = mock_client()
+        await _should_ignore(event, config, client)
+        client.reactions_add.assert_called_once()
+        call_kwargs = client.reactions_add.call_args.kwargs
+        assert call_kwargs["channel"] == "C_CHAN"
+        assert call_kwargs["timestamp"] == "2.0"
+        from chicane.handlers import _STRANGER_REACTIONS
+        assert call_kwargs["name"] in _STRANGER_REACTIONS
+
+    @pytest.mark.asyncio
+    async def test_no_reaction_when_disabled(self):
+        config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            allowed_users=["U_ALLOWED"],
+            react_to_strangers=False,
+        )
+        event = {"user": "U_STRANGER", "channel": "C_CHAN", "ts": "3.0"}
+        client = mock_client()
+        await _should_ignore(event, config, client)
+        client.reactions_add.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_reaction_when_allowed_users_empty(self):
+        """When ALLOWED_USERS is not configured, don't react — nobody is authorized."""
+        config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            allowed_users=[],
+            react_to_strangers=True,
+        )
+        event = {"user": "U_ANYONE", "channel": "C_CHAN", "ts": "4.0"}
+        client = mock_client()
+        await _should_ignore(event, config, client)
+        client.reactions_add.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reaction_failure_does_not_raise(self):
+        """If the reactions_add API call fails, _should_ignore still returns True."""
+        config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            allowed_users=["U_ALLOWED"],
+            react_to_strangers=True,
+        )
+        event = {"user": "U_STRANGER", "channel": "C_CHAN", "ts": "5.0"}
+        client = mock_client()
+        client.reactions_add.side_effect = Exception("Slack API error")
+        result = await _should_ignore(event, config, client)
+        assert result is True
 
 
 class TestErrorSanitization:
@@ -270,25 +336,29 @@ class TestReconnectHistorySanitization:
 class TestSecurityLogging:
     """Tests that security events are logged to chicane.security logger."""
 
-    def test_blocked_user_logged(self, caplog):
+    @pytest.mark.asyncio
+    async def test_blocked_user_logged(self, caplog):
         config = Config(
             slack_bot_token="xoxb-test",
             slack_app_token="xapp-test",
             allowed_users=["U_ALLOWED"],
         )
+        client = mock_client()
         with caplog.at_level("WARNING", logger="chicane.security"):
-            _should_ignore({"user": "U_BLOCKED"}, config)
+            await _should_ignore({"user": "U_BLOCKED", "channel": "C_CHAN", "ts": "1.0"}, config, client)
         assert "BLOCKED" in caplog.text
         assert "U_BLOCKED" in caplog.text
 
-    def test_empty_allowed_users_logged(self, caplog):
+    @pytest.mark.asyncio
+    async def test_empty_allowed_users_logged(self, caplog):
         config = Config(
             slack_bot_token="xoxb-test",
             slack_app_token="xapp-test",
             allowed_users=[],
         )
+        client = mock_client()
         with caplog.at_level("WARNING", logger="chicane.security"):
-            _should_ignore({"user": "U_ANYONE"}, config)
+            await _should_ignore({"user": "U_ANYONE", "channel": "C_CHAN", "ts": "1.0"}, config, client)
         assert "BLOCKED" in caplog.text
         assert "ALLOWED_USERS" in caplog.text
 

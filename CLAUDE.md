@@ -41,7 +41,7 @@ Slack (Socket Mode) → app.py → handlers.py → sessions.py → claude.py →
 - **`handlers.py`** — Registers `app_mention` and `message` event handlers. See [Handler patterns](#handler-patterns) below.
 - **`sessions.py`** — `SessionStore` maps `thread_ts → SessionInfo`. One Claude session per Slack thread. Each `SessionInfo` carries a `ClaudeSession`, an `asyncio.Lock` for concurrency, and metadata. Includes `SLACK_SYSTEM_PROMPT` that constrains Claude's Slack behavior. Auto-cleanup of idle sessions (24h).
 - **`mcp_server.py`** — FastMCP server exposing `chicane_handoff`, `chicane_send_message`, and `chicane_init` tools. Uses stdio transport. Entry points: `chicane-mcp` / `chicane-mcp-dev`.
-- **`setup.py`** — Interactive 16-step wizard using Rich. Saves config progressively after each step so Ctrl+C preserves completed work.
+- **`setup.py`** — Interactive 17-step wizard using Rich. Saves config progressively after each step so Ctrl+C preserves completed work.
 - **`emoji_map.py`** — Custom alias generator producing verb-adjective-noun names (e.g. `dancing-cosmic-falcon`) with emoji mappings for Slack reactions.
 
 **Bundled assets** (`chicane/artifacts/`):
@@ -102,4 +102,4 @@ Config is loaded from `.env` in the platform config directory (`~/Library/Applic
 
 Required: `SLACK_BOT_TOKEN` (xoxb-...), `SLACK_APP_TOKEN` (xapp-...).
 
-Optional: `BASE_DIRECTORY`, `ALLOWED_USERS`, `CHANNEL_DIRS`, `CLAUDE_MODEL`, `CLAUDE_PERMISSION_MODE` (acceptEdits|dontAsk|bypassPermissions), `CLAUDE_ALLOWED_TOOLS`, `CLAUDE_DISALLOWED_TOOLS`, `CLAUDE_SETTING_SOURCES`, `CLAUDE_MAX_TURNS`, `CLAUDE_MAX_BUDGET_USD`, `RATE_LIMIT`, `VERBOSITY` (minimal|normal|verbose), `LOG_DIR`, `LOG_LEVEL` (DEBUG|INFO|WARNING|ERROR).
+Optional: `BASE_DIRECTORY`, `ALLOWED_USERS`, `CHANNEL_DIRS`, `CLAUDE_MODEL`, `CLAUDE_PERMISSION_MODE` (acceptEdits|dontAsk|bypassPermissions), `CLAUDE_ALLOWED_TOOLS`, `CLAUDE_DISALLOWED_TOOLS`, `CLAUDE_SETTING_SOURCES`, `CLAUDE_MAX_TURNS`, `CLAUDE_MAX_BUDGET_USD`, `RATE_LIMIT`, `VERBOSITY` (minimal|normal|verbose), `REACT_TO_STRANGERS` (true|false, default true), `LOG_DIR`, `LOG_LEVEL` (DEBUG|INFO|WARNING|ERROR).
