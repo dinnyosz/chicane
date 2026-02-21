@@ -84,8 +84,8 @@ class TestShouldIgnore:
         client.reactions_add.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_reaction_when_allowed_users_empty(self):
-        """When ALLOWED_USERS is not configured, don't react — nobody is authorized."""
+    async def test_reacts_when_allowed_users_empty(self):
+        """When ALLOWED_USERS is not configured, still react to everyone."""
         config = Config(
             slack_bot_token="xoxb-test",
             slack_app_token="xapp-test",
@@ -95,7 +95,7 @@ class TestShouldIgnore:
         event = {"user": "U_ANYONE", "channel": "C_CHAN", "ts": "4.0"}
         client = mock_client()
         await _should_ignore(event, config, client)
-        client.reactions_add.assert_not_called()
+        client.reactions_add.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_reaction_failure_does_not_raise(self):

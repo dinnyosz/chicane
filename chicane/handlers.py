@@ -335,11 +335,15 @@ _STRANGER_REACTIONS: tuple[str, ...] = (
 async def _should_ignore(event: dict, config: Config, client: AsyncWebClient) -> bool:
     """Check if this event should be ignored."""
     user = event.get("user", "")
+    blocked = False
     if not config.allowed_users:
         security_logger.warning("BLOCKED: message from user=%s -- ALLOWED_USERS is not configured", user)
-        return True
-    if user not in config.allowed_users:
+        blocked = True
+    elif user not in config.allowed_users:
         security_logger.warning("BLOCKED: message from unauthorized user=%s", user)
+        blocked = True
+
+    if blocked:
         if config.react_to_strangers:
             try:
                 emoji = random.choice(_STRANGER_REACTIONS)
