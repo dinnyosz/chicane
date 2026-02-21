@@ -80,6 +80,7 @@ class Config:
     rate_limit: int = 10
     verbosity: str = "verbose"
     react_to_strangers: bool = True
+    post_images: bool = False
 
     def __repr__(self) -> str:
         """Mask sensitive tokens in repr to prevent accidental leakage."""
@@ -236,6 +237,9 @@ class Config:
         raw_react = os.environ.get("REACT_TO_STRANGERS", "true").lower()
         react_to_strangers = raw_react in ("true", "1", "yes")
 
+        raw_post_images = os.environ.get("POST_IMAGES", "false").lower()
+        post_images = raw_post_images in ("true", "1", "yes")
+
         return cls(
             slack_bot_token=bot_token,
             slack_app_token=app_token,
@@ -254,6 +258,7 @@ class Config:
             rate_limit=rate_limit,
             verbosity=verbosity,
             react_to_strangers=react_to_strangers,
+            post_images=post_images,
         )
 
 
