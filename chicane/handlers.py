@@ -526,6 +526,7 @@ async def _process_message(
             await _remove_thread_reaction(client, channel, session_info, "hourglass")
         full_text = ""
         event_count = 0
+        had_tool_use = False  # track whether any tool_use blocks were seen
         result_event = None  # capture result event for completion summary
         git_committed = False  # track whether a git commit happened (since last edit)
         files_changed = False  # track uncommitted file changes
@@ -554,6 +555,10 @@ async def _process_message(
                 if event_data.type == "assistant":
                     # Track tool_use_id → tool name so we can filter results later
                     tool_id_to_name.update(event_data.tool_use_ids)
+
+                    # Track tool usage for empty-response detection
+                    if event_data.tool_use_ids:
+                        had_tool_use = True
 
                     # Flush any accumulated text before posting tool activity
                     # so the message order matches Claude Code console.
@@ -890,7 +895,10 @@ async def _process_message(
                         await queue.post_message(
                             channel, thread_ts, chunk,
                         )
-            else:
+            elif not had_tool_use:
+                # Only warn if Claude produced neither text nor tool use.
+                # Tool-only responses (e.g. ExitPlanMode, EnterPlanMode) are
+                # valid — activities are already posted in the thread.
                 logger.warning(
                     f"Empty response from Claude: {event_count} events received, "
                     f"session_id={session.session_id}, "
@@ -980,11 +988,16 @@ async def _process_message(
 
         except Exception as exc:
             logger.exception(f"Error processing message: {exc}")
+            # User-friendly message for known failure modes
+            if "timeout" in str(exc).lower():
+                error_text = ":x: Session startup timed out. Please try again."
+            else:
+                error_text = f":x: Error ({type(exc).__name__}). Check bot logs for details."
             try:
                 await client.chat_postMessage(
                     channel=channel,
                     thread_ts=thread_ts,
-                    text=f":x: Error ({type(exc).__name__}). Check bot logs for details.",
+                    text=error_text,
                 )
             except Exception:
                 logger.debug("Failed to post error message to Slack", exc_info=True)

@@ -7,7 +7,7 @@ import pytest
 
 from chicane.config import save_handoff_session, load_handoff_session
 from chicane.handlers import _process_message
-from tests.conftest import make_event, mock_client, mock_session_info
+from tests.conftest import make_event, make_tool_event, tool_block, mock_client, mock_session_info
 
 
 class TestProcessMessageFormatting:
@@ -146,6 +146,32 @@ class TestProcessMessageEdgeCases:
         assert len(warning_posts) == 1
 
     @pytest.mark.asyncio
+    async def test_tool_only_response_no_empty_warning(self, config, sessions, queue):
+        """Tool-only responses (e.g. ExitPlanMode) should NOT trigger empty warning."""
+        async def fake_stream(prompt):
+            yield make_event("system", subtype="init", session_id="s1")
+            yield make_tool_event(
+                tool_block("ExitPlanMode", plan="# My Plan"),
+            )
+            yield make_event("result", text="")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "5002.1", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "exit plan mode", client, config, sessions, queue)
+
+        warning_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if "empty response" in c.kwargs.get("text", "").lower()
+        ]
+        assert len(warning_posts) == 0
+
+    @pytest.mark.asyncio
     async def test_stream_exception_posts_error(self, config, sessions, queue):
         async def exploding_stream(prompt):
             yield make_event("system", subtype="init", session_id="s1")
@@ -171,6 +197,34 @@ class TestProcessMessageEdgeCases:
         assert "Check bot logs" in error_text
         # Ensure internal error message is NOT leaked to Slack
         assert "stream exploded" not in error_text
+
+    @pytest.mark.asyncio
+    async def test_timeout_exception_posts_friendly_message(self, config, sessions, queue):
+        """Timeout errors show a user-friendly message instead of generic error."""
+        async def timeout_stream(prompt):
+            raise Exception("Control request timeout: initialize")
+            yield  # noqa: unreachable — makes this an async generator
+
+        mock_session = MagicMock()
+        mock_session.stream = timeout_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "5004.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions, queue)
+
+        error_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":x:" in c.kwargs.get("text", "")
+        ]
+        assert len(error_posts) == 1
+        error_text = error_posts[0].kwargs["text"]
+        assert "timed out" in error_text
+        assert "try again" in error_text.lower()
+        # Should NOT show generic "Check bot logs" for timeouts
+        assert "Check bot logs" not in error_text
 
     @pytest.mark.asyncio
     async def test_long_response_uploaded_as_snippet(self, config, sessions, queue):
