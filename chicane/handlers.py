@@ -532,6 +532,8 @@ async def _process_message(
         files_changed = False  # track uncommitted file changes
         tool_id_to_name: dict[str, str] = {}  # tool_use_id → tool name
         stale_context_prompt: str | None = None  # set during init if session was stale
+        uploaded_images: set[str] = set()  # dedup image uploads
+        pending_image_paths: list[str] = []  # image paths from Write tool_use
 
         # Tool activity batching — accumulate consecutive activities and
         # post as a single message to reduce Slack API calls.
@@ -559,6 +561,12 @@ async def _process_message(
                     # Track tool usage for empty-response detection
                     if event_data.tool_use_ids:
                         had_tool_use = True
+
+                    # Collect image paths from Write/NotebookEdit tool_use
+                    if config.post_images:
+                        pending_image_paths.extend(
+                            _collect_image_paths_from_tool_use(event_data)
+                        )
 
                     # Flush any accumulated text before posting tool activity
                     # so the message order matches Claude Code console.
@@ -679,6 +687,28 @@ async def _process_message(
                                 await queue.post_message(
                                     channel, thread_ts, wrapped,
                                 )
+
+                    # Post images: upload pending Write-tool images that now
+                    # exist on disk, plus any image paths found in tool results.
+                    if config.post_images:
+                        # Check pending paths from Write tool_use blocks
+                        for img_path_str in pending_image_paths:
+                            if img_path_str in uploaded_images:
+                                continue
+                            p = Path(img_path_str)
+                            if p.is_file():
+                                uploaded_images.add(img_path_str)
+                                await _upload_image(
+                                    client, channel, thread_ts, p, queue,
+                                )
+                        pending_image_paths.clear()
+
+                        # Scan tool result text for image paths
+                        for _tool_use_id, rt in event_data.tool_results:
+                            await _upload_new_images(
+                                client, channel, thread_ts,
+                                rt, uploaded_images, queue,
+                            )
 
                 elif event_data.type == "system" and event_data.subtype == "init":
                     await _flush_activities()
@@ -911,6 +941,13 @@ async def _process_message(
                 )
                 await queue.post_message(
                     channel, thread_ts, msg,
+                )
+
+            # Post images: scan the final response text for image paths
+            if config.post_images and full_text:
+                await _upload_new_images(
+                    client, channel, thread_ts,
+                    full_text, uploaded_images, queue,
                 )
 
             # Update cumulative session stats and post completion summary
@@ -1931,6 +1968,100 @@ def _transliterate_to_ascii(text: str) -> str:
     text = _UNICODE_RE.sub(lambda m: _UNICODE_TO_ASCII[m.group()], text)
     # Drop anything still outside printable ASCII + whitespace.
     return text.encode("ascii", errors="ignore").decode("ascii")
+
+
+# ---------------------------------------------------------------------------
+# Image detection and upload
+# ---------------------------------------------------------------------------
+
+_IMAGE_EXTENSIONS = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp",
+    ".svg", ".bmp", ".ico", ".tiff",
+})
+
+_IMAGE_PATH_RE = re.compile(
+    r"(/[\w./ -]+\.(?:png|jpe?g|gif|webp|svg|bmp|ico|tiff))\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_image_paths(text: str) -> list[Path]:
+    """Extract absolute image file paths from text, returning only those that exist on disk."""
+    seen: set[str] = set()
+    paths: list[Path] = []
+    for match in _IMAGE_PATH_RE.finditer(text):
+        raw = match.group(1)
+        if raw in seen:
+            continue
+        seen.add(raw)
+        p = Path(raw)
+        if p.suffix.lower() in _IMAGE_EXTENSIONS and p.is_file():
+            paths.append(p)
+    return paths
+
+
+def _collect_image_paths_from_tool_use(event: ClaudeEvent) -> list[str]:
+    """Extract file paths with image extensions from tool_use blocks in an assistant event."""
+    if event.type != "assistant":
+        return []
+    message = event.raw.get("message", {})
+    content = message.get("content", [])
+    paths: list[str] = []
+    for block in content:
+        if block.get("type") != "tool_use":
+            continue
+        tool_name = block.get("name", "")
+        tool_input = block.get("input", {})
+        if tool_name in ("Write", "NotebookEdit"):
+            file_path = tool_input.get("file_path") or tool_input.get("notebook_path", "")
+            if file_path:
+                suffix = Path(file_path).suffix.lower()
+                if suffix in _IMAGE_EXTENSIONS:
+                    paths.append(file_path)
+    return paths
+
+
+async def _upload_image(
+    client: AsyncWebClient,
+    channel: str,
+    thread_ts: str,
+    path: Path,
+    queue: SlackMessageQueue | None = None,
+) -> None:
+    """Upload an image file to Slack in the thread."""
+    try:
+        await client.files_upload_v2(
+            file=str(path),
+            filename=path.name,
+            title=path.name,
+            channel=channel,
+            thread_ts=thread_ts,
+            initial_comment=f":frame_with_picture: `{path.name}`",
+        )
+    except SlackApiError as exc:
+        logger.warning("Image upload failed for %s: %s", path, exc)
+        if queue is not None:
+            await queue.post_message(
+                channel, thread_ts,
+                f":frame_with_picture: `{path.name}` (upload failed)",
+            )
+
+
+async def _upload_new_images(
+    client: AsyncWebClient,
+    channel: str,
+    thread_ts: str,
+    text: str,
+    uploaded: set[str],
+    queue: SlackMessageQueue | None = None,
+) -> None:
+    """Find image paths in *text*, upload any not yet in *uploaded*, update the set."""
+    for p in _extract_image_paths(text):
+        key = str(p)
+        if key in uploaded:
+            continue
+        uploaded.add(key)
+        await _upload_image(client, channel, thread_ts, p, queue)
 
 
 def _guess_snippet_type(text: str) -> str:
