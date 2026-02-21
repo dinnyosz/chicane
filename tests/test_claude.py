@@ -993,3 +993,80 @@ class TestEnsureConnected:
         assert client is existing_client
         # connect should NOT have been called again
         existing_client.connect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_retries_on_timeout_error(self):
+        """TimeoutError on connect retries up to max_retries times."""
+        session = ClaudeSession(cwd=Path("/tmp"))
+
+        with patch("chicane.claude.ClaudeSDKClient") as MockClient:
+            mock_instance = AsyncMock()
+            # Fail once with TimeoutError, then succeed
+            mock_instance.connect = AsyncMock(
+                side_effect=[TimeoutError("deadline exceeded"), None]
+            )
+            MockClient.return_value = mock_instance
+
+            client = await session._ensure_connected(max_retries=1, base_delay=0.01)
+
+            assert client is mock_instance
+            assert session._connected
+            assert mock_instance.connect.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retries_on_sdk_timeout_exception(self):
+        """Generic Exception with 'timeout' in message also triggers retry."""
+        session = ClaudeSession(cwd=Path("/tmp"))
+
+        with patch("chicane.claude.ClaudeSDKClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.connect = AsyncMock(
+                side_effect=[
+                    Exception("Control request timeout: initialize"),
+                    None,
+                ]
+            )
+            MockClient.return_value = mock_instance
+
+            client = await session._ensure_connected(max_retries=1, base_delay=0.01)
+
+            assert client is mock_instance
+            assert session._connected
+            assert mock_instance.connect.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_raises_after_all_retries_exhausted(self):
+        """After max_retries timeouts, the exception propagates."""
+        session = ClaudeSession(cwd=Path("/tmp"))
+
+        with patch("chicane.claude.ClaudeSDKClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.connect = AsyncMock(
+                side_effect=TimeoutError("deadline exceeded")
+            )
+            MockClient.return_value = mock_instance
+
+            with pytest.raises(TimeoutError, match="deadline exceeded"):
+                await session._ensure_connected(max_retries=2, base_delay=0.01)
+
+            # 1 initial + 2 retries = 3 attempts
+            assert mock_instance.connect.await_count == 3
+            assert not session._connected
+
+    @pytest.mark.asyncio
+    async def test_non_timeout_exception_not_retried(self):
+        """Non-timeout exceptions propagate immediately without retry."""
+        session = ClaudeSession(cwd=Path("/tmp"))
+
+        with patch("chicane.claude.ClaudeSDKClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.connect = AsyncMock(
+                side_effect=ValueError("bad config")
+            )
+            MockClient.return_value = mock_instance
+
+            with pytest.raises(ValueError, match="bad config"):
+                await session._ensure_connected(max_retries=2, base_delay=0.01)
+
+            # Should NOT have retried
+            assert mock_instance.connect.await_count == 1

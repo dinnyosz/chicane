@@ -328,23 +328,67 @@ class ClaudeSession:
 
         return opts
 
-    async def _ensure_connected(self) -> ClaudeSDKClient:
-        """Connect the SDK client if not already connected."""
+    async def _ensure_connected(
+        self, *, max_retries: int = 2, base_delay: float = 2.0,
+    ) -> ClaudeSDKClient:
+        """Connect the SDK client if not already connected.
+
+        Retries on timeout errors (SDK ``initialize`` handshake can be slow
+        on cold starts).  Other exceptions propagate immediately.
+        """
         if self._client is not None and self._connected:
             return self._client
 
-        opts = self._build_options()
-        client = ClaudeSDKClient(options=opts)
-        try:
-            await client.connect()
-        except Exception:
-            # Don't leave a half-initialised client reference
-            self._client = None
-            raise
-        self._client = client
-        self._connected = True
-        logger.info(f"SDK client connected (session_id={self.session_id}, cwd={self.cwd})")
-        return self._client
+        last_exc: Exception | None = None
+        for attempt in range(1 + max_retries):
+            opts = self._build_options()
+            client = ClaudeSDKClient(options=opts)
+            try:
+                await client.connect()
+            except (TimeoutError, asyncio.TimeoutError) as exc:
+                last_exc = exc
+                self._client = None
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(
+                        "SDK connect timeout (attempt %d/%d), retrying in %.1fs...",
+                        attempt + 1, 1 + max_retries, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+            except Exception as exc:
+                # Check if the cause is a timeout wrapped in a generic Exception
+                if "timeout" in str(exc).lower() and attempt < max_retries:
+                    last_exc = exc
+                    self._client = None
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(
+                        "SDK connect timeout (attempt %d/%d), retrying in %.1fs...",
+                        attempt + 1, 1 + max_retries, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                # Don't leave a half-initialised client reference
+                self._client = None
+                raise
+
+            self._client = client
+            self._connected = True
+            if attempt > 0:
+                logger.info(
+                    "SDK client connected after %d retries (session_id=%s, cwd=%s)",
+                    attempt, self.session_id, self.cwd,
+                )
+            else:
+                logger.info(
+                    "SDK client connected (session_id=%s, cwd=%s)",
+                    self.session_id, self.cwd,
+                )
+            return self._client
+
+        # Shouldn't reach here, but just in case
+        raise last_exc or Exception("SDK connect failed after retries")
 
     @property
     def is_streaming(self) -> bool:
