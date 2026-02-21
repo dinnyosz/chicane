@@ -9,10 +9,11 @@ The official mascot/avatar for the Chicane project. Use this reference when gene
 ## Character Description
 
 ### Body
-- **Shape:** Classic cartoon ghost silhouette — smooth, rounded dome head that flows into a wider body, tapering slightly at the bottom with a soft wavy/draped bottom edge (no legs, no feet)
-- **Material:** Pale blue-white, mostly opaque with a soft inner luminescence. Subtle glow at the edges/outline. Not fully transparent but has a gentle ethereal quality — more like a softly glowing porcelain than clear glass
+- **Shape:** Ghost blob — smooth, rounded dome top flowing into a wider body with a wavy translucent bottom edge that fades into nothing. No legs, no feet, no human body shape. Like an emoji ghost or Casper. Floating, not standing.
+- **Material:** Pale blue-white, translucent with a soft inner luminescence. Subtle glow at the edges/outline. Semi-transparent ethereal quality with subsurface scattering — light passes through the body
 - **Size:** Round and slightly chubby/plump — approachable, not thin or wispy
 - **Surface:** Smooth, clean, no texture or patterns on the ghost body itself. Matte finish with soft subsurface scattering
+- **CRITICAL:** The ghost must NOT look human. No human proportions, no human silhouette. It is a blob — a floating translucent shape with a dome top and wavy fading bottom. Think emoji ghost, Pac-Man ghost, or Casper.
 
 ### Face
 - **Eyes:** Two large, perfectly round, solid black dot eyes. Positioned in the upper-middle area of the face, spaced apart roughly one eye-width. No pupils, no iris detail — just solid black circles. Tiny white highlight/reflection dot in the upper-right of each eye
@@ -39,7 +40,7 @@ The official mascot/avatar for the Chicane project. Use this reference when gene
 
 - **Posture:** Relaxed, upright, comfortable. Sitting back slightly — NOT hunched forward or intense
 - **Vibe:** Someone who genuinely enjoys what they do. Calm confidence. Chill coder energy
-- **The ghost doesn't hover** in the standard depiction — it sits in/on a chair like a person would, with the wavy bottom edge draped over or through the seat
+- **The ghost floats** — wavy bottom edge fading into nothing, no contact with chair or surface. In seated scenes, the bottom edge hovers above the chair
 
 ## Scene Defaults
 
@@ -81,7 +82,7 @@ When depicting the ghost in its standard "at work" scene:
 When generating new images of the Chicane ghost, start with this base and modify for the specific scene:
 
 ```
-Polished 3D character render, [CAMERA ANGLE AND COMPOSITION]. A cute ghost character [POSE/ACTION DESCRIPTION]. The ghost has a smooth round dome head, pale blue-white body with soft inner glow, two large round black dot eyes with tiny white highlights, and a small content smile. The ghost wears a fitted dark navy crew-neck t-shirt that wraps fully around its round body as a real garment — visible collar, short sleeves, back panel visible from the side. The word CHICANE (no hyphens, no dashes, seven continuous letters C-H-I-C-A-N-E) is printed on the chest in glowing electric blue letters. [HANDS/ARMS DESCRIPTION]. [SCENE ELEMENTS]. Deep navy background (#0F1729). [LIGHTING DESCRIPTION]. Square 1:1.
+Polished 3D character render, [CAMERA ANGLE AND COMPOSITION]. [SCENE ELEMENTS]. In the foreground center: a cute little ghost blob character, NOT human shaped. The ghost is a smooth rounded translucent pale blue-white glowing blob with a dome top, two big round black dot eyes with white highlights, and a sweet little curved smile. The bottom of the ghost is wavy and translucent, fading into nothing — no legs, no feet, no human body shape, just a floating ghostly blob like an emoji ghost. Wearing a dark navy t-shirt with CHICANE in glowing electric blue — C-H-I-C-A-N-E seven letters. [HANDS/ARMS DESCRIPTION]. [ADDITIONAL ELEMENTS]. Deep navy background (#0F1729). Ghost fills 50% of frame height.
 ```
 
 ## Common Prompt Mistakes (Anti-Patterns)
@@ -116,11 +117,18 @@ These issues recur across generations. Always guard against them explicitly in p
 **Problem:** Instead of wrapping fully around the ghost's body as a 3D garment, the t-shirt renders as a flat piece draped over the front only — like a bib or apron. The ghost's bare body is visible behind/beside the shirt. No back panel, no side seams, no 3D garment construction.
 **Fix:** Always include: "The t-shirt is a complete 3D garment that fully wraps around the ghost's round body — front panel, back panel, and visible side seams. From a three-quarter view, the dark fabric of the back panel should be visible wrapping around the sides. The shirt is NOT a bib, NOT an apron, NOT a flat piece on the front — it is a fully enclosed tube of fabric around the torso."
 
+### Over-describing the t-shirt makes it worse
+**Problem:** When the prompt says things like "fitted dark navy crew-neck t-shirt wrapping fully around its round body as a 3D garment — visible collar, short sleeves, back panel visible from the side", the model often renders the shirt as a flat piece hovering in front of the body rather than a properly worn garment. The excessive detail about "wrapping" and "3D garment" paradoxically breaks the rendering.
+**Fix:** Keep the t-shirt description simple. Just say "dark navy t-shirt" or "wearing a dark navy t-shirt". The simpler the description, the more natural the rendering. Only add detail if the shirt is rendering as a bib/apron in results — and even then, prefer "properly worn t-shirt" over lengthy technical descriptions.
+
 ## Usage Notes
 
 - Always spell out "CHICANE" (C-H-I-C-A-N-E, seven letters) and emphasize correct spelling in prompts — image generation models frequently misspell it as "CHI-CANE", "CHIC-ANE", "CHICONE", "CHILC", etc. Add: "The word CHICANE — no hyphens, no spaces, no dashes — seven continuous letters: C H I C A N E"
 - For avatar/icon use, keep the crop tight and shapes bold — must be recognizable at 48x48 pixels
 - The ghost can be depicted without the laptop/desk for icon-only uses, but should always wear the CHICANE t-shirt
-- The character works best with `x/z-image-turbo` model at 512x512 for the 3D rendered look
-- For flat/vector versions, use `x/flux2-klein` but expect the character to look different
+- The character works best with `x/flux2-klein:9b-fp4` (9B model) for highest quality 3D renders
+- `x/z-image-turbo` at 512x512 works for quick iterations
+- For flat/vector versions, use `x/flux2-klein` (4B) but expect the character to look different
+- **Ghost blob prompt keywords that work:** "ghost blob character, NOT human shaped", "like an emoji ghost", "like Casper", "floating ghostly blob"
+- **Keywords that make it human-like (AVOID):** "properly fitted t-shirt that fully contains the ghost body", over-describing garment construction, "crew-neck" with extensive detail
 - When generating scenes with props (desks, screens, etc.), explicitly re-state character proportions — wide compositions tend to distort the ghost's features
