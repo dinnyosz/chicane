@@ -414,6 +414,28 @@ class TestReactToStrangersConfig:
             assert Config.from_env().react_to_strangers is False, f"Expected False for '{val}'"
 
 
+class TestPostImagesConfig:
+    def test_default_false(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.delenv("POST_IMAGES", raising=False)
+        assert Config.from_env().post_images is False
+
+    def test_truthy_values(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        for val in ("true", "True", "TRUE", "1", "yes", "Yes"):
+            monkeypatch.setenv("POST_IMAGES", val)
+            assert Config.from_env().post_images is True, f"Expected True for '{val}'"
+
+    def test_falsy_values(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        for val in ("false", "False", "0", "no", "No"):
+            monkeypatch.setenv("POST_IMAGES", val)
+            assert Config.from_env().post_images is False, f"Expected False for '{val}'"
+
+
 class TestConfigDir:
     def test_override_via_env(self, monkeypatch):
         monkeypatch.setenv("CHICANE_CONFIG_DIR", "/custom/path")

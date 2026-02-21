@@ -1980,7 +1980,7 @@ _IMAGE_EXTENSIONS = frozenset({
 })
 
 _IMAGE_PATH_RE = re.compile(
-    r"(/[\w./ -]+\.(?:png|jpe?g|gif|webp|svg|bmp|ico|tiff))\b",
+    r"(/[\w./-]+\.(?:png|jpe?g|gif|webp|svg|bmp|ico|tiff))\b",
     re.IGNORECASE,
 )
 
