@@ -656,7 +656,7 @@ def _step_verbosity(default: str = "verbose") -> str:
         console.print(f"  [red]Invalid level '{val}'. Choose from: {', '.join(sorted(valid_levels))}[/red]\n")
 
 
-def _step_post_images(default: str = "no") -> str:
+def _step_post_images(default: str = "yes") -> str:
     """Step 16: Configure proactive image posting."""
     console.rule("Step 16 of 18: Post Images")
     console.print("\n  When Claude creates or mentions image files in a response,")

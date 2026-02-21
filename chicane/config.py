@@ -80,7 +80,7 @@ class Config:
     rate_limit: int = 10
     verbosity: str = "verbose"
     react_to_strangers: bool = True
-    post_images: bool = False
+    post_images: bool = True
 
     def __repr__(self) -> str:
         """Mask sensitive tokens in repr to prevent accidental leakage."""
@@ -237,7 +237,7 @@ class Config:
         raw_react = os.environ.get("REACT_TO_STRANGERS", "true").lower()
         react_to_strangers = raw_react in ("true", "1", "yes")
 
-        raw_post_images = os.environ.get("POST_IMAGES", "false").lower()
+        raw_post_images = os.environ.get("POST_IMAGES", "true").lower()
         post_images = raw_post_images in ("true", "1", "yes")
 
         return cls(

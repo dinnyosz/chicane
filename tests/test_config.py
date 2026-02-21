@@ -419,7 +419,7 @@ class TestPostImagesConfig:
         monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
         monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
         monkeypatch.delenv("POST_IMAGES", raising=False)
-        assert Config.from_env().post_images is False
+        assert Config.from_env().post_images is True
 
     def test_truthy_values(self, monkeypatch):
         monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
