@@ -12,6 +12,7 @@ from chicane.handlers import (
     _fetch_thread_history,
     _find_session_id_in_thread,
     _guess_snippet_type,
+    _looks_like_markdown,
     _SNIPPET_EXT,
     _has_git_commit,
     _HANDOFF_RE,
@@ -986,6 +987,77 @@ class TestSnippetExt:
     def test_unknown_type_falls_back(self):
         assert _SNIPPET_EXT.get("unknown_type", ".txt") == ".txt"
 
+    def test_markdown_extension(self):
+        assert _SNIPPET_EXT["markdown"] == ".md"
+
+
+class TestLooksLikeMarkdown:
+    """Tests for _looks_like_markdown detection."""
+
+    def test_headings_and_bold(self):
+        text = "## Summary\n\n**Overall quality: Good**\nSome text here."
+        assert _looks_like_markdown(text) is True
+
+    def test_headings_and_table(self):
+        text = "## Results\n\n| Name | Score |\n|------|-------|\n| A | 10 |"
+        assert _looks_like_markdown(text) is True
+
+    def test_bold_and_links(self):
+        text = "Check **this** and [click here](https://example.com) for more."
+        assert _looks_like_markdown(text) is True
+
+    def test_headings_and_links(self):
+        text = "# Title\n\nSee [docs](https://docs.example.com) for details."
+        assert _looks_like_markdown(text) is True
+
+    def test_all_four_signals(self):
+        text = (
+            "# Report\n\n"
+            "**Status**: done\n\n"
+            "| Col | Val |\n|-----|-----|\n| a | 1 |\n\n"
+            "See [link](https://example.com)."
+        )
+        assert _looks_like_markdown(text) is True
+
+    def test_plain_text_no_markdown(self):
+        text = "Just a plain text response with no formatting at all."
+        assert _looks_like_markdown(text) is False
+
+    def test_single_signal_not_enough(self):
+        # Only one signal (heading) — should not trigger
+        text = "## Heading\n\nPlain text below."
+        assert _looks_like_markdown(text) is False
+
+    def test_single_bold_not_enough(self):
+        text = "This has **one bold** word but nothing else."
+        assert _looks_like_markdown(text) is False
+
+    def test_code_block_not_confused(self):
+        # Code blocks with # comments shouldn't trigger heading detection
+        text = "```python\n# this is a comment\nprint('hello')\n```"
+        assert _looks_like_markdown(text) is False
+
+    def test_stray_pipes_not_enough(self):
+        text = "value | other value\nno table here"
+        assert _looks_like_markdown(text) is False
+
+
+class TestGuessSnippetTypeMarkdown:
+    """Tests that _guess_snippet_type returns 'markdown' for markdown content."""
+
+    def test_markdown_detected(self):
+        text = "## Summary\n\n**Overall quality: Good**\n\n| Item | Score |\n|------|-------|\n| A | 10 |"
+        assert _guess_snippet_type(text) == "markdown"
+
+    def test_diff_takes_priority_over_markdown(self):
+        # diff detection happens before markdown check
+        text = "diff --git a/foo.md b/foo.md\n## Heading\n**bold**"
+        assert _guess_snippet_type(text) == "diff"
+
+    def test_json_takes_priority_over_markdown(self):
+        text = '{"## heading": "**bold**"}'
+        assert _guess_snippet_type(text) == "javascript"
+
 
 class TestTransliterateToAscii:
     """Tests for _transliterate_to_ascii."""
@@ -1092,3 +1164,105 @@ class TestSendSnippetFilenameAlignment:
         content = kwargs["content"]
         assert isinstance(content, str)
         assert content == "range: 1-3"
+
+
+class TestSendSnippetRetryAndFallback:
+    """Test _send_snippet retry logic and fallback to split messages."""
+
+    @pytest.mark.asyncio
+    async def test_retries_on_slack_api_error_then_falls_back_with_queue(self):
+        """When all upload attempts fail, falls back to split messages via queue."""
+        from chicane.handlers import _send_snippet
+        from chicane.slack_queue import SlackMessageQueue
+        from slack_sdk.errors import SlackApiError
+
+        client = AsyncMock()
+        client.files_upload_v2.side_effect = SlackApiError(
+            "upload_failed", {"error": "upload_failed", "ok": False}
+        )
+
+        queue = SlackMessageQueue(min_interval=0.0)
+        queue.ensure_client(client)
+
+        await _send_snippet(
+            client, "C123", "t1", "hello world",
+            initial_comment="Here's the output:",
+            queue=queue,
+        )
+
+        # Upload should have been tried 2 times (default _max_attempts=2)
+        assert client.files_upload_v2.call_count == 2
+
+        # Fallback: initial_comment + split text posted via queue
+        post_calls = client.chat_postMessage.call_args_list
+        comment_posts = [c for c in post_calls if c.kwargs.get("text") == "Here's the output:"]
+        assert len(comment_posts) == 1
+        text_posts = [c for c in post_calls if c.kwargs.get("text") == "hello world"]
+        assert len(text_posts) == 1
+
+    @pytest.mark.asyncio
+    async def test_fallback_without_queue_uses_client_directly(self):
+        """Without a queue, fallback posts via client.chat_postMessage."""
+        from chicane.handlers import _send_snippet
+        from slack_sdk.errors import SlackApiError
+
+        client = AsyncMock()
+        client.files_upload_v2.side_effect = SlackApiError(
+            "upload_failed", {"error": "upload_failed", "ok": False}
+        )
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+
+        await _send_snippet(
+            client, "C123", "t1", "fallback text",
+            initial_comment="Output:",
+        )
+
+        # Upload tried 2 times (default _max_attempts=2)
+        assert client.files_upload_v2.call_count == 2
+
+        # Fallback: initial comment + text posted directly
+        post_calls = client.chat_postMessage.call_args_list
+        comment_posts = [c for c in post_calls if c.kwargs.get("text") == "Output:"]
+        assert len(comment_posts) == 1
+        text_posts = [c for c in post_calls if c.kwargs.get("text") == "fallback text"]
+        assert len(text_posts) == 1
+
+    @pytest.mark.asyncio
+    async def test_fallback_without_initial_comment(self):
+        """Fallback without initial_comment only posts the text."""
+        from chicane.handlers import _send_snippet
+        from slack_sdk.errors import SlackApiError
+
+        client = AsyncMock()
+        client.files_upload_v2.side_effect = SlackApiError(
+            "upload_failed", {"error": "upload_failed", "ok": False}
+        )
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+
+        await _send_snippet(client, "C123", "t1", "just text")
+
+        post_calls = client.chat_postMessage.call_args_list
+        assert len(post_calls) == 1
+        assert post_calls[0].kwargs["text"] == "just text"
+
+    @pytest.mark.asyncio
+    async def test_fallback_splits_long_text(self):
+        """Fallback with long text splits into multiple messages."""
+        from chicane.handlers import _send_snippet, SLACK_MAX_LENGTH
+        from slack_sdk.errors import SlackApiError
+
+        client = AsyncMock()
+        client.files_upload_v2.side_effect = SlackApiError(
+            "upload_failed", {"error": "upload_failed", "ok": False}
+        )
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+
+        long_text = "a" * 8000
+        await _send_snippet(client, "C123", "t1", long_text)
+
+        # Multiple messages posted for the long text
+        post_calls = client.chat_postMessage.call_args_list
+        assert len(post_calls) >= 2
+        # All chunks fit within Slack limit
+        for c in post_calls:
+            assert len(c.kwargs["text"]) <= SLACK_MAX_LENGTH

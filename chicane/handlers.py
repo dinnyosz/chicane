@@ -2245,6 +2245,29 @@ async def _upload_new_images(
         await _upload_image(client, channel, thread_ts, p, queue)
 
 
+_MARKDOWN_HEADING_RE = re.compile(r"^#{1,6}\s+\S", re.MULTILINE)
+_MARKDOWN_TABLE_RE = re.compile(r"^\|.+\|$", re.MULTILINE)
+_MARKDOWN_BOLD_RE = re.compile(r"\*\*\S.*?\S\*\*")
+_MARKDOWN_LINK_RE = re.compile(r"\[.+?\]\(.+?\)")
+
+
+def _looks_like_markdown(text: str) -> bool:
+    """Return True if *text* appears to contain Markdown formatting.
+
+    Looks for headings (## Foo), tables (|a|b|), bold (**word**),
+    and links ([text](url)).  Requires at least 2 distinct signals
+    to avoid false positives on plain text that happens to contain
+    a stray ``**``.
+    """
+    signals = sum([
+        bool(_MARKDOWN_HEADING_RE.search(text)),
+        bool(_MARKDOWN_TABLE_RE.search(text)),
+        bool(_MARKDOWN_BOLD_RE.search(text)),
+        bool(_MARKDOWN_LINK_RE.search(text)),
+    ])
+    return signals >= 2
+
+
 def _guess_snippet_type(text: str) -> str:
     """Guess a Slack snippet_type from content so Slack doesn't classify it as Binary.
 
@@ -2258,6 +2281,8 @@ def _guess_snippet_type(text: str) -> str:
         return "javascript"  # Slack uses this for JSON too
     if first_line.startswith("<?xml") or first_line.startswith("<html"):
         return "xml"
+    if _looks_like_markdown(text):
+        return "markdown"
     return "text"
 
 
@@ -2265,6 +2290,7 @@ def _guess_snippet_type(text: str) -> str:
 _SNIPPET_EXT: dict[str, str] = {
     "diff": ".diff",
     "javascript": ".json",
+    "markdown": ".md",
     "xml": ".xml",
     "python": ".py",
     "text": ".txt",
