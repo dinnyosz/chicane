@@ -1152,13 +1152,13 @@ async def _process_message(
         except Exception as exc:
             exc_msg = str(exc)
 
-            # Recoverable SDK error: JSON buffer overflow (response > 1MB).
-            # The session history contains the oversized message, so resuming
-            # the same session_id will hit the same limit.  We must start a
-            # *fresh* session (no resume) and give Claude a recovery prompt.
+            # SDK buffer overflow — should be rare now that we set
+            # max_buffer_size=100MB in _build_options, but handle
+            # gracefully just in case.
             if "maximum buffer size" in exc_msg:
                 logger.warning(
-                    "SDK buffer overflow — starting fresh session: %s", exc_msg,
+                    "SDK buffer overflow (even with increased buffer): %s",
+                    exc_msg,
                 )
                 await _flush_activities()
 
@@ -1170,137 +1170,30 @@ async def _process_message(
 
                 await queue.post_message(
                     channel, thread_ts,
-                    ":repeat: SDK buffer overflow — starting fresh session "
-                    "to recover",
+                    ":warning: Claude's response exceeded the SDK buffer "
+                    "limit. Partial output is shown above. "
+                    "Try sending your message again.",
                 )
 
+                # Clean up reactions
                 try:
-                    await session.disconnect()
-
-                    # Clear session_id so _ensure_connected starts fresh
-                    # instead of resuming the broken session.
-                    old_session_id = session.session_id
-                    session.session_id = None
-                    logger.info(
-                        "Cleared session_id %s for buffer overflow recovery",
-                        old_session_id,
+                    await client.reactions_remove(
+                        channel=channel, name="eyes", timestamp=event["ts"],
                     )
-
-                    recovery_prompt = (
-                        "The previous response was too large and caused a "
-                        "buffer overflow error. This is a fresh session. "
-                        "Please continue where you left off. "
-                        "If you were working on a task, briefly state what "
-                        "you were doing and continue."
+                    await client.reactions_add(
+                        channel=channel, name="warning",
+                        timestamp=event["ts"],
                     )
-
-                    retry_text = ""
-                    retry_had_tool_use = False
-                    retry_result = None
-                    retry_tool_ids: dict[str, str] = {}
-
-                    async for event_data in session.stream(recovery_prompt):
-                        if event_data.type == "assistant":
-                            retry_tool_ids.update(event_data.tool_use_ids)
-                            if event_data.tool_use_ids:
-                                retry_had_tool_use = True
-                            chunk = event_data.text
-                            if chunk:
-                                retry_text += chunk
-                            activities = _format_tool_activity(event_data)
-                            if event_data.parent_tool_use_id:
-                                activities = [
-                                    f":arrow_right_hook: {a}" for a in activities
-                                ]
-                            if (
-                                _should_show("tool_activity", config.verbosity)
-                                and activities
-                            ):
-                                pending_activities.extend(activities)
-                                if len(pending_activities) >= _MAX_ACTIVITY_BATCH:
-                                    await _flush_activities()
-                        elif event_data.type == "result":
-                            retry_result = event_data
-                            rt = event_data.text or ""
-                            if len(rt) > len(retry_text):
-                                retry_text = rt
-                        elif event_data.type == "user":
-                            await _flush_activities()
-                            first_activity_posted = False
-                            if _should_show("tool_error", config.verbosity):
-                                for tid, err in event_data.tool_errors:
-                                    tname = retry_tool_ids.get(tid, "")
-                                    if tname in _SILENT_TOOLS:
-                                        continue
-                                    trunc = (
-                                        (err[:200] + "...") if len(err) > 200 else err
-                                    )
-                                    await queue.post_message(
-                                        channel, thread_ts,
-                                        f":warning: Tool error: {trunc}",
-                                    )
-
-                    await _flush_activities()
-
-                    if retry_text or retry_had_tool_use:
-                        if retry_text:
-                            mrkdwn = _markdown_to_mrkdwn(retry_text)
-                            if len(mrkdwn) > SNIPPET_THRESHOLD:
-                                stype = _guess_snippet_type(mrkdwn)
-                                await _send_snippet(
-                                    client, channel, thread_ts, mrkdwn,
-                                    snippet_type=stype, queue=queue,
-                                )
-                            else:
-                                for chunk in _split_message(mrkdwn):
-                                    await queue.post_message(
-                                        channel, thread_ts, chunk,
-                                    )
-                        if retry_result:
-                            session_info.total_requests += 1
-                            if retry_result.num_turns is not None:
-                                session_info.total_turns += retry_result.num_turns
-                            if retry_result.cost_usd is not None:
-                                session_info.total_cost_usd += retry_result.cost_usd
-                            summary = _format_completion_summary(
-                                retry_result, session_info,
-                            )
-                            if summary:
-                                await queue.post_message(
-                                    channel, thread_ts, summary,
-                                )
-                    else:
-                        await queue.post_message(
-                            channel, thread_ts,
-                            ":warning: Recovery produced no output. "
-                            "Try sending your message again.",
-                        )
-
-                    # Swap eyes → checkmark on success
-                    try:
-                        await client.reactions_remove(
-                            channel=channel, name="eyes", timestamp=event["ts"],
-                        )
-                        await client.reactions_add(
-                            channel=channel, name="white_check_mark",
-                            timestamp=event["ts"],
-                        )
-                    except Exception:
-                        pass
-                    if thread_ts != event["ts"]:
-                        await _remove_thread_reaction(
-                            client, channel, session_info, "eyes",
-                        )
-                        await _add_thread_reaction(
-                            client, channel, session_info, "white_check_mark",
-                        )
-                    return  # recovered — skip generic error handling
-
-                except Exception as retry_exc:
-                    logger.exception(
-                        "Buffer overflow recovery also failed: %s", retry_exc,
+                except Exception:
+                    pass
+                if thread_ts != event["ts"]:
+                    await _remove_thread_reaction(
+                        client, channel, session_info, "eyes",
                     )
-                    # Fall through to generic error handling below
+                    await _add_thread_reaction(
+                        client, channel, session_info, "warning",
+                    )
+                return
 
             logger.exception(f"Error processing message: {exc}")
             # User-friendly message for known failure modes

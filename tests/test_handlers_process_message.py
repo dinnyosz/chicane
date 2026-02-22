@@ -395,25 +395,15 @@ class TestProcessMessageEdgeCases:
         assert "Check bot logs" not in error_text
 
     @pytest.mark.asyncio
-    async def test_buffer_overflow_starts_fresh_session_and_recovers(self, config, sessions, queue):
-        """SDK buffer overflow clears session_id and starts fresh session."""
-        call_count = 0
-
+    async def test_buffer_overflow_posts_partial_text_and_warning(self, config, sessions, queue):
+        """SDK buffer overflow posts partial text and warning (no retry)."""
         async def fake_stream(prompt):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                yield make_event("system", subtype="init", session_id="s1")
-                yield make_event("assistant", text="Partial text before")
-                raise Exception(
-                    "Failed to decode JSON: JSON message exceeded "
-                    "maximum buffer size of 1048576 bytes..."
-                )
-            else:
-                # Recovery stream on fresh session
-                yield make_event("system", subtype="init", session_id="s2")
-                yield make_event("assistant", text="Recovered output")
-                yield make_event("result", text="Recovered output")
+            yield make_event("system", subtype="init", session_id="s1")
+            yield make_event("assistant", text="Partial text before crash")
+            raise Exception(
+                "Failed to decode JSON: JSON message exceeded "
+                "maximum buffer size of 1048576 bytes..."
+            )
 
         mock_session = MagicMock()
         mock_session.stream = fake_stream
@@ -426,49 +416,32 @@ class TestProcessMessageEdgeCases:
             event = {"ts": "6000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions, queue)
 
-        # disconnect() should have been called to reset the SDK
-        mock_session.disconnect.assert_awaited_once()
-
-        # session_id should have been cleared for fresh session
-        assert mock_session.session_id is None
-
-        # Should notify user about the recovery
         all_texts = [
             c.kwargs.get("text", "")
             for c in client.chat_postMessage.call_args_list
         ]
-        recovery_msgs = [t for t in all_texts if "buffer overflow" in t.lower()]
-        assert len(recovery_msgs) == 1, f"Expected recovery msg, got: {all_texts}"
 
         # Partial text from before crash should be posted
-        partial_msgs = [t for t in all_texts if "Partial text before" in t]
+        partial_msgs = [t for t in all_texts if "Partial text before crash" in t]
         assert len(partial_msgs) == 1
 
-        # Recovered text should be posted
-        recovered_msgs = [t for t in all_texts if "Recovered output" in t]
-        assert len(recovered_msgs) == 1
+        # Warning about buffer limit
+        warning_msgs = [t for t in all_texts if "buffer limit" in t.lower()]
+        assert len(warning_msgs) == 1
 
-        # Should NOT show generic error
+        # Should NOT show generic ":x: Error"
         error_msgs = [t for t in all_texts if ":x: Error" in t]
         assert len(error_msgs) == 0
 
     @pytest.mark.asyncio
-    async def test_buffer_overflow_recovery_failure_falls_through(self, config, sessions, queue):
-        """If recovery also fails, fall through to generic error handling."""
-        call_count = 0
-
+    async def test_buffer_overflow_no_partial_text(self, config, sessions, queue):
+        """SDK buffer overflow with no partial text still posts warning."""
         async def fake_stream(prompt):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                yield make_event("system", subtype="init", session_id="s1")
-                raise Exception(
-                    "Failed to decode JSON: JSON message exceeded "
-                    "maximum buffer size of 1048576 bytes..."
-                )
-            else:
-                raise RuntimeError("recovery also failed")
-                yield  # noqa: unreachable
+            yield make_event("system", subtype="init", session_id="s1")
+            raise Exception(
+                "Failed to decode JSON: JSON message exceeded "
+                "maximum buffer size of 1048576 bytes..."
+            )
 
         mock_session = MagicMock()
         mock_session.stream = fake_stream
@@ -481,48 +454,13 @@ class TestProcessMessageEdgeCases:
             event = {"ts": "6001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions, queue)
 
-        # Should fall through to generic error after recovery fails
         all_texts = [
             c.kwargs.get("text", "")
             for c in client.chat_postMessage.call_args_list
         ]
-        error_msgs = [t for t in all_texts if ":x: Error" in t]
-        assert len(error_msgs) == 1
 
-    @pytest.mark.asyncio
-    async def test_buffer_overflow_recovery_empty_warns_user(self, config, sessions, queue):
-        """If recovery produces no output, warn the user."""
-        call_count = 0
-
-        async def fake_stream(prompt):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                yield make_event("system", subtype="init", session_id="s1")
-                raise Exception(
-                    "Failed to decode JSON: JSON message exceeded "
-                    "maximum buffer size of 1048576 bytes..."
-                )
-            else:
-                # Recovery stream returns nothing useful
-                yield make_event("system", subtype="init", session_id="s1")
-
-        mock_session = MagicMock()
-        mock_session.stream = fake_stream
-        mock_session.session_id = "s1"
-
-        client = mock_client()
-        si = mock_session_info(mock_session)
-
-        with patch.object(sessions, "get_or_create", return_value=si):
-            event = {"ts": "6002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
-            await _process_message(event, "hello", client, config, sessions, queue)
-
-        all_texts = [
-            c.kwargs.get("text", "")
-            for c in client.chat_postMessage.call_args_list
-        ]
-        warning_msgs = [t for t in all_texts if "no output" in t.lower()]
+        # Warning about buffer limit
+        warning_msgs = [t for t in all_texts if "buffer limit" in t.lower()]
         assert len(warning_msgs) == 1
 
         # Should NOT show generic ":x: Error"

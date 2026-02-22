@@ -304,6 +304,7 @@ class ClaudeSession:
             allowed_tools=list(self.allowed_tools),
             disallowed_tools=list(self.disallowed_tools),
             setting_sources=list(self.setting_sources),
+            max_buffer_size=100_000_000,  # 100MB — SDK default is 1MB
         )
 
         if self.session_id:
