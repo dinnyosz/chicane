@@ -948,6 +948,12 @@ async def _process_message(
                         f"to work around SDK bug (attempt {attempt}/2)",
                     )
 
+                    # Reconnect the SDK client — when zero events are
+                    # returned, the underlying subprocess is often stuck
+                    # and will keep returning nothing.
+                    logger.info("Reconnecting SDK client before auto-continue retry")
+                    await session.disconnect()
+
                     # Re-stream with "continue" prompt — reuse existing
                     # variables for the retry pass.
                     full_text = ""

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from chicane.config import save_handoff_session, load_handoff_session
+from chicane.config import Config, save_handoff_session, load_handoff_session
 from chicane.handlers import _process_message
 from tests.conftest import make_event, make_tool_event, tool_block, mock_client, mock_session_info
 
@@ -249,6 +249,35 @@ class TestProcessMessageEdgeCases:
             await _process_message(event, "hello", client, config, sessions, queue)
 
         assert si.empty_continue_count == 0
+
+    @pytest.mark.asyncio
+    async def test_empty_continue_reconnects_sdk_client(self, config, sessions, queue):
+        """Auto-continue should disconnect and reconnect the SDK client."""
+        call_count = 0
+
+        async def fake_stream(prompt):
+            nonlocal call_count
+            call_count += 1
+            yield make_event("system", subtype="init", session_id="s1")
+            if call_count == 1:
+                pass  # empty
+            else:
+                yield make_event("assistant", text="Recovered")
+                yield make_event("result", text="Recovered")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        si = mock_session_info(mock_session)
+
+        with patch.object(sessions, "get_or_create", return_value=si):
+            event = {"ts": "5002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions, queue)
+
+        # disconnect() should have been called to reset the stuck SDK client
+        mock_session.disconnect.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_empty_continue_second_attempt(self, config, sessions, queue):
@@ -993,3 +1022,431 @@ class TestProcessMessageEdgeCases:
             assert len(alias_posts_2) == 0
             # Alias should not have changed
             assert info.session_alias == first_alias
+
+
+class TestEmptyContinueRetryEdgeCases:
+    """Test edge cases in the empty-continue retry loop."""
+
+    @pytest.mark.asyncio
+    async def test_retry_handles_subagent_tool_activities(self, config, sessions, queue):
+        """During retry, tool activities with parent_tool_use_id get hook prefix."""
+        call_count = 0
+
+        async def fake_stream(prompt):
+            nonlocal call_count
+            call_count += 1
+            yield make_event("system", subtype="init", session_id="s1")
+            if call_count == 1:
+                # First: empty
+                pass
+            else:
+                # Retry: subagent activity
+                yield make_tool_event(
+                    tool_block("Read", file_path="/src/a.py"),
+                    parent_tool_use_id="toolu_parent",
+                )
+                yield make_event("assistant", text="Found it.")
+                yield make_event("result", text="Found it.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        si = mock_session_info(mock_session)
+
+        with patch.object(sessions, "get_or_create", return_value=si):
+            event = {"ts": "6000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions, queue)
+
+        # Subagent activity during retry should have hook prefix
+        hook_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":arrow_right_hook:" in c.kwargs.get("text", "")
+        ]
+        assert len(hook_posts) >= 1
+
+    @pytest.mark.asyncio
+    async def test_retry_handles_tool_errors(self, config, sessions, queue):
+        """During retry, tool errors in user events are posted as warnings."""
+        call_count = 0
+
+        async def fake_stream(prompt):
+            nonlocal call_count
+            call_count += 1
+            yield make_event("system", subtype="init", session_id="s1")
+            if call_count == 1:
+                pass
+            else:
+                yield make_tool_event(tool_block("Bash", id="tu_err", command="bad"))
+                yield make_event(
+                    "user",
+                    message={
+                        "content": [{
+                            "type": "tool_result",
+                            "tool_use_id": "tu_err",
+                            "is_error": True,
+                            "content": "command not found",
+                        }]
+                    },
+                )
+                yield make_event("assistant", text="Error occurred.")
+                yield make_event("result", text="Error occurred.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        si = mock_session_info(mock_session)
+
+        with patch.object(sessions, "get_or_create", return_value=si):
+            event = {"ts": "6001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions, queue)
+
+        warning_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":warning:" in c.kwargs.get("text", "") and "command not found" in c.kwargs.get("text", "")
+        ]
+        assert len(warning_posts) == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_result_text_overwrites_shorter_full_text(self, config, sessions, queue):
+        """During retry, result_text replaces full_text when it's longer."""
+        call_count = 0
+
+        async def fake_stream(prompt):
+            nonlocal call_count
+            call_count += 1
+            yield make_event("system", subtype="init", session_id="s1")
+            if call_count == 1:
+                pass
+            else:
+                yield make_event("assistant", text="Short")
+                yield make_event("result", text="Longer result text here")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        si = mock_session_info(mock_session)
+
+        with patch.object(sessions, "get_or_create", return_value=si):
+            event = {"ts": "6002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions, queue)
+
+        text_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if c.kwargs.get("text", "") == "Longer result text here"
+        ]
+        assert len(text_posts) == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_long_response_uploaded_as_snippet(self, config, sessions, queue):
+        """During retry, long response should be uploaded as snippet."""
+        call_count = 0
+        long_text = "a" * 8000
+
+        async def fake_stream(prompt):
+            nonlocal call_count
+            call_count += 1
+            yield make_event("system", subtype="init", session_id="s1")
+            if call_count == 1:
+                pass
+            else:
+                yield make_event("result", text=long_text)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        si = mock_session_info(mock_session)
+
+        with patch.object(sessions, "get_or_create", return_value=si):
+            event = {"ts": "6003.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions, queue)
+
+        client.files_upload_v2.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_retry_verbose_tool_results_posted(self, config, sessions, queue):
+        """During retry in verbose mode, tool results are posted."""
+        verbose_config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            allowed_users=["UHUMAN1"],
+            rate_limit=10000,
+            verbosity="verbose",
+        )
+        call_count = 0
+
+        async def fake_stream(prompt):
+            nonlocal call_count
+            call_count += 1
+            yield make_event("system", subtype="init", session_id="s1")
+            if call_count == 1:
+                pass
+            else:
+                yield make_tool_event(tool_block("Bash", id="tu_1", command="echo hi"))
+                yield make_event(
+                    "user",
+                    message={
+                        "content": [{
+                            "type": "tool_result",
+                            "tool_use_id": "tu_1",
+                            "is_error": False,
+                            "content": "hi",
+                        }]
+                    },
+                )
+                yield make_event("assistant", text="Done.")
+                yield make_event("result", text="Done.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        si = mock_session_info(mock_session)
+
+        with patch.object(sessions, "get_or_create", return_value=si):
+            event = {"ts": "6004.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, verbose_config, sessions, queue)
+
+        clipboard_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":clipboard:" in c.kwargs.get("text", "")
+        ]
+        assert len(clipboard_posts) >= 1
+
+
+class TestProcessMessageHandoffPrompt:
+    """Test empty prompt with handoff session uses special greeting."""
+
+    @pytest.mark.asyncio
+    async def test_empty_prompt_with_handoff_uses_greeting(self, config, sessions, queue):
+        """When user @mentions bot with no text in a handoff thread, a special
+        greeting prompt is sent instead of empty string."""
+        captured_prompt = None
+
+        async def capturing_stream(prompt):
+            nonlocal captured_prompt
+            captured_prompt = prompt
+            yield make_event("system", subtype="init", session_id="abc-def-123")
+            yield make_event("result", text="Hello!")
+
+        mock_session = MagicMock()
+        mock_session.stream = capturing_stream
+        mock_session.session_id = "abc-def-123"
+
+        client = mock_client()
+        info = mock_session_info(mock_session)
+
+        with patch.object(sessions, "get_or_create", return_value=info):
+            event = {"ts": "9500.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(
+                event,
+                "(session_id: abc-def-123)",
+                client, config, sessions, queue,
+            )
+
+        assert captured_prompt is not None
+        # The prompt should contain the handoff greeting, not be empty
+        assert "handed off" in captured_prompt.lower()
+
+
+class TestGitCommitUserMessageReaction:
+    """Test git commit adds :package: to user's message in thread replies."""
+
+    @pytest.mark.asyncio
+    async def test_git_commit_adds_package_to_user_message_in_thread(self, config, sessions, queue):
+        """Git commit in a thread reply should add :package: to the user's message."""
+        async def fake_stream(prompt):
+            yield make_tool_event(
+                tool_block("Bash", command='git commit -m "feat: add thing"')
+            )
+            yield make_event("assistant", text="Committed.")
+            yield make_event("result", text="Committed.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {
+                "ts": "2000.0",
+                "thread_ts": "1000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            await _process_message(event, "commit it", client, config, sessions, queue)
+
+        # :package: should be added to user's message (ts=2000.0) too
+        user_msg_package = [
+            c for c in client.reactions_add.call_args_list
+            if c.kwargs.get("name") == "package" and c.kwargs.get("timestamp") == "2000.0"
+        ]
+        assert len(user_msg_package) == 1
+
+    @pytest.mark.asyncio
+    async def test_git_commit_user_message_reaction_failure_swallowed(self, config, sessions, queue):
+        """If adding :package: to user's message fails, it doesn't crash."""
+        async def fake_stream(prompt):
+            yield make_tool_event(
+                tool_block("Bash", command='git commit -m "fix"')
+            )
+            yield make_event("assistant", text="Done.")
+            yield make_event("result", text="Done.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        # Make reactions_add fail for user's message but not thread root
+        original_add = client.reactions_add
+
+        async def selective_fail(**kwargs):
+            if kwargs.get("timestamp") == "2000.0" and kwargs.get("name") == "package":
+                raise Exception("already_reacted")
+            return await original_add(**kwargs)
+
+        client.reactions_add = AsyncMock(side_effect=selective_fail)
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {
+                "ts": "2000.0",
+                "thread_ts": "1000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            # Should not raise
+            await _process_message(event, "commit", client, config, sessions, queue)
+
+        # Text response should still be posted
+        text_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if "Done." in c.kwargs.get("text", "")
+        ]
+        assert len(text_posts) == 1
+
+
+class TestUnknownEventType:
+    """Test that unknown event types are silently logged."""
+
+    @pytest.mark.asyncio
+    async def test_unknown_event_type_does_not_crash(self, config, sessions, queue):
+        """An event with an unrecognized type should be logged and skipped."""
+        async def fake_stream(prompt):
+            yield make_event("unknown_type", subtype="weird")
+            yield make_event("result", text="done")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "9600.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions, queue)
+
+        # Should still post the result text
+        text_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if c.kwargs.get("text", "") == "done"
+        ]
+        assert len(text_posts) == 1
+
+
+class TestStaleSessionContextInjectionFailure:
+    """Test that stale session context injection failure is handled."""
+
+    @pytest.mark.asyncio
+    async def test_stale_session_run_failure_swallowed(self, config, sessions, queue):
+        """When session.run() fails during stale context injection, it doesn't crash."""
+        async def fake_stream(prompt):
+            # Return a different session_id than requested (stale)
+            yield make_event("system", subtype="init", session_id="new-sess-id")
+            yield make_event("result", text="done")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "new-sess-id"
+        mock_session.run = AsyncMock(side_effect=Exception("context injection failed"))
+
+        client = mock_client()
+        client.conversations_replies.return_value = {
+            "messages": [
+                {"user": "UHUMAN1", "ts": "7000.0", "text": "original"},
+                {"user": "UBOT123", "ts": "7001.0", "text": "response"},
+            ]
+        }
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {
+                "ts": "7002.0",
+                "thread_ts": "7000.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+            }
+            # Should not raise despite run() failing
+            await _process_message(
+                event,
+                "continue (session_id: old-sess-id)",
+                client, config, sessions, queue,
+            )
+
+        # Text should still be posted
+        text_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if c.kwargs.get("text", "") == "done"
+        ]
+        assert len(text_posts) == 1
+
+
+class TestErrorHandlerEdgeCases:
+    """Test error handler double-exception and reaction failure paths."""
+
+    @pytest.mark.asyncio
+    async def test_error_post_failure_swallowed(self, config, sessions, queue):
+        """When chat_postMessage also fails during error handling, no crash."""
+        async def exploding_stream(prompt):
+            raise RuntimeError("stream broke")
+            yield  # noqa: unreachable
+
+        mock_session = MagicMock()
+        mock_session.stream = exploding_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        client.chat_postMessage.side_effect = Exception("Slack is down too")
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "9700.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            # Should not raise — double exception is swallowed
+            await _process_message(event, "hello", client, config, sessions, queue)
+
+    @pytest.mark.asyncio
+    async def test_error_reaction_failure_swallowed(self, config, sessions, queue):
+        """When reactions fail during error cleanup, no crash."""
+        async def exploding_stream(prompt):
+            yield make_event("system", subtype="init", session_id="s1")
+            raise RuntimeError("kaboom")
+
+        mock_session = MagicMock()
+        mock_session.stream = exploding_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        client.reactions_remove.side_effect = Exception("rate_limited")
+        client.reactions_add.side_effect = Exception("rate_limited")
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "9701.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            # Should not raise — reaction failures are swallowed
+            await _process_message(event, "hello", client, config, sessions, queue)

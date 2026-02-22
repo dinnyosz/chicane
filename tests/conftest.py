@@ -130,6 +130,7 @@ def mock_session_info(mock_session, thread_ts="1000.0"):
     mock_session.is_streaming = False
     mock_session.interrupt_source = None
     mock_session.interrupt = AsyncMock()
+    mock_session.disconnect = AsyncMock()
     info = MagicMock()
     info.session = mock_session
     info.lock = asyncio.Lock()
