@@ -125,25 +125,164 @@ class TestProcessMessageEdgeCases:
         client.chat_postMessage.assert_called()
 
     @pytest.mark.asyncio
-    async def test_empty_response_posts_warning(self, config, sessions, queue):
+    async def test_empty_response_auto_continues(self, config, sessions, queue):
+        """First empty response should auto-send 'continue', not warn."""
+        call_count = 0
+
         async def fake_stream(prompt):
+            nonlocal call_count
+            call_count += 1
             yield make_event("system", subtype="init", session_id="s1")
+            if call_count == 1:
+                # First call: empty response
+                pass
+            else:
+                # Retry with "continue": returns text
+                yield make_event("assistant", text="Here's the answer")
+                yield make_event("result", text="Here's the answer")
 
         mock_session = MagicMock()
         mock_session.stream = fake_stream
         mock_session.session_id = "s1"
 
         client = mock_client()
+        si = mock_session_info(mock_session)
 
-        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+        with patch.object(sessions, "get_or_create", return_value=si):
+            event = {"ts": "5002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions, queue)
+
+        # Should have posted the auto-continue notice
+        continue_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if "sending `continue`" in c.kwargs.get("text", "")
+        ]
+        assert len(continue_posts) == 1
+        assert "attempt 1/2" in continue_posts[0].kwargs["text"]
+
+        # Should have posted the actual response
+        text_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if "Here's the answer" in c.kwargs.get("text", "")
+        ]
+        assert len(text_posts) == 1
+
+        # Counter should be reset after success
+        assert si.empty_continue_count == 0
+
+        # Should NOT have posted a warning
+        warning_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":warning:" in c.kwargs.get("text", "") and "empty response" in c.kwargs.get("text", "").lower()
+        ]
+        assert len(warning_posts) == 0
+
+    @pytest.mark.asyncio
+    async def test_empty_response_warns_after_max_retries(self, config, sessions, queue):
+        """After 2 failed auto-continues, should warn the user."""
+        async def always_empty_stream(prompt):
+            yield make_event("system", subtype="init", session_id="s1")
+
+        mock_session = MagicMock()
+        mock_session.stream = always_empty_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        si = mock_session_info(mock_session)
+        # Simulate already exhausted retries
+        si.empty_continue_count = 2
+
+        with patch.object(sessions, "get_or_create", return_value=si):
             event = {"ts": "5002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions, queue)
 
         warning_posts = [
             c for c in client.chat_postMessage.call_args_list
             if "empty response" in c.kwargs.get("text", "").lower()
+            and "2 automatic" in c.kwargs.get("text", "")
         ]
         assert len(warning_posts) == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_continue_counter_resets_on_proper_response(self, config, sessions, queue):
+        """Counter resets when Claude gives a proper response with text."""
+        async def fake_stream(prompt):
+            yield make_event("system", subtype="init", session_id="s1")
+            yield make_event("assistant", text="Got it!")
+            yield make_event("result", text="Got it!")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        si = mock_session_info(mock_session)
+        si.empty_continue_count = 1  # Had a previous empty response
+
+        with patch.object(sessions, "get_or_create", return_value=si):
+            event = {"ts": "5002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions, queue)
+
+        # Counter should be reset
+        assert si.empty_continue_count == 0
+
+    @pytest.mark.asyncio
+    async def test_empty_continue_counter_resets_on_tool_use(self, config, sessions, queue):
+        """Counter resets when Claude responds with tool use (no text)."""
+        async def fake_stream(prompt):
+            yield make_event("system", subtype="init", session_id="s1")
+            yield make_tool_event(
+                tool_block("ExitPlanMode", plan="# My Plan"),
+            )
+            yield make_event("result", text="")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        si = mock_session_info(mock_session)
+        si.empty_continue_count = 2  # Was maxed out
+
+        with patch.object(sessions, "get_or_create", return_value=si):
+            event = {"ts": "5002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions, queue)
+
+        assert si.empty_continue_count == 0
+
+    @pytest.mark.asyncio
+    async def test_empty_continue_second_attempt(self, config, sessions, queue):
+        """Second empty response still retries (attempt 2/2)."""
+        call_count = 0
+
+        async def fake_stream(prompt):
+            nonlocal call_count
+            call_count += 1
+            yield make_event("system", subtype="init", session_id="s1")
+            # Always empty
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        si = mock_session_info(mock_session)
+        si.empty_continue_count = 1  # Already had one failed retry
+
+        with patch.object(sessions, "get_or_create", return_value=si):
+            event = {"ts": "5002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions, queue)
+
+        # Should have tried auto-continue
+        continue_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if "sending `continue`" in c.kwargs.get("text", "")
+        ]
+        assert len(continue_posts) == 1
+        assert "attempt 2/2" in continue_posts[0].kwargs["text"]
+
+        # Counter should now be 2 (retry also failed)
+        assert si.empty_continue_count == 2
 
     @pytest.mark.asyncio
     async def test_tool_only_response_no_empty_warning(self, config, sessions, queue):

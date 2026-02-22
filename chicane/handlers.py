@@ -925,23 +925,143 @@ async def _process_message(
                         await queue.post_message(
                             channel, thread_ts, chunk,
                         )
-            elif not had_tool_use:
-                # Only warn if Claude produced neither text nor tool use.
-                # Tool-only responses (e.g. ExitPlanMode, EnterPlanMode) are
-                # valid — activities are already posted in the thread.
-                logger.warning(
-                    f"Empty response from Claude: {event_count} events received, "
-                    f"session_id={session.session_id}, "
-                    f"handoff={handoff_session_id}, reconnect={is_reconnect}"
-                )
-                msg = (
-                    ":warning: Claude returned an empty response. "
-                    "This can happen when the session history is in an unexpected state. "
-                    "Try sending your message again."
-                )
-                await queue.post_message(
-                    channel, thread_ts, msg,
-                )
+
+            # Reset empty-continue counter on any proper response
+            if full_text or had_tool_use:
+                session_info.empty_continue_count = 0
+
+            if not full_text and not had_tool_use:
+                # Empty response — likely a Claude SDK bug.
+                # Auto-retry with "continue" up to 2 times per thread.
+                if session_info.empty_continue_count < 2:
+                    session_info.empty_continue_count += 1
+                    attempt = session_info.empty_continue_count
+                    logger.warning(
+                        f"Empty response from Claude (attempt {attempt}/2), "
+                        f"auto-sending 'continue': "
+                        f"session_id={session.session_id}, "
+                        f"handoff={handoff_session_id}, reconnect={is_reconnect}"
+                    )
+                    await queue.post_message(
+                        channel, thread_ts,
+                        f":repeat: Empty response from Claude — sending `continue` "
+                        f"to work around SDK bug (attempt {attempt}/2)",
+                    )
+
+                    # Re-stream with "continue" prompt — reuse existing
+                    # variables for the retry pass.
+                    full_text = ""
+                    event_count = 0
+                    had_tool_use = False
+                    result_event = None
+                    git_committed = False
+                    files_changed = False
+                    tool_id_to_name = {}
+                    uploaded_images = set()
+                    pending_image_paths = []
+                    pending_activities = []
+                    first_activity_posted = False
+
+                    async for event_data in session.stream("continue"):
+                        event_count += 1
+                        if event_data.type == "assistant":
+                            tool_id_to_name.update(event_data.tool_use_ids)
+                            if event_data.tool_use_ids:
+                                had_tool_use = True
+                            if config.post_images:
+                                pending_image_paths.extend(
+                                    _collect_image_paths_from_tool_use(event_data)
+                                )
+                            chunk = event_data.text
+                            if chunk:
+                                full_text += chunk
+                            # Post tool activities during retry
+                            activities = _format_tool_activity(event_data)
+                            if event_data.parent_tool_use_id:
+                                activities = [f":arrow_right_hook: {a}" for a in activities]
+                            if _should_show("tool_activity", config.verbosity) and activities:
+                                pending_activities.extend(activities)
+                                if len(pending_activities) >= _MAX_ACTIVITY_BATCH:
+                                    await _flush_activities()
+                        elif event_data.type == "result":
+                            result_event = event_data
+                            result_text = event_data.text or ""
+                            if len(result_text) > len(full_text):
+                                full_text = result_text
+                        elif event_data.type == "user":
+                            await _flush_activities()
+                            first_activity_posted = False
+                            # Tool errors
+                            if _should_show("tool_error", config.verbosity):
+                                for tool_use_id, error_msg in event_data.tool_errors:
+                                    tool_name = tool_id_to_name.get(tool_use_id, "")
+                                    if tool_name in _SILENT_TOOLS:
+                                        continue
+                                    truncated = (error_msg[:200] + "...") if len(error_msg) > 200 else error_msg
+                                    await queue.post_message(
+                                        channel, thread_ts,
+                                        f":warning: Tool error: {truncated}",
+                                    )
+                            # Tool outputs in verbose mode
+                            if _should_show("tool_result", config.verbosity):
+                                for tool_use_id, result_text_out in event_data.tool_results:
+                                    tool_name = tool_id_to_name.get(tool_use_id, "")
+                                    if tool_name in _QUIET_TOOLS:
+                                        continue
+                                    if len(result_text_out) > 500:
+                                        stype = _guess_snippet_type(result_text_out)
+                                        await _send_snippet(
+                                            client, channel, thread_ts,
+                                            result_text_out,
+                                            initial_comment=":clipboard: Tool output (uploaded as snippet):",
+                                            snippet_type=stype,
+                                            queue=queue,
+                                        )
+                                    else:
+                                        wrapped = f":clipboard: Tool output:\n```\n{result_text_out}\n```"
+                                        await queue.post_message(
+                                            channel, thread_ts, wrapped,
+                                        )
+
+                    await _flush_activities()
+
+                    # Check retry result
+                    if full_text or had_tool_use:
+                        # Success — reset counter
+                        session_info.empty_continue_count = 0
+                        if full_text:
+                            mrkdwn = _markdown_to_mrkdwn(full_text)
+                            if len(mrkdwn) > SNIPPET_THRESHOLD:
+                                stype = _guess_snippet_type(mrkdwn)
+                                await _send_snippet(
+                                    client, channel, thread_ts, mrkdwn,
+                                    snippet_type=stype, queue=queue,
+                                )
+                            else:
+                                for chunk in _split_message(mrkdwn):
+                                    await queue.post_message(
+                                        channel, thread_ts, chunk,
+                                    )
+                    # If still empty after max retries, fall through
+                    # to the warning below on next empty response.
+
+                else:
+                    # Exhausted auto-continue retries — warn the user.
+                    logger.warning(
+                        f"Empty response from Claude after {session_info.empty_continue_count} "
+                        f"auto-continue retries: {event_count} events received, "
+                        f"session_id={session.session_id}, "
+                        f"handoff={handoff_session_id}, reconnect={is_reconnect}"
+                    )
+                    msg = (
+                        ":warning: Claude returned an empty response "
+                        "(even after 2 automatic `continue` retries). "
+                        "This can happen when the session history is in an unexpected state. "
+                        "Try sending your message again."
+                    )
+                    await queue.post_message(
+                        channel, thread_ts, msg,
+                    )
 
             # Post images: scan the final response text for image paths
             if config.post_images and full_text:

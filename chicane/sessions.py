@@ -101,6 +101,11 @@ class SessionInfo:
     total_cost_usd: float = 0.0
     total_commits: int = 0
 
+    # Counter for consecutive empty responses (SDK bug workaround).
+    # Auto-sends "continue" up to 2 times per thread, resets on any
+    # proper response (text or tool use).
+    empty_continue_count: int = 0
+
     def touch(self) -> None:
         self.last_used = datetime.now()
 
