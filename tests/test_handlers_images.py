@@ -42,9 +42,39 @@ class TestExtractImagePaths:
         text = f"First: {img}\nAgain: {img}"
         assert len(_extract_image_paths(text)) == 1
 
-    def test_ignores_relative_paths(self):
-        text = "See chart.png and ./output/graph.jpg"
+    def test_ignores_bare_filename_without_path_prefix(self):
+        """Bare filenames like 'chart.png' (no ./ or ../ prefix) are not matched."""
+        text = "See chart.png for details"
         assert _extract_image_paths(text) == []
+
+    def test_relative_dotslash_resolved_with_cwd(self, tmp_path):
+        img = tmp_path / "output" / "graph.jpg"
+        img.parent.mkdir(parents=True, exist_ok=True)
+        img.write_bytes(b"img")
+        text = "See ./output/graph.jpg"
+        result = _extract_image_paths(text, cwd=tmp_path)
+        assert len(result) == 1
+        assert result[0] == img.resolve()
+
+    def test_relative_dotdotslash_resolved_with_cwd(self, tmp_path):
+        sibling = tmp_path / "other-project" / "image.png"
+        sibling.parent.mkdir(parents=True, exist_ok=True)
+        sibling.write_bytes(b"img")
+        sub = tmp_path / "project"
+        sub.mkdir()
+        text = "See ../other-project/image.png"
+        result = _extract_image_paths(text, cwd=sub)
+        assert len(result) == 1
+        assert result[0] == sibling.resolve()
+
+    def test_relative_path_without_cwd_ignored(self):
+        """Relative paths are skipped when no cwd is provided."""
+        text = "See ./output/graph.jpg and ../other/img.png"
+        assert _extract_image_paths(text) == []
+
+    def test_relative_nonexistent_ignored(self, tmp_path):
+        text = "See ./does-not-exist.png"
+        assert _extract_image_paths(text, cwd=tmp_path) == []
 
     def test_ignores_nonexistent_files(self):
         text = "See /tmp/nonexistent_abc123_image.png"
@@ -242,6 +272,22 @@ class TestUploadNewImages:
 
         client.files_upload_v2.assert_not_called()
         assert len(uploaded) == 0
+
+    @pytest.mark.asyncio
+    async def test_uploads_relative_path_with_cwd(self, tmp_path):
+        img = tmp_path / "output" / "result.png"
+        img.parent.mkdir(parents=True, exist_ok=True)
+        img.write_bytes(b"img")
+        client = mock_client()
+        uploaded: set[str] = set()
+
+        await _upload_new_images(
+            client, "C1", "1.0", "See ./output/result.png",
+            uploaded, cwd=tmp_path,
+        )
+
+        client.files_upload_v2.assert_called_once()
+        assert str(img.resolve()) in uploaded
 
 
 # ---------------------------------------------------------------------------

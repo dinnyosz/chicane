@@ -708,6 +708,7 @@ async def _process_message(
                             await _upload_new_images(
                                 client, channel, thread_ts,
                                 rt, uploaded_images, queue,
+                                cwd=session_info.cwd,
                             )
 
                 elif event_data.type == "system" and event_data.subtype == "init":
@@ -1074,6 +1075,7 @@ async def _process_message(
                 await _upload_new_images(
                     client, channel, thread_ts,
                     full_text, uploaded_images, queue,
+                    cwd=session_info.cwd,
                 )
 
             # Update cumulative session stats and post completion summary
@@ -2151,13 +2153,18 @@ _IMAGE_EXTENSIONS = frozenset({
 })
 
 _IMAGE_PATH_RE = re.compile(
-    r"(/[\w./-]+\.(?:png|jpe?g|gif|webp|svg|bmp|ico|tiff))\b",
+    r"((?:/|\.{1,2}/)[\w./-]+\.(?:png|jpe?g|gif|webp|svg|bmp|ico|tiff))\b",
     re.IGNORECASE,
 )
 
 
-def _extract_image_paths(text: str) -> list[Path]:
-    """Extract absolute image file paths from text, returning only those that exist on disk."""
+def _extract_image_paths(text: str, cwd: Path | None = None) -> list[Path]:
+    """Extract image file paths from text, returning only those that exist on disk.
+
+    Matches both absolute paths (``/foo/bar.png``) and relative paths
+    (``./img.png``, ``../img.png``).  Relative paths are resolved against
+    *cwd* (the session's working directory).
+    """
     seen: set[str] = set()
     paths: list[Path] = []
     for match in _IMAGE_PATH_RE.finditer(text):
@@ -2166,6 +2173,8 @@ def _extract_image_paths(text: str) -> list[Path]:
             continue
         seen.add(raw)
         p = Path(raw)
+        if not p.is_absolute() and cwd is not None:
+            p = (cwd / p).resolve()
         if p.suffix.lower() in _IMAGE_EXTENSIONS and p.is_file():
             paths.append(p)
     return paths
@@ -2225,9 +2234,10 @@ async def _upload_new_images(
     text: str,
     uploaded: set[str],
     queue: SlackMessageQueue | None = None,
+    cwd: Path | None = None,
 ) -> None:
     """Find image paths in *text*, upload any not yet in *uploaded*, update the set."""
-    for p in _extract_image_paths(text):
+    for p in _extract_image_paths(text, cwd=cwd):
         key = str(p)
         if key in uploaded:
             continue
