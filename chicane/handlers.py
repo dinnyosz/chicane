@@ -1153,11 +1153,12 @@ async def _process_message(
             exc_msg = str(exc)
 
             # Recoverable SDK error: JSON buffer overflow (response > 1MB).
-            # Reconnect the SDK client and retry with "continue" so the
-            # user doesn't have to manually re-send.
+            # The session history contains the oversized message, so resuming
+            # the same session_id will hit the same limit.  We must start a
+            # *fresh* session (no resume) and give Claude a recovery prompt.
             if "maximum buffer size" in exc_msg:
                 logger.warning(
-                    "SDK buffer overflow — reconnecting and retrying: %s", exc_msg,
+                    "SDK buffer overflow — starting fresh session: %s", exc_msg,
                 )
                 await _flush_activities()
 
@@ -1169,19 +1170,36 @@ async def _process_message(
 
                 await queue.post_message(
                     channel, thread_ts,
-                    ":repeat: SDK buffer overflow — reconnecting and sending "
-                    "`continue` to recover",
+                    ":repeat: SDK buffer overflow — starting fresh session "
+                    "to recover",
                 )
 
                 try:
                     await session.disconnect()
+
+                    # Clear session_id so _ensure_connected starts fresh
+                    # instead of resuming the broken session.
+                    old_session_id = session.session_id
+                    session.session_id = None
+                    logger.info(
+                        "Cleared session_id %s for buffer overflow recovery",
+                        old_session_id,
+                    )
+
+                    recovery_prompt = (
+                        "The previous response was too large and caused a "
+                        "buffer overflow error. This is a fresh session. "
+                        "Please continue where you left off. "
+                        "If you were working on a task, briefly state what "
+                        "you were doing and continue."
+                    )
 
                     retry_text = ""
                     retry_had_tool_use = False
                     retry_result = None
                     retry_tool_ids: dict[str, str] = {}
 
-                    async for event_data in session.stream("continue"):
+                    async for event_data in session.stream(recovery_prompt):
                         if event_data.type == "assistant":
                             retry_tool_ids.update(event_data.tool_use_ids)
                             if event_data.tool_use_ids:

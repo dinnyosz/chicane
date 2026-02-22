@@ -395,8 +395,8 @@ class TestProcessMessageEdgeCases:
         assert "Check bot logs" not in error_text
 
     @pytest.mark.asyncio
-    async def test_buffer_overflow_reconnects_and_recovers(self, config, sessions, queue):
-        """SDK buffer overflow triggers reconnect + continue retry."""
+    async def test_buffer_overflow_starts_fresh_session_and_recovers(self, config, sessions, queue):
+        """SDK buffer overflow clears session_id and starts fresh session."""
         call_count = 0
 
         async def fake_stream(prompt):
@@ -410,7 +410,8 @@ class TestProcessMessageEdgeCases:
                     "maximum buffer size of 1048576 bytes..."
                 )
             else:
-                # Recovery stream
+                # Recovery stream on fresh session
+                yield make_event("system", subtype="init", session_id="s2")
                 yield make_event("assistant", text="Recovered output")
                 yield make_event("result", text="Recovered output")
 
@@ -427,6 +428,9 @@ class TestProcessMessageEdgeCases:
 
         # disconnect() should have been called to reset the SDK
         mock_session.disconnect.assert_awaited_once()
+
+        # session_id should have been cleared for fresh session
+        assert mock_session.session_id is None
 
         # Should notify user about the recovery
         all_texts = [
