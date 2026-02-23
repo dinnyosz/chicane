@@ -4,9 +4,17 @@ from unittest.mock import MagicMock
 
 from chicane.claude import ClaudeEvent
 from chicane.handlers import (
+    CommitInfo,
+    ParsedTestResult,
+    _extract_code_blocks,
+    _extract_git_commit_info,
+    _format_commit_card,
     _format_completion_summary,
+    _format_test_summary,
     _format_unified_diff,
+    _LANG_TO_FILETYPE,
     _markdown_to_mrkdwn,
+    _parse_test_results,
     _snippet_metadata_from_tool,
     _split_markdown,
     _SnippetMeta,
@@ -708,3 +716,289 @@ class TestFormatUnifiedDiff:
                 pass  # just checking it doesn't crash
         # Every line from the diff should end with newline
         assert result.endswith("\n")
+
+
+# ---------------------------------------------------------------------------
+# Code block extraction
+# ---------------------------------------------------------------------------
+
+
+class TestExtractCodeBlocks:
+    """Test _extract_code_blocks extracts large fenced code blocks."""
+
+    def _big_block(self, lang: str = "python", lines: int = 30) -> str:
+        """Generate a fenced code block exceeding extraction thresholds."""
+        code_lines = [f"line_{i} = {i}  # some padding to ensure enough characters" for i in range(lines)]
+        code = "\n".join(code_lines)
+        return f"```{lang}\n{code}\n```"
+
+    def test_extracts_large_python_block(self):
+        block = self._big_block("python", 30)
+        text = f"Here is some code:\n\n{block}\n\nDone."
+        result = _extract_code_blocks(text)
+        assert len(result) == 1
+        lang, code, full_match = result[0]
+        assert lang == "python"
+        assert "line_0 = 0" in code
+        assert full_match in text
+
+    def test_ignores_small_block(self):
+        text = "```python\nprint('hello')\n```"
+        result = _extract_code_blocks(text)
+        assert len(result) == 0
+
+    def test_ignores_block_without_language(self):
+        code_lines = [f"line {i}" for i in range(25)]
+        block = "```\n" + "\n".join(code_lines) + "\n```"
+        result = _extract_code_blocks(block)
+        assert len(result) == 0
+
+    def test_ignores_unknown_language(self):
+        code_lines = [f"line {i}" for i in range(25)]
+        block = "```brainfuck\n" + "\n".join(code_lines) + "\n```"
+        result = _extract_code_blocks(block)
+        assert len(result) == 0
+
+    def test_extracts_multiple_blocks(self):
+        block1 = self._big_block("python", 30)
+        block2 = self._big_block("javascript", 30)
+        text = f"First:\n{block1}\n\nSecond:\n{block2}"
+        result = _extract_code_blocks(text)
+        assert len(result) == 2
+        assert result[0][0] == "python"
+        assert result[1][0] == "javascript"
+
+    def test_leaves_small_block_extracts_large(self):
+        small = "```python\nx = 1\n```"
+        large = self._big_block("go", 25)
+        text = f"Small:\n{small}\n\nLarge:\n{large}"
+        result = _extract_code_blocks(text)
+        assert len(result) == 1
+        assert result[0][0] == "go"
+
+    def test_known_languages_in_mapping(self):
+        """Verify common language tags are in _LANG_TO_FILETYPE."""
+        for lang in ("python", "py", "javascript", "js", "typescript", "ts",
+                      "go", "rust", "java", "bash", "sh", "sql", "css", "html"):
+            assert lang in _LANG_TO_FILETYPE, f"{lang} not in _LANG_TO_FILETYPE"
+
+
+# ---------------------------------------------------------------------------
+# Test result parsing
+# ---------------------------------------------------------------------------
+
+
+class TestParseTestResults:
+    """Test _parse_test_results parsing of pytest and jest output."""
+
+    def test_pytest_all_passed(self):
+        output = "========================= 42 passed in 3.45s ========================="
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 42
+        assert result.failed == 0
+        assert result.duration == "3.45s"
+
+    def test_pytest_mixed(self):
+        output = "=============== 5 failed, 37 passed, 2 skipped in 12.3s ==============="
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 37
+        assert result.failed == 5
+        assert result.skipped == 2
+        assert result.duration == "12.3s"
+
+    def test_pytest_with_errors(self):
+        output = "=============== 1 failed, 2 error, 10 passed in 5.0s ==============="
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.errors == 2
+        assert result.failed == 1
+        assert result.passed == 10
+
+    def test_pytest_only_failed(self):
+        output = "=============== 3 failed in 1.2s ==============="
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.failed == 3
+        assert result.passed == 0
+
+    def test_jest_format(self):
+        output = """Test Suites:  1 failed, 2 passed, 3 total
+Tests:  1 failed, 5 passed, 6 total
+Time:        2.5 s"""
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 5
+        assert result.failed == 1
+
+    def test_jest_all_passed(self):
+        output = """Test Suites:  3 passed, 3 total
+Tests:  15 passed, 15 total
+Time:        1.2 s"""
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 15
+        assert result.failed == 0
+
+    def test_no_test_output(self):
+        result = _parse_test_results("Hello world, nothing to see here")
+        assert result is None
+
+    def test_summary_from_long_output(self):
+        """Summary line at the bottom of long output is still found."""
+        lines = ["PASSED tests/test_foo.py::test_bar"] * 50
+        lines.append("=============== 50 passed in 8.0s ===============")
+        result = _parse_test_results("\n".join(lines))
+        assert result is not None
+        assert result.passed == 50
+
+
+class TestFormatTestSummary:
+    """Test _format_test_summary formatting."""
+
+    def test_all_passed(self):
+        tr = ParsedTestResult(passed=10, duration="3.4s")
+        text, color = _format_test_summary(tr)
+        assert ":white_check_mark:" in text
+        assert "*10 passed*" in text
+        assert "3.4s" in text
+        assert color == "good"
+
+    def test_failures(self):
+        tr = ParsedTestResult(passed=8, failed=2)
+        text, color = _format_test_summary(tr)
+        assert ":x:" in text
+        assert "*2 failed*" in text
+        assert "*8 passed*" in text
+        assert color == "danger"
+
+    def test_errors(self):
+        tr = ParsedTestResult(passed=5, errors=1)
+        text, color = _format_test_summary(tr)
+        assert ":x:" in text
+        assert "*1 error*" in text
+        assert color == "danger"
+
+    def test_skipped(self):
+        tr = ParsedTestResult(passed=10, skipped=3, duration="1.0s")
+        text, color = _format_test_summary(tr)
+        assert "3 skipped" in text
+        assert color == "good"
+
+
+# ---------------------------------------------------------------------------
+# Git commit info extraction
+# ---------------------------------------------------------------------------
+
+
+class TestExtractGitCommitInfo:
+    """Test _extract_git_commit_info parsing of git commit output."""
+
+    def test_standard_commit(self):
+        output = """[main abc1234] feat: add new feature
+ 3 files changed, 45 insertions(+), 12 deletions(-)"""
+        info = _extract_git_commit_info(output)
+        assert info is not None
+        assert info.short_hash == "abc1234"
+        assert info.message == "feat: add new feature"
+        assert info.files_changed == 3
+        assert info.insertions == 45
+        assert info.deletions == 12
+
+    def test_commit_with_branch_slash(self):
+        output = "[feature/auth 1a2b3c4] fix: resolve login bug\n 1 file changed, 5 insertions(+)"
+        info = _extract_git_commit_info(output)
+        assert info is not None
+        assert info.short_hash == "1a2b3c4"
+        assert info.message == "fix: resolve login bug"
+        assert info.files_changed == 1
+        assert info.insertions == 5
+        assert info.deletions == 0
+
+    def test_commit_only_deletions(self):
+        output = "[main abcdef0] chore: remove dead code\n 2 files changed, 15 deletions(-)"
+        info = _extract_git_commit_info(output)
+        assert info is not None
+        assert info.deletions == 15
+        assert info.insertions == 0
+
+    def test_no_stat_line(self):
+        output = "[main abc1234] initial commit"
+        info = _extract_git_commit_info(output)
+        assert info is not None
+        assert info.short_hash == "abc1234"
+        assert info.files_changed == 0
+
+    def test_no_commit_output(self):
+        info = _extract_git_commit_info("nothing interesting here")
+        assert info is None
+
+    def test_commit_in_longer_output(self):
+        """Commit info found in git output with surrounding noise."""
+        output = """On branch main
+Your branch is up to date with 'origin/main'.
+
+[main fedcba9] docs: update README
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+"""
+        info = _extract_git_commit_info(output)
+        assert info is not None
+        assert info.short_hash == "fedcba9"
+        assert info.message == "docs: update README"
+
+    def test_long_hash(self):
+        output = "[main 1234567890ab] test commit"
+        info = _extract_git_commit_info(output)
+        assert info is not None
+        assert info.short_hash == "1234567890ab"
+
+
+class TestFormatCommitCard:
+    """Test _format_commit_card formatting."""
+
+    def test_full_stats(self):
+        info = CommitInfo(
+            short_hash="abc1234",
+            message="feat: new feature",
+            files_changed=3,
+            insertions=45,
+            deletions=12,
+        )
+        text = _format_commit_card(info)
+        assert ":package:" in text
+        assert "*Committed*" in text
+        assert "`abc1234`" in text
+        assert "feat: new feature" in text
+        assert "3 files changed" in text
+        assert "+45" in text
+        assert "-12" in text
+
+    def test_no_stats(self):
+        info = CommitInfo(short_hash="abc1234", message="initial commit")
+        text = _format_commit_card(info)
+        assert "`abc1234`" in text
+        assert "initial commit" in text
+        assert "file" not in text  # no stats line
+
+    def test_single_file(self):
+        info = CommitInfo(
+            short_hash="abc1234",
+            message="fix bug",
+            files_changed=1,
+            insertions=2,
+        )
+        text = _format_commit_card(info)
+        assert "1 file changed" in text  # singular
+
+    def test_only_insertions(self):
+        info = CommitInfo(
+            short_hash="abc1234",
+            message="add code",
+            files_changed=2,
+            insertions=10,
+            deletions=0,
+        )
+        text = _format_commit_card(info)
+        assert "+10" in text
+        assert "-" not in text.split("\n")[-1]  # no deletions in stats line

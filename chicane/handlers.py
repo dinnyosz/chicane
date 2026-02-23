@@ -534,6 +534,7 @@ async def _process_message(
         result_event = None  # capture result event for completion summary
         git_committed = False  # track whether a git commit happened (since last edit)
         files_changed = False  # track uncommitted file changes
+        pending_commit_tool_ids: set[str] = set()  # tool IDs for git commit cards
         tool_id_to_name: dict[str, str] = {}  # tool_use_id → tool name
         tool_id_to_input: dict[str, dict] = {}  # tool_use_id → tool input
         stale_context_prompt: str | None = None  # set during init if session was stale
@@ -666,7 +667,9 @@ async def _process_message(
                             await _remove_thread_reaction(client, channel, session_info, "package")
 
                     # Detect git commits from Bash tool use
-                    if _has_git_commit(event_data):
+                    commit_ids = _get_git_commit_tool_ids(event_data)
+                    if commit_ids:
+                        pending_commit_tool_ids.update(commit_ids)
                         # Remove pencil reaction — changes are committed
                         if files_changed:
                             files_changed = False
@@ -708,6 +711,33 @@ async def _process_message(
                 elif event_data.type == "user":
                     await _flush_activities()
                     first_activity_posted = False
+                    # Git commit cards
+                    if pending_commit_tool_ids:
+                        for tool_use_id, result_text_out in event_data.tool_results:
+                            if tool_use_id in pending_commit_tool_ids:
+                                pending_commit_tool_ids.discard(tool_use_id)
+                                commit_info = _extract_git_commit_info(result_text_out)
+                                if commit_info:
+                                    card = _format_commit_card(commit_info)
+                                    await queue.post_message(
+                                        channel, thread_ts, card,
+                                        attachments=[{"color": _GIT_PURPLE}],
+                                    )
+                    # Test result cards — shown at normal+ verbosity
+                    if _should_show("tool_activity", config.verbosity):
+                        for tool_use_id, result_text_out in event_data.tool_results:
+                            tool_name = tool_id_to_name.get(tool_use_id, "")
+                            tool_input = tool_id_to_input.get(tool_use_id, {})
+                            if tool_name == "Bash":
+                                cmd = tool_input.get("command", "")
+                                if re.search(r"\b(pytest|npm\s+test|jest|vitest)\b", cmd):
+                                    test_result = _parse_test_results(result_text_out)
+                                    if test_result:
+                                        summary, color = _format_test_summary(test_result)
+                                        await queue.post_message(
+                                            channel, thread_ts, summary,
+                                            attachments=[{"color": color}],
+                                        )
                     # Check for tool errors in user events (tool results)
                     if _should_show("tool_error", config.verbosity):
                         for tool_use_id, error_msg in event_data.tool_errors:
@@ -1036,6 +1066,18 @@ async def _process_message(
                             chunk = event_data.text
                             if chunk:
                                 full_text += chunk
+                            # Detect git commits during retry
+                            retry_commit_ids = _get_git_commit_tool_ids(event_data)
+                            if retry_commit_ids:
+                                pending_commit_tool_ids.update(retry_commit_ids)
+                                if files_changed:
+                                    files_changed = False
+                                    await _remove_thread_reaction(client, channel, session_info, "pencil2")
+                                if not git_committed:
+                                    git_committed = True
+                                    session_info.total_commits += 1
+                                    await _add_thread_reaction(client, channel, session_info, "package")
+
                             # Post tool activities during retry
                             activities = _format_tool_activity(event_data)
                             if event_data.parent_tool_use_id:
@@ -1063,6 +1105,18 @@ async def _process_message(
                         elif event_data.type == "user":
                             await _flush_activities()
                             first_activity_posted = False
+                            # Git commit cards
+                            if pending_commit_tool_ids:
+                                for tool_use_id, result_text_out in event_data.tool_results:
+                                    if tool_use_id in pending_commit_tool_ids:
+                                        pending_commit_tool_ids.discard(tool_use_id)
+                                        commit_info = _extract_git_commit_info(result_text_out)
+                                        if commit_info:
+                                            card = _format_commit_card(commit_info)
+                                            await queue.post_message(
+                                                channel, thread_ts, card,
+                                                attachments=[{"color": _GIT_PURPLE}],
+                                            )
                             # Tool errors
                             if _should_show("tool_error", config.verbosity):
                                 for tool_use_id, error_msg in event_data.tool_errors:
@@ -1082,6 +1136,22 @@ async def _process_message(
                                         }],
                                         attachments=[{"color": "danger"}],
                                     )
+                            # Test result cards — shown at normal+ verbosity
+                            if _should_show("tool_activity", config.verbosity):
+                                for tool_use_id, result_text_out in event_data.tool_results:
+                                    tool_name = tool_id_to_name.get(tool_use_id, "")
+                                    tool_input = tool_id_to_input.get(tool_use_id, {})
+                                    if tool_name == "Bash":
+                                        cmd = tool_input.get("command", "")
+                                        if re.search(r"\b(pytest|npm\s+test|jest|vitest)\b", cmd):
+                                            test_result = _parse_test_results(result_text_out)
+                                            if test_result:
+                                                summary, color = _format_test_summary(test_result)
+                                                await queue.post_message(
+                                                    channel, thread_ts, summary,
+                                                    attachments=[{"color": color}],
+                                                )
+
                             # Tool outputs in verbose mode
                             if _should_show("tool_result", config.verbosity):
                                 for tool_use_id, result_text_out in event_data.tool_results:
@@ -1638,6 +1708,95 @@ def _has_git_commit(event: ClaudeEvent) -> bool:
     return False
 
 
+def _get_git_commit_tool_ids(event: ClaudeEvent) -> list[str]:
+    """Return tool_use IDs for Bash blocks that run ``git commit``."""
+    message = event.raw.get("message", {})
+    ids: list[str] = []
+    for block in message.get("content", []):
+        if block.get("type") != "tool_use":
+            continue
+        if block.get("name") != "Bash":
+            continue
+        cmd = block.get("input", {}).get("command", "")
+        if re.search(r"\bgit\b.*\bcommit\b", cmd):
+            tool_id = block.get("id")
+            if tool_id:
+                ids.append(tool_id)
+    return ids
+
+
+@dataclass(frozen=True)
+class CommitInfo:
+    """Parsed git commit output."""
+
+    short_hash: str
+    message: str
+    files_changed: int = 0
+    insertions: int = 0
+    deletions: int = 0
+
+
+# [main abc1234] commit message
+_GIT_COMMIT_RE = re.compile(
+    r"\[[\w./-]+\s+([0-9a-f]{7,12})\]\s+(.+)"
+)
+# 3 files changed, 45 insertions(+), 12 deletions(-)
+_GIT_STAT_RE = re.compile(
+    r"(\d+)\s+files?\s+changed"
+    r"(?:,\s*(\d+)\s+insertions?\(\+\))?"
+    r"(?:,\s*(\d+)\s+deletions?\(-\))?"
+)
+
+
+def _extract_git_commit_info(result_text: str) -> CommitInfo | None:
+    """Parse ``git commit`` output into structured data.
+
+    Expects output like::
+
+        [main abc1234] feat: add new feature
+         3 files changed, 45 insertions(+), 12 deletions(-)
+
+    Returns ``None`` if no recognisable commit output is found.
+    """
+    m = _GIT_COMMIT_RE.search(result_text)
+    if not m:
+        return None
+    short_hash = m.group(1)
+    message = m.group(2).strip()
+
+    files_changed = insertions = deletions = 0
+    sm = _GIT_STAT_RE.search(result_text)
+    if sm:
+        files_changed = int(sm.group(1))
+        insertions = int(sm.group(2) or 0)
+        deletions = int(sm.group(3) or 0)
+
+    return CommitInfo(
+        short_hash=short_hash,
+        message=message,
+        files_changed=files_changed,
+        insertions=insertions,
+        deletions=deletions,
+    )
+
+
+def _format_commit_card(info: CommitInfo) -> str:
+    """Format a CommitInfo as a Slack message for a purple-sidebar attachment."""
+    line = f":package: *Committed*\n`{info.short_hash}` {info.message}"
+    if info.files_changed:
+        stats_parts: list[str] = [f"{info.files_changed} file{'s' if info.files_changed != 1 else ''} changed"]
+        if info.insertions:
+            stats_parts.append(f"+{info.insertions}")
+        if info.deletions:
+            stats_parts.append(f"-{info.deletions}")
+        line += f"\n{', '.join(stats_parts)}"
+    return line
+
+
+# Git purple for commit card sidebars
+_GIT_PURPLE = "#6f42c1"
+
+
 # Tools that modify files on disk.
 _FILE_EDIT_TOOLS = frozenset({"Edit", "Write", "NotebookEdit"})
 
@@ -1787,6 +1946,98 @@ def _format_unified_diff(
         result_lines.append(line)
 
     return "".join(result_lines)
+
+
+@dataclass(frozen=True)
+class ParsedTestResult:
+    """Parsed test runner output."""
+
+    passed: int = 0
+    failed: int = 0
+    errors: int = 0
+    skipped: int = 0
+    duration: str | None = None  # e.g. "3.45s"
+
+
+# Pytest summary: "=== N passed, N failed, N error in Xs ==="
+# Items can appear in any order, so we match the summary line first,
+# then extract individual fields with separate regexes.
+_PYTEST_SUMMARY_LINE_RE = re.compile(r"={3,}\s+.+\s+={3,}")
+_PYTEST_PASSED_RE = re.compile(r"(\d+)\s+passed")
+_PYTEST_FAILED_RE = re.compile(r"(\d+)\s+failed")
+_PYTEST_ERROR_RE = re.compile(r"(\d+)\s+errors?")
+_PYTEST_SKIPPED_RE = re.compile(r"(\d+)\s+skipped")
+_PYTEST_DURATION_RE = re.compile(r"in\s+([\d.]+)s")
+
+_JEST_SUMMARY_RE = re.compile(
+    r"Tests:\s+"
+    r"(?:(\d+)\s+failed,?\s*)?"
+    r"(?:(\d+)\s+skipped,?\s*)?"
+    r"(?:(\d+)\s+passed,?\s*)?"
+    r"(\d+)\s+total"
+)
+
+
+def _parse_test_results(output: str) -> ParsedTestResult | None:
+    """Parse test runner output into structured data.
+
+    Supports pytest and jest/npm test output formats.
+    Returns ``None`` if no recognisable test summary is found.
+    """
+    # Try pytest format — scan from end for the "=== ... ===" summary line
+    for line in reversed(output.splitlines()):
+        if not _PYTEST_SUMMARY_LINE_RE.search(line):
+            continue
+        m_passed = _PYTEST_PASSED_RE.search(line)
+        m_failed = _PYTEST_FAILED_RE.search(line)
+        m_error = _PYTEST_ERROR_RE.search(line)
+        if not (m_passed or m_failed or m_error):
+            continue
+        m_skipped = _PYTEST_SKIPPED_RE.search(line)
+        m_duration = _PYTEST_DURATION_RE.search(line)
+        return ParsedTestResult(
+            passed=int(m_passed.group(1)) if m_passed else 0,
+            failed=int(m_failed.group(1)) if m_failed else 0,
+            errors=int(m_error.group(1)) if m_error else 0,
+            skipped=int(m_skipped.group(1)) if m_skipped else 0,
+            duration=f"{m_duration.group(1)}s" if m_duration else None,
+        )
+
+    # Try jest format: "Tests:  1 failed, 5 passed, 6 total"
+    m = _JEST_SUMMARY_RE.search(output)
+    if m:
+        return ParsedTestResult(
+            passed=int(m.group(3) or 0),
+            failed=int(m.group(1) or 0),
+            skipped=int(m.group(2) or 0),
+        )
+
+    return None
+
+
+def _format_test_summary(result: ParsedTestResult) -> tuple[str, str]:
+    """Format a ParsedTestResult as ``(text, color)`` for a Slack attachment.
+
+    Returns the summary line and the attachment color ("good" or "danger").
+    """
+    parts: list[str] = []
+    if result.passed:
+        parts.append(f"*{result.passed} passed*")
+    if result.failed:
+        parts.append(f"*{result.failed} failed*")
+    if result.errors:
+        parts.append(f"*{result.errors} error{'s' if result.errors != 1 else ''}*")
+    if result.skipped:
+        parts.append(f"{result.skipped} skipped")
+
+    summary = ", ".join(parts)
+    if result.duration:
+        summary += f" in {result.duration}"
+
+    is_success = result.failed == 0 and result.errors == 0
+    emoji = ":white_check_mark:" if is_success else ":x:"
+    color = "good" if is_success else "danger"
+    return f"{emoji} {summary}", color
 
 
 @dataclass(frozen=True)
@@ -2423,6 +2674,69 @@ def _guess_snippet_type(text: str) -> str:
     return "text"
 
 
+# ---------------------------------------------------------------------------
+# Code block extraction from Claude's text responses
+# ---------------------------------------------------------------------------
+
+# Fenced code block language tag → Slack filetype for syntax-highlighted uploads.
+_LANG_TO_FILETYPE: dict[str, str] = {
+    "python": "python", "py": "python",
+    "javascript": "javascript", "js": "javascript",
+    "typescript": "javascript", "ts": "javascript",
+    "jsx": "javascript", "tsx": "javascript",
+    "go": "go", "golang": "go",
+    "rust": "rust", "rs": "rust",
+    "ruby": "ruby", "rb": "ruby",
+    "java": "java", "kotlin": "kotlin", "kt": "kotlin",
+    "scala": "scala",
+    "c": "c", "cpp": "cpp", "c++": "cpp",
+    "csharp": "csharp", "cs": "csharp", "c#": "csharp",
+    "swift": "swift",
+    "bash": "bash", "sh": "bash", "shell": "bash", "zsh": "bash",
+    "sql": "sql",
+    "html": "html", "css": "css", "scss": "sass",
+    "xml": "xml",
+    "yaml": "yaml", "yml": "yaml", "toml": "yaml",
+    "json": "javascript", "jsonc": "javascript",
+    "markdown": "markdown", "md": "markdown",
+    "diff": "diff", "patch": "diff",
+    "dockerfile": "dockerfile", "docker": "dockerfile",
+    "lua": "lua", "r": "r", "php": "php", "perl": "perl",
+}
+
+# Minimum thresholds for extracting a code block into a snippet.
+_CODE_EXTRACT_MIN_LINES = 15
+_CODE_EXTRACT_MIN_CHARS = 300
+
+_FENCED_CODE_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+
+
+def _extract_code_blocks(
+    text: str,
+) -> list[tuple[str, str, str]]:
+    """Extract large fenced code blocks from markdown text.
+
+    Returns a list of ``(language, code, full_match)`` tuples for blocks that
+    exceed both :data:`_CODE_EXTRACT_MIN_LINES` and
+    :data:`_CODE_EXTRACT_MIN_CHARS` and have a language tag.  Small or
+    untagged blocks are left in place.
+    """
+    results: list[tuple[str, str, str]] = []
+    for m in _FENCED_CODE_RE.finditer(text):
+        lang = m.group(1).strip().lower()
+        code = m.group(2)
+        if not lang:
+            continue
+        if lang not in _LANG_TO_FILETYPE:
+            continue
+        if code.count("\n") < _CODE_EXTRACT_MIN_LINES:
+            continue
+        if len(code) < _CODE_EXTRACT_MIN_CHARS:
+            continue
+        results.append((lang, code, m.group(0)))
+    return results
+
+
 # Map snippet_type → file extension so Slack infers the right type from filename.
 _SNIPPET_EXT: dict[str, str] = {
     "diff": ".diff",
@@ -2547,7 +2861,7 @@ def _snippet_metadata_from_tool(
 
     if tool_name in ("Grep", "Glob"):
         pattern = tool_input.get("pattern", "")
-        short = f"results for `{pattern}`" if pattern else "search results"
+        short = f"Results for `{pattern}`" if pattern else "Search results"
         return _SnippetMeta("text", "search-results.txt", f":clipboard: {short}")
 
     if tool_name == "WebFetch":
@@ -2715,9 +3029,23 @@ async def _post_markdown_response(
     Longer responses are split into multiple messages at semantic
     boundaries (paragraph breaks, headings).
 
+    Large fenced code blocks (>15 lines, >300 chars, with a language tag)
+    are extracted and uploaded as syntax-highlighted snippets so Slack
+    renders them with colour.  A placeholder replaces them in the text.
+
     Falls back to the legacy ``_markdown_to_mrkdwn()`` path if the
     markdown block post fails (e.g. older Slack workspace).
     """
+    # --- Extract large code blocks for syntax-highlighted upload ----------
+    extracted = _extract_code_blocks(text)
+    pending_snippets: list[tuple[str, str, str]] = []  # (lang, code, filename)
+    for lang, code, full_match in extracted:
+        filetype = _LANG_TO_FILETYPE.get(lang, "text")
+        ext = _SNIPPET_EXT.get(filetype, ".txt")
+        filename = f"code{ext}"
+        text = text.replace(full_match, f"_(see `{lang}` snippet below)_", 1)
+        pending_snippets.append((filetype, code, filename))
+
     chunks = _split_markdown(text)
 
     for chunk in chunks:
@@ -2757,7 +3085,14 @@ async def _post_markdown_response(
                     await queue.post_message(
                         channel, thread_ts, sub_chunk,
                     )
-            return
+            break  # exit chunk loop — fallback handled all remaining
+
+    # Upload extracted code blocks as syntax-highlighted snippets
+    for filetype, code, filename in pending_snippets:
+        await _send_snippet(
+            client, channel, thread_ts, code,
+            snippet_type=filetype, filename=filename, queue=queue,
+        )
 
 
 def _split_message(text: str) -> list[str]:
