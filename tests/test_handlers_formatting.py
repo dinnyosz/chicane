@@ -853,6 +853,153 @@ Time:        1.2 s"""
         assert result is not None
         assert result.passed == 50
 
+    # --- Go test ---
+
+    def test_go_test_passing(self):
+        output = """=== RUN   TestAdd
+--- PASS: TestAdd (0.00s)
+=== RUN   TestSub
+--- PASS: TestSub (0.00s)
+PASS
+ok  	mypackage	0.123s"""
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 2
+        assert result.failed == 0
+        assert result.duration == "0.123s"
+
+    def test_go_test_mixed(self):
+        output = """--- PASS: TestA (0.00s)
+--- FAIL: TestB (0.01s)
+--- SKIP: TestC (0.00s)
+FAIL	mypackage	0.456s"""
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 1
+        assert result.failed == 1
+        assert result.skipped == 1
+
+    # --- Cargo test (Rust) ---
+
+    def test_cargo_test_passing(self):
+        output = """running 5 tests
+test tests::test_add ... ok
+test tests::test_sub ... ok
+test tests::test_mul ... ok
+test tests::test_div ... ok
+test tests::test_neg ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"""
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 5
+        assert result.failed == 0
+
+    def test_cargo_test_mixed(self):
+        output = """test result: FAILED. 3 passed; 2 failed; 1 ignored; 0 measured; 0 filtered out"""
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 3
+        assert result.failed == 2
+        assert result.skipped == 1  # ignored → skipped
+
+    # --- PHPUnit ---
+
+    def test_phpunit_passing(self):
+        output = """PHPUnit 10.5.0 by Sebastian Bergmann and contributors.
+
+..........
+
+Time: 00:00.123, Memory: 10.00 MB
+
+OK (10 tests, 25 assertions)
+Tests: 10, Assertions: 25."""
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 10
+        assert result.failed == 0
+
+    def test_phpunit_failures(self):
+        output = """Tests: 8, Assertions: 20, Failures: 2, Errors: 1, Skipped: 1."""
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 4  # 8 - 2 - 1 - 1
+        assert result.failed == 2
+        assert result.errors == 1
+        assert result.skipped == 1
+
+    # --- Maven Surefire ---
+
+    def test_maven_surefire(self):
+        output = """[INFO] Tests run: 15, Failures: 1, Errors: 0, Skipped: 2, Time elapsed: 3.456 s"""
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 12  # 15 - 1 - 0 - 2
+        assert result.failed == 1
+        assert result.skipped == 2
+        assert result.duration == "3.456s"
+
+    def test_maven_multiple_lines_uses_last(self):
+        output = """[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0 - in com.example.FooTest
+[INFO] Tests run: 10, Failures: 2, Errors: 0, Skipped: 1 - in com.example.BarTest"""
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 7  # last line: 10 - 2 - 0 - 1
+        assert result.failed == 2
+
+    # --- Mocha ---
+
+    def test_mocha_passing(self):
+        output = """  27 passing (1m)
+  2 pending"""
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 27
+        assert result.skipped == 2
+        assert result.duration == "1m"
+
+    def test_mocha_with_failures(self):
+        output = """  10 passing (350ms)
+  1 pending
+  3 failing"""
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 10
+        assert result.failed == 3
+        assert result.skipped == 1
+
+    # --- TAP ---
+
+    def test_tap_basic(self):
+        output = """1..4
+ok 1 - Input file opened
+not ok 2 - First line valid
+ok 3 - Read rest of file
+ok 4 - Summary correct"""
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 3
+        assert result.failed == 1
+
+    def test_tap_with_skip(self):
+        output = """1..3
+ok 1 - Test A
+ok 2 - Test B # SKIP not implemented
+not ok 3 - Test C"""
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 1  # ok 1 only (ok 2 is skip)
+        assert result.failed == 1
+        assert result.skipped == 1
+
+    def test_tap_no_plan_returns_none(self):
+        """TAP parser requires a plan line to avoid false positives."""
+        output = "ok 1 - some test\nok 2 - another"
+        result = _parse_test_results(output)
+        # Without a plan line, TAP parser shouldn't match
+        # (could be random output with "ok" in it)
+        assert result is None
+
 
 class TestFormatTestSummary:
     """Test _format_test_summary formatting."""

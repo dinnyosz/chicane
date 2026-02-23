@@ -730,7 +730,7 @@ async def _process_message(
                             tool_input = tool_id_to_input.get(tool_use_id, {})
                             if tool_name == "Bash":
                                 cmd = tool_input.get("command", "")
-                                if re.search(r"\b(pytest|npm\s+test|jest|vitest)\b", cmd):
+                                if re.search(r"\b(pytest|npm\s+test|jest|vitest|cargo\s+test|go\s+test|phpunit|mvn\s+test|gradle\s+test|mocha|rspec|prove)\b", cmd):
                                     test_result = _parse_test_results(result_text_out)
                                     if test_result:
                                         summary, color = _format_test_summary(test_result)
@@ -1143,7 +1143,7 @@ async def _process_message(
                                     tool_input = tool_id_to_input.get(tool_use_id, {})
                                     if tool_name == "Bash":
                                         cmd = tool_input.get("command", "")
-                                        if re.search(r"\b(pytest|npm\s+test|jest|vitest)\b", cmd):
+                                        if re.search(r"\b(pytest|npm\s+test|jest|vitest|cargo\s+test|go\s+test|phpunit|mvn\s+test|gradle\s+test|mocha|rspec|prove)\b", cmd):
                                             test_result = _parse_test_results(result_text_out)
                                             if test_result:
                                                 summary, color = _format_test_summary(test_result)
@@ -1959,9 +1959,12 @@ class ParsedTestResult:
     duration: str | None = None  # e.g. "3.45s"
 
 
-# Pytest summary: "=== N passed, N failed, N error in Xs ==="
-# Items can appear in any order, so we match the summary line first,
-# then extract individual fields with separate regexes.
+# ---------------------------------------------------------------------------
+# Test result parsers — each returns ParsedTestResult | None.
+# _parse_test_results tries them in order until one matches.
+# ---------------------------------------------------------------------------
+
+# Pytest: "=== 42 passed, 2 failed in 3.45s ==="
 _PYTEST_SUMMARY_LINE_RE = re.compile(r"={3,}\s+.+\s+={3,}")
 _PYTEST_PASSED_RE = re.compile(r"(\d+)\s+passed")
 _PYTEST_FAILED_RE = re.compile(r"(\d+)\s+failed")
@@ -1969,22 +1972,8 @@ _PYTEST_ERROR_RE = re.compile(r"(\d+)\s+errors?")
 _PYTEST_SKIPPED_RE = re.compile(r"(\d+)\s+skipped")
 _PYTEST_DURATION_RE = re.compile(r"in\s+([\d.]+)s")
 
-_JEST_SUMMARY_RE = re.compile(
-    r"Tests:\s+"
-    r"(?:(\d+)\s+failed,?\s*)?"
-    r"(?:(\d+)\s+skipped,?\s*)?"
-    r"(?:(\d+)\s+passed,?\s*)?"
-    r"(\d+)\s+total"
-)
 
-
-def _parse_test_results(output: str) -> ParsedTestResult | None:
-    """Parse test runner output into structured data.
-
-    Supports pytest and jest/npm test output formats.
-    Returns ``None`` if no recognisable test summary is found.
-    """
-    # Try pytest format — scan from end for the "=== ... ===" summary line
+def _parse_pytest(output: str) -> ParsedTestResult | None:
     for line in reversed(output.splitlines()):
         if not _PYTEST_SUMMARY_LINE_RE.search(line):
             continue
@@ -2002,8 +1991,20 @@ def _parse_test_results(output: str) -> ParsedTestResult | None:
             skipped=int(m_skipped.group(1)) if m_skipped else 0,
             duration=f"{m_duration.group(1)}s" if m_duration else None,
         )
+    return None
 
-    # Try jest format: "Tests:  1 failed, 5 passed, 6 total"
+
+# Jest/Vitest: "Tests:  1 failed, 5 passed, 6 total"
+_JEST_SUMMARY_RE = re.compile(
+    r"Tests:\s+"
+    r"(?:(\d+)\s+failed,?\s*)?"
+    r"(?:(\d+)\s+skipped,?\s*)?"
+    r"(?:(\d+)\s+passed,?\s*)?"
+    r"(\d+)\s+total"
+)
+
+
+def _parse_jest(output: str) -> ParsedTestResult | None:
     m = _JEST_SUMMARY_RE.search(output)
     if m:
         return ParsedTestResult(
@@ -2011,7 +2012,170 @@ def _parse_test_results(output: str) -> ParsedTestResult | None:
             failed=int(m.group(1) or 0),
             skipped=int(m.group(2) or 0),
         )
+    return None
 
+
+# Go test: "ok  pkg  0.123s" or "FAIL  pkg  0.456s"
+# Also: "--- PASS: TestName (0.00s)" / "--- FAIL: TestName (0.00s)"
+_GO_PASS_RE = re.compile(r"^---\s+PASS:", re.MULTILINE)
+_GO_FAIL_RE = re.compile(r"^---\s+FAIL:", re.MULTILINE)
+_GO_SKIP_RE = re.compile(r"^---\s+SKIP:", re.MULTILINE)
+_GO_FINAL_RE = re.compile(r"^(ok|FAIL)\s+\S+\s+([\d.]+)s", re.MULTILINE)
+
+
+def _parse_go_test(output: str) -> ParsedTestResult | None:
+    passed = len(_GO_PASS_RE.findall(output))
+    failed = len(_GO_FAIL_RE.findall(output))
+    skipped = len(_GO_SKIP_RE.findall(output))
+    if not (passed or failed):
+        return None
+    duration: str | None = None
+    # Use the last ok/FAIL line for duration
+    for m in _GO_FINAL_RE.finditer(output):
+        duration = f"{m.group(2)}s"
+    return ParsedTestResult(passed=passed, failed=failed, skipped=skipped, duration=duration)
+
+
+# Cargo test (Rust): "test result: ok. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out"
+_CARGO_RE = re.compile(
+    r"test result:\s+(?:ok|FAILED)\.\s+"
+    r"(\d+)\s+passed;\s+"
+    r"(\d+)\s+failed;\s+"
+    r"(\d+)\s+ignored"
+)
+
+
+def _parse_cargo_test(output: str) -> ParsedTestResult | None:
+    m = _CARGO_RE.search(output)
+    if m:
+        return ParsedTestResult(
+            passed=int(m.group(1)),
+            failed=int(m.group(2)),
+            skipped=int(m.group(3)),
+        )
+    return None
+
+
+# PHPUnit: "Tests: 10, Assertions: 20, Failures: 2."
+_PHPUNIT_RE = re.compile(
+    r"Tests:\s+(\d+),\s+Assertions:\s+\d+"
+    r"(?:,\s+Failures:\s+(\d+))?"
+    r"(?:,\s+Errors:\s+(\d+))?"
+    r"(?:,\s+Skipped:\s+(\d+))?"
+)
+
+
+def _parse_phpunit(output: str) -> ParsedTestResult | None:
+    m = _PHPUNIT_RE.search(output)
+    if m:
+        total = int(m.group(1))
+        failed = int(m.group(2) or 0)
+        errors = int(m.group(3) or 0)
+        skipped = int(m.group(4) or 0)
+        passed = total - failed - errors - skipped
+        return ParsedTestResult(
+            passed=max(passed, 0),
+            failed=failed,
+            errors=errors,
+            skipped=skipped,
+        )
+    return None
+
+
+# Maven Surefire (JUnit): "Tests run: 10, Failures: 1, Errors: 0, Skipped: 2"
+_MAVEN_RE = re.compile(
+    r"Tests run:\s+(\d+),\s+Failures:\s+(\d+),\s+Errors:\s+(\d+),\s+Skipped:\s+(\d+)"
+    r"(?:,\s+Time elapsed:\s+([\d.]+)\s*s)?"
+)
+
+
+def _parse_maven(output: str) -> ParsedTestResult | None:
+    # Maven may have multiple "Tests run:" lines (per class). Use the last one.
+    last: re.Match | None = None
+    for m in _MAVEN_RE.finditer(output):
+        last = m
+    if not last:
+        return None
+    total = int(last.group(1))
+    failed = int(last.group(2))
+    errors = int(last.group(3))
+    skipped = int(last.group(4))
+    passed = total - failed - errors - skipped
+    duration = f"{last.group(5)}s" if last.group(5) else None
+    return ParsedTestResult(
+        passed=max(passed, 0),
+        failed=failed,
+        errors=errors,
+        skipped=skipped,
+        duration=duration,
+    )
+
+
+# Mocha: "27 passing (1m)\n  2 pending\n  1 failing"
+_MOCHA_PASSING_RE = re.compile(r"(\d+)\s+passing(?:\s+\(([^)]+)\))?")
+_MOCHA_FAILING_RE = re.compile(r"(\d+)\s+failing")
+_MOCHA_PENDING_RE = re.compile(r"(\d+)\s+pending")
+
+
+def _parse_mocha(output: str) -> ParsedTestResult | None:
+    m_passing = _MOCHA_PASSING_RE.search(output)
+    if not m_passing:
+        return None
+    m_failing = _MOCHA_FAILING_RE.search(output)
+    m_pending = _MOCHA_PENDING_RE.search(output)
+    return ParsedTestResult(
+        passed=int(m_passing.group(1)),
+        failed=int(m_failing.group(1)) if m_failing else 0,
+        skipped=int(m_pending.group(1)) if m_pending else 0,
+        duration=m_passing.group(2),  # e.g. "1m", "350ms"
+    )
+
+
+# TAP (Test Anything Protocol): "ok 1 - test name" / "not ok 2 - test name"
+# Plan line: "1..N"
+_TAP_OK_RE = re.compile(r"^ok\s+\d+", re.MULTILINE)
+_TAP_NOT_OK_RE = re.compile(r"^not ok\s+\d+", re.MULTILINE)
+_TAP_SKIP_RE = re.compile(r"^ok\s+\d+.*#\s*(?:skip|SKIP)", re.MULTILINE)
+_TAP_PLAN_RE = re.compile(r"^1\.\.(\d+)", re.MULTILINE)
+
+
+def _parse_tap(output: str) -> ParsedTestResult | None:
+    # Only trigger if there's a TAP plan line
+    if not _TAP_PLAN_RE.search(output):
+        return None
+    total_ok = len(_TAP_OK_RE.findall(output))
+    not_ok = len(_TAP_NOT_OK_RE.findall(output))
+    skips = len(_TAP_SKIP_RE.findall(output))
+    passed = total_ok - skips  # "ok" with skip directive doesn't count as passed
+    if not (total_ok or not_ok):
+        return None
+    return ParsedTestResult(passed=max(passed, 0), failed=not_ok, skipped=skips)
+
+
+# Ordered list of parsers — tried in sequence, first match wins.
+_TEST_PARSERS = [
+    _parse_pytest,
+    _parse_jest,
+    _parse_cargo_test,
+    _parse_phpunit,
+    _parse_maven,
+    _parse_go_test,
+    _parse_mocha,
+    _parse_tap,
+]
+
+
+def _parse_test_results(output: str) -> ParsedTestResult | None:
+    """Parse test runner output into structured data.
+
+    Tries multiple test runner formats in order: pytest, jest/vitest,
+    cargo test, PHPUnit, Maven/Surefire, go test, mocha, TAP.
+    Returns ``None`` if no recognisable test summary is found.
+    """
+    for parser in _TEST_PARSERS:
+        result = parser(output)
+        if result is not None:
+            return result
     return None
 
 
