@@ -5,7 +5,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from chicane.claude import ClaudeEvent
-from chicane.handlers import _format_edit_diff, _format_tool_activity, _has_file_edit, _process_message
+from chicane.handlers import (
+    ToolActivity,
+    _format_edit_diff,
+    _format_tool_activity,
+    _format_unified_diff,
+    _has_file_edit,
+    _process_message,
+)
 from tests.conftest import make_event, make_tool_event, mock_client, mock_session_info, tool_block
 
 
@@ -59,7 +66,7 @@ class TestFormatToolActivity:
         )
         result = _format_tool_activity(event)
         assert len(result) == 1
-        assert result[0] == f":computer: Running `{long_cmd}`"
+        assert result[0].text == f":computer: Running `{long_cmd}`"
 
     def test_bash_tool_with_description(self):
         event = make_tool_event(
@@ -98,11 +105,13 @@ class TestFormatToolActivity:
         result = _format_tool_activity(event)
         assert len(result) == 1
         item = result[0]
-        assert isinstance(item, str)
-        assert ":pencil2: Editing `handlers.py`" in item
-        assert "-def foo():" in item
-        assert "+def bar():" in item
-        assert "```" in item  # inline code block
+        assert isinstance(item, ToolActivity)
+        assert ":pencil2: Editing `handlers.py`" in item.text
+        # Diff is in snippet, not inline
+        assert item.snippet is not None
+        assert "-def foo():" in item.snippet
+        assert "+def bar():" in item.snippet
+        assert item.snippet_filename == "handlers.py.diff"
 
     def test_edit_tool_multiline_diff(self):
         event = make_tool_event(
@@ -116,10 +125,11 @@ class TestFormatToolActivity:
         result = _format_tool_activity(event)
         assert len(result) == 1
         item = result[0]
-        assert isinstance(item, str)
-        assert "-y = 2" in item
-        assert "+y = 3" in item
-        assert "+z = 4" in item
+        assert isinstance(item, ToolActivity)
+        assert item.snippet is not None
+        assert "-y = 2" in item.snippet
+        assert "+y = 3" in item.snippet
+        assert "+z = 4" in item.snippet
 
     def test_edit_tool_empty_diff_fallback(self):
         """Edit where old_string==new_string produces empty diff → header only."""
@@ -134,7 +144,7 @@ class TestFormatToolActivity:
         result = _format_tool_activity(event)
         assert len(result) == 1
         assert result[0] == ":pencil2: Editing `handlers.py`"
-        assert "```" not in result[0]
+        assert result[0].snippet is None
 
     def test_edit_tool_no_strings_fallback(self):
         """Edit with no old/new strings falls back to simple message."""
@@ -155,8 +165,8 @@ class TestFormatToolActivity:
         )
         result = _format_tool_activity(event)
         assert len(result) == 1
-        assert "(all occurrences)" in result[0]
-        assert ":pencil2: Editing `config.py` (all occurrences)" in result[0]
+        assert "(all occurrences)" in result[0].text
+        assert ":pencil2: Editing `config.py` (all occurrences)" in result[0].text
 
     # --- Write ---
 
@@ -252,8 +262,8 @@ class TestFormatToolActivity:
         )
         result = _format_tool_activity(event)
         assert len(result) == 1
-        assert ":globe_with_meridians: Fetching `https://docs.example.com`" in result[0]
-        assert "Find the authentication section" in result[0]
+        assert ":globe_with_meridians: Fetching `https://docs.example.com`" in result[0].text
+        assert "Find the authentication section" in result[0].text
 
     def test_webfetch_tool_long_prompt_truncated(self):
         long_prompt = "A" * 100
@@ -261,7 +271,7 @@ class TestFormatToolActivity:
             tool_block("WebFetch", url="https://example.com", prompt=long_prompt)
         )
         result = _format_tool_activity(event)
-        assert "\u2026" in result[0]
+        assert "\u2026" in result[0].text
 
     def test_webfetch_tool_no_url(self):
         event = make_tool_event(tool_block("WebFetch"))
@@ -285,7 +295,7 @@ class TestFormatToolActivity:
         )
         result = _format_tool_activity(event)
         assert len(result) == 1
-        assert "stackoverflow.com, reactjs.org" in result[0]
+        assert "stackoverflow.com, reactjs.org" in result[0].text
 
     def test_websearch_tool_with_blocked_domains(self):
         event = make_tool_event(
@@ -297,7 +307,7 @@ class TestFormatToolActivity:
         )
         result = _format_tool_activity(event)
         assert len(result) == 1
-        assert "excluding w3schools.com" in result[0]
+        assert "excluding w3schools.com" in result[0].text
 
     def test_websearch_tool_no_query(self):
         event = make_tool_event(tool_block("WebSearch"))
@@ -524,10 +534,10 @@ class TestFormatToolActivity:
         )
         result = _format_tool_activity(event)
         assert len(result) == 1
-        assert ":clipboard: *Tasks*" in result[0]
-        assert ":white_check_mark: Set up database" in result[0]
-        assert ":arrows_counterclockwise: Write API endpoints" in result[0]
-        assert ":white_circle: Add tests" in result[0]
+        assert ":clipboard: *Tasks*" in result[0].text
+        assert ":white_check_mark: Set up database" in result[0].text
+        assert ":arrows_counterclockwise: Write API endpoints" in result[0].text
+        assert ":white_circle: Add tests" in result[0].text
 
     def test_todo_write_empty_todos(self):
         event = make_tool_event(tool_block("TodoWrite", todos=[]))
@@ -663,10 +673,10 @@ class TestCatchAllToolDisplay:
         )
         activities = _format_tool_activity(event)
         assert len(activities) == 1
-        assert "magaldi: Pattern Search" in activities[0]
-        assert "  pattern: `def main`" in activities[0]
-        assert "  mode: `regexp`" in activities[0]
-        assert "\n" in activities[0]
+        assert "magaldi: Pattern Search" in activities[0].text
+        assert "  pattern: `def main`" in activities[0].text
+        assert "  mode: `regexp`" in activities[0].text
+        assert "\n" in activities[0].text
 
     def test_unknown_tool_no_args(self):
         event = ClaudeEvent(

@@ -236,6 +236,19 @@ class ClaudeEvent:
         }
 
     @property
+    def tool_use_inputs(self) -> dict[str, dict]:
+        """Map tool_use_id -> input dict from tool_use blocks in assistant events."""
+        if self.type != "assistant":
+            return {}
+        message = self.raw.get("message", {})
+        content = message.get("content", [])
+        return {
+            block["id"]: block.get("input", {})
+            for block in content
+            if block.get("type") == "tool_use" and "id" in block
+        }
+
+    @property
     def tool_results(self) -> list[tuple[str, str]]:
         """Extract (tool_use_id, text) from successful tool_result blocks.
 

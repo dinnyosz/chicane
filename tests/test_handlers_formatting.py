@@ -5,8 +5,11 @@ from unittest.mock import MagicMock
 from chicane.claude import ClaudeEvent
 from chicane.handlers import (
     _format_completion_summary,
+    _format_unified_diff,
     _markdown_to_mrkdwn,
+    _snippet_metadata_from_tool,
     _split_markdown,
+    _SnippetMeta,
     MARKDOWN_BLOCK_LIMIT,
 )
 from chicane.sessions import SessionInfo
@@ -547,3 +550,161 @@ class TestSplitMarkdown:
         for chunk in result:
             assert len(chunk) <= 500
         assert "&lt;" not in result
+
+
+class TestSnippetMetadataFromTool:
+    """Test _snippet_metadata_from_tool derives correct filetype, filename, and label."""
+
+    # --- Read tool ---
+
+    def test_read_python_file(self):
+        meta = _snippet_metadata_from_tool("Read", {"file_path": "/src/app.py"}, "")
+        assert meta.filetype == "python"
+        assert meta.filename == "app.py"
+        assert "`app.py`" in meta.label
+
+    def test_read_typescript_file(self):
+        meta = _snippet_metadata_from_tool("Read", {"file_path": "/src/index.tsx"}, "")
+        assert meta.filetype == "javascript"
+        assert meta.filename == "index.tsx"
+
+    def test_read_yaml_file(self):
+        meta = _snippet_metadata_from_tool("Read", {"file_path": "/config.yml"}, "")
+        assert meta.filetype == "yaml"
+        assert meta.filename == "config.yml"
+
+    def test_read_unknown_extension(self):
+        meta = _snippet_metadata_from_tool("Read", {"file_path": "/data.xyz"}, "")
+        assert meta.filetype == "text"
+        assert meta.filename == "data.xyz"
+
+    def test_read_no_path(self):
+        meta = _snippet_metadata_from_tool("Read", {}, "")
+        assert meta.filetype == "text"
+        assert "contents" in meta.label.lower()
+
+    # --- Bash tool ---
+
+    def test_bash_git_diff(self):
+        meta = _snippet_metadata_from_tool("Bash", {"command": "git diff HEAD"}, "")
+        assert meta.filetype == "diff"
+        assert meta.filename == "diff.diff"
+
+    def test_bash_git_show(self):
+        meta = _snippet_metadata_from_tool("Bash", {"command": "git show abc123"}, "")
+        assert meta.filetype == "diff"
+
+    def test_bash_pytest(self):
+        meta = _snippet_metadata_from_tool("Bash", {"command": "pytest tests/"}, "")
+        assert meta.filetype == "text"
+        assert "test" in meta.filename.lower()
+
+    def test_bash_python_command(self):
+        meta = _snippet_metadata_from_tool("Bash", {"command": "python3 script.py"}, "")
+        assert meta.filetype == "python"
+
+    def test_bash_with_description(self):
+        meta = _snippet_metadata_from_tool(
+            "Bash",
+            {"command": "npm run build", "description": "Build the project"},
+            "",
+        )
+        assert "Build the project" in meta.label
+
+    def test_bash_long_command_truncated(self):
+        long_cmd = "x" * 100
+        meta = _snippet_metadata_from_tool("Bash", {"command": long_cmd}, "")
+        assert len(meta.label) < 200  # label should be reasonable length
+
+    def test_bash_fallback_to_content_detection(self):
+        meta = _snippet_metadata_from_tool("Bash", {"command": "some-tool"}, '{"key": "value"}')
+        assert meta.filetype == "javascript"  # JSON detected from content
+
+    # --- Edit tool ---
+
+    def test_edit_produces_diff(self):
+        meta = _snippet_metadata_from_tool(
+            "Edit",
+            {"file_path": "/src/config.py"},
+            "",
+        )
+        assert meta.filetype == "diff"
+        assert meta.filename == "config.py.diff"
+        assert "`config.py`" in meta.label
+
+    def test_edit_no_path(self):
+        meta = _snippet_metadata_from_tool("Edit", {}, "")
+        assert meta.filetype == "diff"
+
+    # --- Write tool ---
+
+    def test_write_python(self):
+        meta = _snippet_metadata_from_tool("Write", {"file_path": "/new/module.py"}, "")
+        assert meta.filetype == "python"
+        assert meta.filename == "module.py"
+
+    def test_write_json(self):
+        meta = _snippet_metadata_from_tool("Write", {"file_path": "/config.json"}, "")
+        assert meta.filetype == "javascript"
+        assert meta.filename == "config.json"
+
+    # --- Grep/Glob ---
+
+    def test_grep_with_pattern(self):
+        meta = _snippet_metadata_from_tool("Grep", {"pattern": "import.*os"}, "")
+        assert meta.filetype == "text"
+        assert "`import.*os`" in meta.label
+
+    def test_glob_with_pattern(self):
+        meta = _snippet_metadata_from_tool("Glob", {"pattern": "**/*.py"}, "")
+        assert meta.filetype == "text"
+
+    # --- WebFetch ---
+
+    def test_webfetch_with_url(self):
+        meta = _snippet_metadata_from_tool("WebFetch", {"url": "https://example.com"}, "")
+        assert meta.filetype == "markdown"
+        assert "example.com" in meta.label
+
+    # --- Unknown tool ---
+
+    def test_unknown_tool_fallback(self):
+        meta = _snippet_metadata_from_tool("CustomTool", {}, "plain text")
+        assert meta.filetype == "text"
+        assert "CustomTool" in meta.label
+
+    def test_mcp_tool_name_cleaned(self):
+        meta = _snippet_metadata_from_tool("mcp__server__find_code", {}, "")
+        assert "find_code" in meta.label
+        assert "mcp__" not in meta.label
+
+
+class TestFormatUnifiedDiff:
+    """Test _format_unified_diff produces full unified diff for snippet upload."""
+
+    def test_simple_diff(self):
+        result = _format_unified_diff("def foo():", "def bar():")
+        assert "---" in result
+        assert "+++" in result
+        assert "@@" in result
+        assert "-def foo():" in result
+        assert "+def bar():" in result
+
+    def test_multiline_diff(self):
+        result = _format_unified_diff("a\nb\nc", "a\nX\nc")
+        assert "-b" in result
+        assert "+X" in result
+
+    def test_identical_returns_empty(self):
+        assert _format_unified_diff("same", "same") == ""
+
+    def test_empty_strings_returns_empty(self):
+        assert _format_unified_diff("", "") == ""
+
+    def test_all_lines_end_with_newline(self):
+        result = _format_unified_diff("old", "new")
+        for line in result.split("\n"):
+            if line:  # skip empty trailing line
+                pass  # just checking it doesn't crash
+        # Every line from the diff should end with newline
+        assert result.endswith("\n")

@@ -535,32 +535,65 @@ async def _process_message(
         git_committed = False  # track whether a git commit happened (since last edit)
         files_changed = False  # track uncommitted file changes
         tool_id_to_name: dict[str, str] = {}  # tool_use_id → tool name
+        tool_id_to_input: dict[str, dict] = {}  # tool_use_id → tool input
         stale_context_prompt: str | None = None  # set during init if session was stale
         uploaded_images: set[str] = set()  # dedup image uploads
         pending_image_paths: list[str] = []  # image paths from Write tool_use
 
         # Tool activity batching — accumulate consecutive activities and
         # post as a single message to reduce Slack API calls.
-        pending_activities: list[str] = []
+        pending_activities: list[ToolActivity] = []
         first_activity_posted = False  # reset per tool sequence
 
         async def _flush_activities() -> None:
-            """Post accumulated tool activities as a single combined message."""
+            """Post accumulated tool activities as a single combined message.
+
+            Activities with snippets (e.g. edit diffs) are uploaded separately
+            via ``_send_snippet`` so Slack renders them with syntax highlighting.
+            """
             nonlocal pending_activities
             if not pending_activities:
                 return
-            combined = "\n".join(pending_activities)
+            batch = pending_activities
             pending_activities = []
-            for act_chunk in _split_message(combined):
-                act_result = await queue.post_message(channel, thread_ts, act_chunk)
-                sessions.register_bot_message(act_result.ts, thread_ts)
+
+            # Separate plain text activities from snippet activities
+            text_parts: list[str] = []
+            for act in batch:
+                if act.snippet:
+                    # Flush any accumulated text first
+                    if text_parts:
+                        combined = "\n".join(text_parts)
+                        for act_chunk in _split_message(combined):
+                            act_result = await queue.post_message(channel, thread_ts, act_chunk)
+                            sessions.register_bot_message(act_result.ts, thread_ts)
+                        text_parts = []
+                    # Upload the snippet
+                    await _send_snippet(
+                        client, channel, thread_ts,
+                        act.snippet,
+                        initial_comment=act.snippet_comment or act.text,
+                        snippet_type="diff",
+                        filename=act.snippet_filename,
+                        queue=queue,
+                    )
+                else:
+                    text_parts.append(act.text)
+
+            # Flush remaining text
+            if text_parts:
+                combined = "\n".join(text_parts)
+                for act_chunk in _split_message(combined):
+                    act_result = await queue.post_message(channel, thread_ts, act_chunk)
+                    sessions.register_bot_message(act_result.ts, thread_ts)
 
         try:
             async for event_data in session.stream(prompt):
                 event_count += 1
                 if event_data.type == "assistant":
-                    # Track tool_use_id → tool name so we can filter results later
+                    # Track tool_use_id → tool name/input so we can filter results later
                     tool_id_to_name.update(event_data.tool_use_ids)
+                    tool_id_to_input.update(event_data.tool_use_inputs)
 
                     # Track tool usage for empty-response detection
                     if event_data.tool_use_ids:
@@ -578,7 +611,18 @@ async def _process_message(
 
                     # Prefix subagent activities
                     if event_data.parent_tool_use_id:
-                        activities = [f":arrow_right_hook: {a}" for a in activities]
+                        activities = [
+                            ToolActivity(
+                                text=f":arrow_right_hook: {a.text}",
+                                snippet=a.snippet,
+                                snippet_filename=a.snippet_filename,
+                                snippet_comment=(
+                                    f":arrow_right_hook: {a.snippet_comment}"
+                                    if a.snippet_comment else ""
+                                ),
+                            )
+                            for a in activities
+                        ]
 
                     show_activities = _should_show("tool_activity", config.verbosity)
 
@@ -592,12 +636,18 @@ async def _process_message(
 
                     # Post tool activity (first one immediately, rest batched)
                     if show_activities and activities:
+                        first = activities[0]
                         if not first_activity_posted:
                             # Post first activity immediately for instant feedback
-                            r = await queue.post_message(
-                                channel, thread_ts, activities[0],
-                            )
-                            sessions.register_bot_message(r.ts, thread_ts)
+                            if first.snippet:
+                                # Snippet activities go through _flush
+                                pending_activities.append(first)
+                                await _flush_activities()
+                            else:
+                                r = await queue.post_message(
+                                    channel, thread_ts, first.text,
+                                )
+                                sessions.register_bot_message(r.ts, thread_ts)
                             first_activity_posted = True
                             pending_activities.extend(activities[1:])
                         else:
@@ -667,7 +717,15 @@ async def _process_message(
                             truncated = (error_msg[:200] + "...") if len(error_msg) > 200 else error_msg
                             await queue.post_message(
                                 channel, thread_ts,
-                                f":warning: Tool error: {truncated}",
+                                f":warning: `{tool_name or 'Tool'}` error: {truncated}",
+                                blocks=[{
+                                    "type": "section",
+                                    "text": {
+                                        "type": "mrkdwn",
+                                        "text": f":warning: `{tool_name or 'Tool'}` error: {truncated}",
+                                    },
+                                }],
+                                attachments=[{"color": "danger"}],
                             )
 
                     # Show tool outputs in verbose mode (skip noisy tools)
@@ -676,18 +734,20 @@ async def _process_message(
                             tool_name = tool_id_to_name.get(tool_use_id, "")
                             if tool_name in _QUIET_TOOLS:
                                 continue
+                            tool_input = tool_id_to_input.get(tool_use_id, {})
+                            meta = _snippet_metadata_from_tool(tool_name, tool_input, result_text)
                             # Upload long tool output as a snippet (>500 chars)
                             if len(result_text) > 500:
-                                stype = _guess_snippet_type(result_text)
                                 await _send_snippet(
                                     client, channel, thread_ts,
                                     result_text,
-                                    initial_comment=":clipboard: Tool output (uploaded as snippet):",
-                                    snippet_type=stype,
+                                    initial_comment=meta.label,
+                                    snippet_type=meta.filetype,
+                                    filename=meta.filename,
                                     queue=queue,
                                 )
                             else:
-                                wrapped = f":clipboard: Tool output:\n```\n{result_text}\n```"
+                                wrapped = f"{meta.label}\n```\n{result_text}\n```"
                                 await queue.post_message(
                                     channel, thread_ts, wrapped,
                                 )
@@ -956,6 +1016,7 @@ async def _process_message(
                     git_committed = False
                     files_changed = False
                     tool_id_to_name = {}
+                    tool_id_to_input = {}
                     uploaded_images = set()
                     pending_image_paths = []
                     pending_activities = []
@@ -965,6 +1026,7 @@ async def _process_message(
                         event_count += 1
                         if event_data.type == "assistant":
                             tool_id_to_name.update(event_data.tool_use_ids)
+                            tool_id_to_input.update(event_data.tool_use_inputs)
                             if event_data.tool_use_ids:
                                 had_tool_use = True
                             if config.post_images:
@@ -977,7 +1039,18 @@ async def _process_message(
                             # Post tool activities during retry
                             activities = _format_tool_activity(event_data)
                             if event_data.parent_tool_use_id:
-                                activities = [f":arrow_right_hook: {a}" for a in activities]
+                                activities = [
+                                    ToolActivity(
+                                        text=f":arrow_right_hook: {a.text}",
+                                        snippet=a.snippet,
+                                        snippet_filename=a.snippet_filename,
+                                        snippet_comment=(
+                                            f":arrow_right_hook: {a.snippet_comment}"
+                                            if a.snippet_comment else ""
+                                        ),
+                                    )
+                                    for a in activities
+                                ]
                             if _should_show("tool_activity", config.verbosity) and activities:
                                 pending_activities.extend(activities)
                                 if len(pending_activities) >= _MAX_ACTIVITY_BATCH:
@@ -999,7 +1072,15 @@ async def _process_message(
                                     truncated = (error_msg[:200] + "...") if len(error_msg) > 200 else error_msg
                                     await queue.post_message(
                                         channel, thread_ts,
-                                        f":warning: Tool error: {truncated}",
+                                        f":warning: `{tool_name or 'Tool'}` error: {truncated}",
+                                        blocks=[{
+                                            "type": "section",
+                                            "text": {
+                                                "type": "mrkdwn",
+                                                "text": f":warning: `{tool_name or 'Tool'}` error: {truncated}",
+                                            },
+                                        }],
+                                        attachments=[{"color": "danger"}],
                                     )
                             # Tool outputs in verbose mode
                             if _should_show("tool_result", config.verbosity):
@@ -1007,17 +1088,19 @@ async def _process_message(
                                     tool_name = tool_id_to_name.get(tool_use_id, "")
                                     if tool_name in _QUIET_TOOLS:
                                         continue
+                                    tool_input = tool_id_to_input.get(tool_use_id, {})
+                                    meta = _snippet_metadata_from_tool(tool_name, tool_input, result_text_out)
                                     if len(result_text_out) > 500:
-                                        stype = _guess_snippet_type(result_text_out)
                                         await _send_snippet(
                                             client, channel, thread_ts,
                                             result_text_out,
-                                            initial_comment=":clipboard: Tool output (uploaded as snippet):",
-                                            snippet_type=stype,
+                                            initial_comment=meta.label,
+                                            snippet_type=meta.filetype,
+                                            filename=meta.filename,
                                             queue=queue,
                                         )
                                     else:
-                                        wrapped = f":clipboard: Tool output:\n```\n{result_text_out}\n```"
+                                        wrapped = f"{meta.label}\n```\n{result_text_out}\n```"
                                         await queue.post_message(
                                             channel, thread_ts, wrapped,
                                         )
@@ -1071,8 +1154,10 @@ async def _process_message(
 
                 summary = _format_completion_summary(result_event, session_info)
                 if summary:
+                    color = "danger" if result_event.is_error else "good"
                     await queue.post_message(
                         channel, thread_ts, summary,
+                        attachments=[{"color": color}],
                     )
 
 
@@ -1668,17 +1753,81 @@ def _format_edit_diff(
     return result.rstrip("\n")
 
 
-def _format_tool_activity(event: ClaudeEvent) -> list[str]:
-    """Extract tool_use blocks from an assistant event and return display strings.
+def _format_unified_diff(
+    old_string: str,
+    new_string: str,
+    file_path: str = "edit",
+) -> str:
+    """Build a full unified diff suitable for syntax-highlighted snippet upload.
 
-    Each item is a plain string to be posted as Slack ``text``.
-    Edit tool activities include an inline diff code block showing
-    what changed.
+    Unlike ``_format_edit_diff``, this preserves the ``---``/``+++`` headers
+    and ``@@`` hunk markers so Slack can render it with proper diff coloring.
+    """
+    import difflib
+
+    old_lines = old_string.splitlines(keepends=True)
+    new_lines = new_string.splitlines(keepends=True)
+
+    diff = list(difflib.unified_diff(
+        old_lines,
+        new_lines,
+        fromfile=f"a/{file_path}",
+        tofile=f"b/{file_path}",
+        n=3,
+    ))
+
+    if not diff:
+        return ""
+
+    # Ensure all lines end with newline
+    result_lines: list[str] = []
+    for line in diff:
+        if not line.endswith("\n"):
+            line += "\n"
+        result_lines.append(line)
+
+    return "".join(result_lines)
+
+
+@dataclass(frozen=True)
+class ToolActivity:
+    """A tool activity notification, optionally with a snippet to upload."""
+
+    text: str                          # Message text to post
+    snippet: str | None = None         # If set, upload as a diff snippet
+    snippet_filename: str = "edit.diff"
+    snippet_comment: str = ""          # initial_comment for the snippet
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str):
+            return self.text == other
+        if isinstance(other, ToolActivity):
+            return (
+                self.text == other.text
+                and self.snippet == other.snippet
+                and self.snippet_filename == other.snippet_filename
+                and self.snippet_comment == other.snippet_comment
+            )
+        return NotImplemented
+
+    def __contains__(self, item: str) -> bool:
+        return item in self.text
+
+    def __hash__(self) -> int:
+        return hash(self.text)
+
+
+def _format_tool_activity(event: ClaudeEvent) -> list[ToolActivity]:
+    """Extract tool_use blocks from an assistant event and return activity items.
+
+    Each item is a :class:`ToolActivity` with a text message and an optional
+    snippet to upload (used for edit diffs so Slack renders them with
+    syntax-highlighted red/green coloring).
     """
     message = event.raw.get("message", {})
     content = message.get("content", [])
 
-    activities = []
+    activities: list[ToolActivity] = []
     for block in content:
         if block.get("type") != "tool_use":
             continue
@@ -1704,7 +1853,7 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
                 suffix = f" (from line {offset})"
             elif limit:
                 suffix = f" (first {limit} lines)"
-            activities.append(f":mag: Reading `{basename}`{suffix}")
+            activities.append(ToolActivity(f":mag: Reading `{basename}`{suffix}"))
         elif tool_name == "Bash":
             cmd = tool_input.get("command", "")
             description = tool_input.get("description", "")
@@ -1713,12 +1862,12 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
                 label = f":computer: {description}"
                 if bg:
                     label += " (background)"
-                activities.append(label)
+                activities.append(ToolActivity(label))
             else:
                 label = f":computer: Running `{cmd}`"
                 if bg:
                     label += " (background)"
-                activities.append(label)
+                activities.append(ToolActivity(label))
         elif tool_name == "Edit":
             file_path = tool_input.get("file_path", "")
             basename = Path(file_path).name if file_path else "file"
@@ -1728,24 +1877,29 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
             ra_suffix = " (all occurrences)" if replace_all else ""
             header = f":pencil2: Editing `{basename}`{ra_suffix}"
             if old_string or new_string:
-                diff = _format_edit_diff(old_string, new_string, basename)
-                if diff:
-                    activities.append(f"{header}\n```\n{diff}\n```")
+                unified = _format_unified_diff(old_string, new_string, basename)
+                if unified:
+                    activities.append(ToolActivity(
+                        text=header,
+                        snippet=unified,
+                        snippet_filename=f"{basename}.diff",
+                        snippet_comment=header,
+                    ))
                 else:
-                    activities.append(header)
+                    activities.append(ToolActivity(header))
             else:
-                activities.append(header)
+                activities.append(ToolActivity(header))
         elif tool_name == "Write":
             file_path = tool_input.get("file_path", "")
             basename = Path(file_path).name if file_path else "file"
             content = tool_input.get("content", "")
             if content:
                 line_count = content.count("\n") + 1
-                activities.append(
+                activities.append(ToolActivity(
                     f":pencil2: Writing `{basename}` ({line_count} line{'s' if line_count != 1 else ''})"
-                )
+                ))
             else:
-                activities.append(f":pencil2: Writing `{basename}`")
+                activities.append(ToolActivity(f":pencil2: Writing `{basename}`"))
         elif tool_name == "Grep":
             pattern = tool_input.get("pattern", "")
             path = tool_input.get("path", "")
@@ -1760,28 +1914,28 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
                 dir_name = Path(path).name or path
                 scope_parts.append(f"in `{dir_name}/`")
             scope = " " + " ".join(scope_parts) if scope_parts else ""
-            activities.append(f":mag: Searching for `{pattern}`{scope}")
+            activities.append(ToolActivity(f":mag: Searching for `{pattern}`{scope}"))
         elif tool_name == "Glob":
             pattern = tool_input.get("pattern", "")
             path = tool_input.get("path", "")
             if path:
                 dir_name = Path(path).name or path
-                activities.append(f":mag: Finding files `{pattern}` in `{dir_name}/`")
+                activities.append(ToolActivity(f":mag: Finding files `{pattern}` in `{dir_name}/`"))
             else:
-                activities.append(f":mag: Finding files `{pattern}`")
+                activities.append(ToolActivity(f":mag: Finding files `{pattern}`"))
         elif tool_name == "WebFetch":
             url = tool_input.get("url", "")
             prompt = tool_input.get("prompt", "")
             if url and prompt:
                 # Truncate prompt to keep it readable
                 short_prompt = (prompt[:60] + "…") if len(prompt) > 60 else prompt
-                activities.append(
+                activities.append(ToolActivity(
                     f":globe_with_meridians: Fetching `{url}`\n  _{short_prompt}_"
-                )
+                ))
             elif url:
-                activities.append(f":globe_with_meridians: Fetching `{url}`")
+                activities.append(ToolActivity(f":globe_with_meridians: Fetching `{url}`"))
             else:
-                activities.append(":globe_with_meridians: Fetching URL")
+                activities.append(ToolActivity(":globe_with_meridians: Fetching URL"))
         elif tool_name == "WebSearch":
             query = tool_input.get("query", "")
             allowed = tool_input.get("allowed_domains", [])
@@ -1792,11 +1946,11 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
                     suffix = f" ({', '.join(allowed)})"
                 elif blocked:
                     suffix = f" (excluding {', '.join(blocked)})"
-                activities.append(
+                activities.append(ToolActivity(
                     f":globe_with_meridians: Searching web for `{query}`{suffix}"
-                )
+                ))
             else:
-                activities.append(":globe_with_meridians: Searching web")
+                activities.append(ToolActivity(":globe_with_meridians: Searching web"))
         elif tool_name == "Task":
             subagent_type = tool_input.get("subagent_type", "")
             description = tool_input.get("description", "")
@@ -1806,18 +1960,18 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
                 label = f":robot_face: Spawning {': '.join(parts)}"
                 if model:
                     label += f" ({model})"
-                activities.append(label)
+                activities.append(ToolActivity(label))
             else:
-                activities.append(":robot_face: Spawning subagent")
+                activities.append(ToolActivity(":robot_face: Spawning subagent"))
         elif tool_name == "Skill":
             skill = tool_input.get("skill", "")
             args = tool_input.get("args", "")
             if skill and args:
-                activities.append(f":zap: Running skill `{skill}` — `{args}`")
+                activities.append(ToolActivity(f":zap: Running skill `{skill}` — `{args}`"))
             elif skill:
-                activities.append(f":zap: Running skill `{skill}`")
+                activities.append(ToolActivity(f":zap: Running skill `{skill}`"))
             else:
-                activities.append(":zap: Running skill")
+                activities.append(ToolActivity(":zap: Running skill"))
         elif tool_name == "NotebookEdit":
             notebook_path = tool_input.get("notebook_path", "")
             basename = Path(notebook_path).name if notebook_path else "notebook"
@@ -1837,31 +1991,31 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
                 detail_parts.append(f"cell #{cell_number}")
             detail = " ".join(detail_parts)
             if detail:
-                activities.append(f":notebook: {verb} notebook `{basename}` — {detail}")
+                activities.append(ToolActivity(f":notebook: {verb} notebook `{basename}` — {detail}"))
             else:
-                activities.append(f":notebook: {verb} notebook `{basename}`")
+                activities.append(ToolActivity(f":notebook: {verb} notebook `{basename}`"))
         elif tool_name == "ToolSearch":
             query = tool_input.get("query", "")
             if query:
-                activities.append(f":toolbox: Searching for tool `{query}`")
+                activities.append(ToolActivity(f":toolbox: Searching for tool `{query}`"))
             else:
-                activities.append(":toolbox: Searching for tools")
+                activities.append(ToolActivity(":toolbox: Searching for tools"))
         elif tool_name == "TaskOutput":
-            activities.append(":hourglass_flowing_sand: Waiting for background task")
+            activities.append(ToolActivity(":hourglass_flowing_sand: Waiting for background task"))
         elif tool_name == "TaskStop":
-            activities.append(":octagonal_sign: Stopping background task")
+            activities.append(ToolActivity(":octagonal_sign: Stopping background task"))
         elif tool_name == "ListMcpResourcesTool":
             server = tool_input.get("server", "")
             if server:
-                activities.append(f":card_index: Listing MCP resources ({server})")
+                activities.append(ToolActivity(f":card_index: Listing MCP resources ({server})"))
             else:
-                activities.append(":card_index: Listing MCP resources")
+                activities.append(ToolActivity(":card_index: Listing MCP resources"))
         elif tool_name == "ReadMcpResourceTool":
             uri = tool_input.get("uri", "")
             if uri:
-                activities.append(f":card_index: Reading MCP resource `{uri}`")
+                activities.append(ToolActivity(f":card_index: Reading MCP resource `{uri}`"))
             else:
-                activities.append(":card_index: Reading MCP resource")
+                activities.append(ToolActivity(":card_index: Reading MCP resource"))
         elif tool_name == "TodoWrite":
             todos = tool_input.get("todos", [])
             if todos:
@@ -1876,9 +2030,9 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
                     emoji = _STATUS_EMOJI.get(status, ":white_circle:")
                     label = todo.get("content", "?")
                     lines.append(f"{emoji} {label}")
-                activities.append("\n".join(lines))
+                activities.append(ToolActivity("\n".join(lines)))
             else:
-                activities.append(":clipboard: Updating tasks")
+                activities.append(ToolActivity(":clipboard: Updating tasks"))
         else:
             # Clean up tool names for display: strip MCP prefixes
             # (mcp__server__tool → Tool), split snake/camel case.
@@ -1897,9 +2051,9 @@ def _format_tool_activity(event: ClaudeEvent) -> list[str]:
             arg_summary = _summarize_tool_input(tool_input)
             label = f"{server_prefix}: {display}" if server_prefix else display
             if arg_summary:
-                activities.append(f":wrench: {label}\n{arg_summary}")
+                activities.append(ToolActivity(f":wrench: {label}\n{arg_summary}"))
             else:
-                activities.append(f":wrench: {label}")
+                activities.append(ToolActivity(f":wrench: {label}"))
 
     return activities
 
@@ -2277,7 +2431,138 @@ _SNIPPET_EXT: dict[str, str] = {
     "xml": ".xml",
     "python": ".py",
     "text": ".txt",
+    "go": ".go",
+    "rust": ".rs",
+    "ruby": ".rb",
+    "java": ".java",
+    "kotlin": ".kt",
+    "c": ".c",
+    "cpp": ".cpp",
+    "csharp": ".cs",
+    "swift": ".swift",
+    "bash": ".sh",
+    "sql": ".sql",
+    "html": ".html",
+    "css": ".css",
+    "sass": ".scss",
+    "yaml": ".yaml",
+    "lua": ".lua",
+    "r": ".r",
+    "php": ".php",
+    "perl": ".pl",
 }
+
+# Map file extension → Slack filetype for syntax-highlighted snippet uploads.
+_EXT_TO_FILETYPE: dict[str, str] = {
+    ".py": "python", ".pyi": "python", ".pyx": "python",
+    ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+    ".ts": "javascript", ".tsx": "javascript", ".jsx": "javascript",
+    ".go": "go", ".rs": "rust", ".rb": "ruby",
+    ".java": "java", ".kt": "kotlin", ".scala": "scala",
+    ".c": "c", ".cpp": "cpp", ".cc": "cpp",
+    ".h": "c", ".hpp": "cpp", ".hxx": "cpp",
+    ".cs": "csharp", ".swift": "swift",
+    ".sql": "sql", ".sh": "bash", ".bash": "bash", ".zsh": "bash",
+    ".html": "html", ".htm": "html",
+    ".css": "css", ".scss": "sass", ".less": "css",
+    ".xml": "xml", ".xsl": "xml", ".xsd": "xml",
+    ".yaml": "yaml", ".yml": "yaml", ".toml": "yaml",
+    ".json": "javascript", ".jsonc": "javascript",
+    ".md": "markdown", ".mdx": "markdown",
+    ".diff": "diff", ".patch": "diff",
+    ".dockerfile": "dockerfile",
+    ".lua": "lua", ".r": "r",
+    ".php": "php", ".pl": "perl",
+    ".env": "text", ".ini": "text", ".cfg": "text",
+    ".txt": "text", ".log": "text", ".csv": "text",
+}
+
+
+@dataclass(frozen=True)
+class _SnippetMeta:
+    """Metadata for a tool output snippet upload."""
+
+    filetype: str       # Slack filetype for syntax highlighting
+    filename: str       # Meaningful filename (e.g. "config.py")
+    label: str          # Descriptive label (e.g. ":clipboard: `config.py` contents")
+
+
+def _snippet_metadata_from_tool(
+    tool_name: str,
+    tool_input: dict,
+    result_text: str,
+) -> _SnippetMeta:
+    """Derive snippet filetype, filename, and label from the tool that produced the output.
+
+    Uses tool name + input (file_path, command, etc.) for smart detection.
+    Falls back to content-based ``_guess_snippet_type()`` when context isn't enough.
+    """
+    if tool_name == "Read":
+        file_path = tool_input.get("file_path", "")
+        if file_path:
+            p = Path(file_path)
+            ext = p.suffix.lower()
+            filetype = _EXT_TO_FILETYPE.get(ext, "text")
+            return _SnippetMeta(
+                filetype=filetype,
+                filename=p.name,
+                label=f":clipboard: `{p.name}` contents",
+            )
+        return _SnippetMeta("text", "output.txt", ":clipboard: File contents")
+
+    if tool_name == "Bash":
+        cmd = tool_input.get("command", "")
+        description = tool_input.get("description", "")
+        # Use description if available, otherwise derive from command
+        if "git diff" in cmd or "git show" in cmd:
+            short = (description or cmd)[:60]
+            return _SnippetMeta("diff", "diff.diff", f":clipboard: `{short}` output")
+        if "pytest" in cmd or "npm test" in cmd or "jest" in cmd:
+            short = (description or "test run")[:60]
+            return _SnippetMeta("text", "test-output.txt", f":clipboard: {short}")
+        if cmd.strip().startswith("python"):
+            short = (description or cmd)[:60]
+            return _SnippetMeta("python", "output.py", f":clipboard: `{short}` output")
+        # Derive label from description or truncated command
+        short = description or (cmd[:50] + "…" if len(cmd) > 50 else cmd)
+        filetype = _guess_snippet_type(result_text)
+        ext = _SNIPPET_EXT.get(filetype, ".txt")
+        return _SnippetMeta(filetype, f"output{ext}", f":clipboard: `{short}` output")
+
+    if tool_name == "Edit":
+        file_path = tool_input.get("file_path", "")
+        if file_path:
+            basename = Path(file_path).name
+            return _SnippetMeta("diff", f"{basename}.diff", f":clipboard: Changes to `{basename}`")
+        return _SnippetMeta("diff", "edit.diff", ":clipboard: Edit diff")
+
+    if tool_name == "Write":
+        file_path = tool_input.get("file_path", "")
+        if file_path:
+            p = Path(file_path)
+            ext = p.suffix.lower()
+            filetype = _EXT_TO_FILETYPE.get(ext, "text")
+            return _SnippetMeta(filetype, p.name, f":clipboard: Written `{p.name}`")
+        return _SnippetMeta("text", "output.txt", ":clipboard: Written file")
+
+    if tool_name in ("Grep", "Glob"):
+        pattern = tool_input.get("pattern", "")
+        short = f"results for `{pattern}`" if pattern else "search results"
+        return _SnippetMeta("text", "search-results.txt", f":clipboard: {short}")
+
+    if tool_name == "WebFetch":
+        url = tool_input.get("url", "")
+        short = url[:50] if url else "web content"
+        return _SnippetMeta("markdown", "web-content.md", f":clipboard: Content from `{short}`")
+
+    # Fallback: content-based detection
+    filetype = _guess_snippet_type(result_text)
+    display = tool_name
+    if display.startswith("mcp__"):
+        parts = display.split("__")
+        display = parts[-1] if len(parts) >= 3 else display
+    ext = _SNIPPET_EXT.get(filetype, ".txt")
+    return _SnippetMeta(filetype, f"output{ext}", f":clipboard: {display} output")
 
 
 async def _send_snippet(

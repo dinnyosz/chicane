@@ -385,7 +385,7 @@ class TestVerbosityFiltering:
             await _process_message(event, "do thing", client, config, sessions, queue)
 
         all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
-        assert not any(":clipboard: Tool output:" in t for t in all_texts)
+        assert not any(":clipboard:" in t and "output" in t.lower() for t in all_texts)
 
     @pytest.mark.asyncio
     async def test_verbose_shows_non_quiet_tool_results(self):
@@ -414,7 +414,7 @@ class TestVerbosityFiltering:
             await _process_message(event, "do thing", client, config, sessions, queue)
 
         all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
-        assert any(":clipboard: Tool output:" in t and "hello" in t for t in all_texts)
+        assert any(":clipboard:" in t and "hello" in t for t in all_texts)
 
     @pytest.mark.asyncio
     async def test_verbose_hides_read_tool_results(self):
@@ -503,7 +503,8 @@ class TestVerbosityFiltering:
             await _process_message(event, "say hi", client, config, sessions, queue)
 
         all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
-        assert any(":clipboard: Tool output:\n```\nhi\n```" in t for t in all_texts)
+        # Should contain a :clipboard: label with the tool output inline
+        assert any(":clipboard:" in t and "```\nhi\n```" in t for t in all_texts)
         client.files_getUploadURLExternal.assert_not_called()
 
     @pytest.mark.asyncio

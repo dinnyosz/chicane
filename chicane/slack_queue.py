@@ -65,6 +65,7 @@ class SlackMessageQueue:
         text: str,
         *,
         blocks: list[dict] | None = None,
+        attachments: list[dict] | None = None,
     ) -> PostResult:
         """Post a message, throttling to respect Slack's rate limit.
 
@@ -73,13 +74,19 @@ class SlackMessageQueue:
 
         If *blocks* is provided, the message is sent with Block Kit blocks
         and *text* serves as the notification/accessibility fallback.
+
+        If *attachments* is provided, they are included as legacy Slack
+        attachments (useful for colored sidebars via the ``color`` field).
         """
         if self._client is None:
             raise RuntimeError("SlackMessageQueue: client not bound — call ensure_client() first")
 
         async with self._lock:
             await self._throttle(channel)
-            result = await self._post_with_retry(channel, thread_ts, text, blocks=blocks)
+            result = await self._post_with_retry(
+                channel, thread_ts, text,
+                blocks=blocks, attachments=attachments,
+            )
             self._last_post_time[channel] = monotonic()
             return result
 
@@ -99,11 +106,14 @@ class SlackMessageQueue:
         text: str,
         *,
         blocks: list[dict] | None = None,
+        attachments: list[dict] | None = None,
     ) -> PostResult:
         """Post message, retrying once on HTTP 429."""
         kwargs: dict = dict(channel=channel, thread_ts=thread_ts, text=text)
         if blocks:
             kwargs["blocks"] = blocks
+        if attachments:
+            kwargs["attachments"] = attachments
         try:
             resp = await self._client.chat_postMessage(**kwargs)
             return PostResult(ts=resp["ts"], channel=channel, thread_ts=thread_ts)
