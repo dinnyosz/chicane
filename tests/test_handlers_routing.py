@@ -4,9 +4,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from chicane.config import Config
 from chicane.handlers import register_handlers, _process_message
 from chicane.sessions import SessionStore
-from tests.conftest import capture_app_handlers
+from tests.conftest import capture_app_handlers, mock_client
 
 
 class TestThreadMentionRouting:
@@ -357,6 +358,319 @@ class TestHandlerRoutingEdgeCases:
             }
             await mention_handler(event=event, client=AsyncMock())
             mock_process.assert_called_once()
+
+
+class TestDMRoutingEdgeCases:
+    """Test DM-specific routing: dedup and rate limiting."""
+
+    @pytest.fixture
+    def app(self):
+        mock_app = MagicMock()
+        self._handlers = capture_app_handlers(mock_app)
+        return mock_app
+
+    @pytest.mark.asyncio
+    async def test_dm_duplicate_message_ignored(self, app, config, sessions):
+        """Duplicate DM is deduplicated via _mark_processed."""
+        register_handlers(app, config, sessions)
+        message_handler = self._handlers["message"]
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            event = {
+                "ts": "4000.0",
+                "channel": "D_DM",
+                "channel_type": "im",
+                "user": "UHUMAN1",
+                "text": "hello in DM",
+            }
+            await message_handler(event=event, client=AsyncMock())
+            await message_handler(event=event, client=AsyncMock())
+            assert mock_process.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_dm_rate_limited_user_blocked(self, app, sessions):
+        """Rate-limited user in DM is blocked."""
+        config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            allowed_users=["UHUMAN1"],
+            rate_limit=1,
+        )
+        register_handlers(app, config, sessions)
+        message_handler = self._handlers["message"]
+
+        client = AsyncMock()
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            event1 = {
+                "ts": "4001.0",
+                "channel": "D_DM",
+                "channel_type": "im",
+                "user": "UHUMAN1",
+                "text": "first DM",
+            }
+            await message_handler(event=event1, client=client)
+
+            event2 = {
+                "ts": "4002.0",
+                "channel": "D_DM",
+                "channel_type": "im",
+                "user": "UHUMAN1",
+                "text": "second DM",
+            }
+            await message_handler(event=event2, client=client)
+            assert mock_process.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_dm_blocked_user_via_should_ignore(self, app, config_restricted, sessions):
+        """Blocked user in DM hits _should_ignore path."""
+        register_handlers(app, config_restricted, sessions)
+        message_handler = self._handlers["message"]
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            event = {
+                "ts": "4003.0",
+                "channel": "D_DM",
+                "channel_type": "im",
+                "user": "U_BLOCKED",
+                "text": "hello",
+            }
+            await message_handler(event=event, client=AsyncMock())
+            mock_process.assert_not_called()
+
+
+class TestChannelThreadRoutingEdgeCases:
+    """Test channel thread routing: dedup, ignore, rate-limit for thread follow-ups."""
+
+    @pytest.fixture
+    def app(self):
+        mock_app = MagicMock()
+        self._handlers = capture_app_handlers(mock_app)
+        return mock_app
+
+    @pytest.mark.asyncio
+    async def test_thread_followup_duplicate_ignored(self, app, config, sessions):
+        """Duplicate thread follow-up is deduplicated."""
+        register_handlers(app, config, sessions)
+        message_handler = self._handlers["message"]
+        sessions.get_or_create("1000.0", config)
+
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {"channel": {"name": "general"}}
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            event = {
+                "ts": "1001.0",
+                "thread_ts": "1000.0",
+                "channel": "C_CHAN",
+                "channel_type": "channel",
+                "user": "UHUMAN1",
+                "text": "follow up",
+            }
+            await message_handler(event=event, client=client)
+            await message_handler(event=event, client=client)
+            assert mock_process.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_thread_followup_blocked_user_ignored(self, app, config_restricted, sessions):
+        """Blocked user in thread follow-up hits _should_ignore."""
+        register_handlers(app, config_restricted, sessions)
+        message_handler = self._handlers["message"]
+        sessions.get_or_create("1000.0", config_restricted)
+
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            event = {
+                "ts": "1001.0",
+                "thread_ts": "1000.0",
+                "channel": "C_CHAN",
+                "channel_type": "channel",
+                "user": "U_BLOCKED",
+                "text": "hello",
+            }
+            await message_handler(event=event, client=client)
+            mock_process.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_thread_followup_rate_limited(self, app, sessions):
+        """Rate-limited user in thread follow-up is blocked."""
+        config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            allowed_users=["UHUMAN1"],
+            rate_limit=1,
+        )
+        register_handlers(app, config, sessions)
+        message_handler = self._handlers["message"]
+        sessions.get_or_create("1000.0", config)
+
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {"channel": {"name": "general"}}
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            event1 = {
+                "ts": "1001.0",
+                "thread_ts": "1000.0",
+                "channel": "C_CHAN",
+                "channel_type": "channel",
+                "user": "UHUMAN1",
+                "text": "first",
+            }
+            await message_handler(event=event1, client=client)
+
+            event2 = {
+                "ts": "1002.0",
+                "thread_ts": "1000.0",
+                "channel": "C_CHAN",
+                "channel_type": "channel",
+                "user": "UHUMAN1",
+                "text": "second",
+            }
+            await message_handler(event=event2, client=client)
+            assert mock_process.call_count == 1
+
+
+class TestBotMentionRoutingEdgeCases:
+    """Test bot-mention routing in channels (no thread, bot detected via auth_test)."""
+
+    @pytest.fixture
+    def app(self):
+        mock_app = MagicMock()
+        self._handlers = capture_app_handlers(mock_app)
+        return mock_app
+
+    @pytest.mark.asyncio
+    async def test_bot_mention_duplicate_ignored(self, app, config, sessions):
+        """Duplicate bot mention in channel is deduplicated."""
+        register_handlers(app, config, sessions)
+        message_handler = self._handlers["message"]
+
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {"channel": {"name": "general"}}
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            event = {
+                "ts": "5000.0",
+                "channel": "C_CHAN",
+                "channel_type": "channel",
+                "user": "UHUMAN1",
+                "text": "<@UBOT123> do something",
+            }
+            await message_handler(event=event, client=client)
+            await message_handler(event=event, client=client)
+            assert mock_process.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_bot_mention_blocked_user_ignored(self, app, config_restricted, sessions):
+        """Blocked user's bot mention is ignored."""
+        register_handlers(app, config_restricted, sessions)
+        message_handler = self._handlers["message"]
+
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            event = {
+                "ts": "5001.0",
+                "channel": "C_CHAN",
+                "channel_type": "channel",
+                "user": "U_BLOCKED",
+                "text": "<@UBOT123> help",
+            }
+            await message_handler(event=event, client=client)
+            mock_process.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_bot_mention_rate_limited(self, app, sessions):
+        """Rate-limited user's bot mention is blocked."""
+        config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            allowed_users=["UHUMAN1"],
+            rate_limit=1,
+        )
+        register_handlers(app, config, sessions)
+        message_handler = self._handlers["message"]
+
+        client = AsyncMock()
+        client.auth_test.return_value = {"user_id": "UBOT123"}
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+        client.conversations_info.return_value = {"channel": {"name": "general"}}
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            event1 = {
+                "ts": "5002.0",
+                "channel": "C_CHAN",
+                "channel_type": "channel",
+                "user": "UHUMAN1",
+                "text": "<@UBOT123> first",
+            }
+            await message_handler(event=event1, client=client)
+
+            event2 = {
+                "ts": "5003.0",
+                "channel": "C_CHAN",
+                "channel_type": "channel",
+                "user": "UHUMAN1",
+                "text": "<@UBOT123> second",
+            }
+            await message_handler(event=event2, client=client)
+            assert mock_process.call_count == 1
+
+
+class TestReactionHandlerEdgeCases:
+    """Edge cases for the reaction_added handler."""
+
+    @pytest.fixture
+    def app(self):
+        mock_app = MagicMock()
+        self._handlers = capture_app_handlers(mock_app)
+        return mock_app
+
+    @pytest.mark.asyncio
+    async def test_reaction_on_non_message_item_ignored(self, app, config, sessions):
+        """Reaction on non-message item type is ignored."""
+        from chicane.handlers import register_handlers
+        register_handlers(app, config, sessions)
+        reaction_handler = self._handlers["reaction_added"]
+
+        client = AsyncMock()
+
+        event = {
+            "reaction": "octagonal_sign",
+            "item": {"type": "file", "ts": "1000.0", "channel": "C_CHAN"},
+            "user": "UHUMAN1",
+        }
+        await reaction_handler(event, client)
+        client.chat_postMessage.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reaction_on_session_returns_none(self, app, config, sessions):
+        """Reaction where sessions.get() returns None is ignored."""
+        from chicane.handlers import register_handlers
+        register_handlers(app, config, sessions)
+        reaction_handler = self._handlers["reaction_added"]
+
+        # Register a message but don't create a session for it
+        # (thread_for_message returns None, sessions.has returns False)
+        client = AsyncMock()
+
+        event = {
+            "reaction": "octagonal_sign",
+            "item": {"type": "message", "ts": "9999.0", "channel": "C_CHAN"},
+            "user": "UHUMAN1",
+        }
+        await reaction_handler(event, client)
+        client.chat_postMessage.assert_not_called()
 
 
 class TestFileShareSubtype:

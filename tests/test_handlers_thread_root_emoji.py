@@ -436,6 +436,40 @@ class TestThreadRootFirstMessage:
         assert len(removes) == 0
 
 
+class TestRemoveThreadReactionExceptionPath:
+    """_remove_thread_reaction catches exceptions and still discards the name."""
+
+    @pytest.mark.asyncio
+    async def test_exception_still_discards_reaction_name(self):
+        """When reactions_remove raises, the name is still removed from the set."""
+        from chicane.handlers import _remove_thread_reaction
+
+        client = mock_client()
+        client.reactions_remove.side_effect = Exception("not_found")
+
+        info = mock_session_info(MagicMock())
+        info.thread_reactions.add("eyes")
+
+        await _remove_thread_reaction(client, "C_CHAN", info, "eyes")
+
+        # Name should be discarded even though the API call failed
+        assert "eyes" not in info.thread_reactions
+
+    @pytest.mark.asyncio
+    async def test_exception_does_not_propagate(self):
+        """Exception from reactions_remove doesn't propagate."""
+        from chicane.handlers import _remove_thread_reaction
+
+        client = mock_client()
+        client.reactions_remove.side_effect = Exception("rate_limited")
+
+        info = mock_session_info(MagicMock())
+        info.thread_reactions.add("white_check_mark")
+
+        # Should not raise
+        await _remove_thread_reaction(client, "C_CHAN", info, "white_check_mark")
+
+
 class TestThreadRootReactionFailuresIgnored:
     """Thread-root reaction failures don't break the flow."""
 

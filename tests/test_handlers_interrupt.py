@@ -399,3 +399,75 @@ class TestInterruptedStreamDisplay:
             if ":bulb:" in c.kwargs.get("text", "")
         ]
         assert len(forward_posts) == 1
+
+
+class TestInterruptExceptionHandling:
+    """Test that exception handling during interrupt reaction swaps doesn't crash."""
+
+    @pytest.mark.asyncio
+    async def test_new_message_interrupt_reaction_remove_failure(self, config, sessions, queue):
+        """New-message interrupt: reactions_remove failure is swallowed."""
+        async def some_stream(prompt):
+            yield make_event("assistant", text="Partial")
+            yield make_event("result", text="Partial")
+
+        mock_session = MagicMock()
+        mock_session.session_id = "s1"
+        mock_session.is_streaming = False
+        mock_session.was_interrupted = True
+        mock_session.interrupt_source = "new_message"
+        mock_session.stream = some_stream
+        mock_session.interrupt = AsyncMock()
+
+        info = MagicMock()
+        info.session = mock_session
+        info.lock = asyncio.Lock()
+
+        client = mock_client()
+        client.reactions_remove.side_effect = Exception("not_found")
+
+        with patch.object(sessions, "get_or_create", return_value=info):
+            event = {"ts": "7000.0", "channel": "C_CHAN", "user": "UHUMAN"}
+            # Should not raise
+            await _process_message(event, "continue", client, config, sessions, queue)
+
+        # Should still post the "thought added" message
+        bulb_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":bulb:" in c.kwargs.get("text", "")
+        ]
+        assert len(bulb_posts) == 1
+
+    @pytest.mark.asyncio
+    async def test_reaction_interrupt_reaction_swap_failure(self, config, sessions, queue):
+        """Reaction interrupt: reactions_remove/add failure is swallowed."""
+        async def quick_stream(prompt):
+            yield make_event("result", text="")
+
+        mock_session = MagicMock()
+        mock_session.session_id = "s1"
+        mock_session.is_streaming = False
+        mock_session.was_interrupted = True
+        mock_session.interrupt_source = "reaction"
+        mock_session.stream = quick_stream
+        mock_session.interrupt = AsyncMock()
+
+        info = MagicMock()
+        info.session = mock_session
+        info.lock = asyncio.Lock()
+
+        client = mock_client()
+        client.reactions_remove.side_effect = Exception("not_found")
+        client.reactions_add.side_effect = Exception("already_reacted")
+
+        with patch.object(sessions, "get_or_create", return_value=info):
+            event = {"ts": "7001.0", "channel": "C_CHAN", "user": "UHUMAN"}
+            # Should not raise
+            await _process_message(event, "work", client, config, sessions, queue)
+
+        # Should still post the stop indicator
+        stop_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":stop_sign: _Interrupted_" in c.kwargs.get("text", "")
+        ]
+        assert len(stop_posts) == 1

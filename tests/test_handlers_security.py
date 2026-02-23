@@ -113,6 +113,54 @@ class TestShouldIgnore:
         assert result is True
 
 
+class TestRateLimitReactionFailure:
+    """Test that rate-limit reaction failure doesn't break the flow."""
+
+    @pytest.fixture
+    def app(self):
+        mock_app = MagicMock()
+        self._handlers = capture_app_handlers(mock_app)
+        return mock_app
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_reaction_failure_swallowed(self, app, sessions):
+        """When reactions_add fails during rate limiting, it still blocks the user."""
+        config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            allowed_users=["U_HUMAN"],
+            rate_limit=1,
+        )
+        register_handlers(app, config, sessions)
+        mention_handler = self._handlers["app_mention"]
+
+        client = mock_client()
+        # Make reactions_add fail
+        client.reactions_add.side_effect = Exception("no_permission")
+
+        with patch("chicane.handlers._process_message", new_callable=AsyncMock) as mock_process:
+            # First message succeeds
+            event1 = {
+                "ts": "8000.0",
+                "channel": "C_CHAN",
+                "user": "U_HUMAN",
+                "text": "<@UBOT> first",
+            }
+            await mention_handler(event=event1, client=client)
+
+            # Second message is rate-limited — reaction fails but user is still blocked
+            event2 = {
+                "ts": "8001.0",
+                "channel": "C_CHAN",
+                "user": "U_HUMAN",
+                "text": "<@UBOT> second",
+            }
+            await mention_handler(event=event2, client=client)
+
+            # Only the first message should have been processed
+            assert mock_process.call_count == 1
+
+
 class TestErrorSanitization:
     """Tests that error messages don't leak internal details to Slack."""
 
