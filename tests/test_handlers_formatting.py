@@ -1002,6 +1002,102 @@ not ok 3 - Test C"""
         # (could be random output with "ok" in it)
         assert result is None
 
+    # --- Pytest short format (without === wrapping) ---
+
+    def test_pytest_short_format(self):
+        """pytest -q output: summary without === wrapping."""
+        output = (
+            "============================= test session starts "
+            "==============================\ncollected 42 items\n\n"
+            "..F.....F...............................\n"
+            "2 failed, 40 passed in 3.45s"
+        )
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 40
+        assert result.failed == 2
+        assert result.duration == "3.45s"
+
+    def test_pytest_short_all_passed(self):
+        """Short format with only passed."""
+        output = (
+            "============================= test session starts "
+            "==============================\ncollected 42 items\n\n"
+            "42 passed in 3.45s"
+        )
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 42
+        assert result.failed == 0
+
+    def test_pytest_short_requires_session_marker(self):
+        """Short parser requires pytest context to avoid false positives."""
+        output = "42 passed in 3.45s"
+        result = _parse_test_results(output)
+        assert result is None
+
+    # --- Pytest truncated verbose output ---
+
+    def test_pytest_truncated_verbose(self):
+        """Truncated verbose output without summary line."""
+        output = (
+            "============================= test session starts "
+            "==============================\ncollected 42 items\n\n"
+            "tests/test_foo.py::test_one PASSED\n"
+            "tests/test_foo.py::test_two PASSED\n"
+            "tests/test_foo.py::test_three FAILED\n"
+            "tests/test_bar.py::test_four PASSED"
+        )
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 3
+        assert result.failed == 1
+        assert result.duration is None
+
+    def test_pytest_truncated_with_skipped_and_errors(self):
+        """Truncated verbose output with all result types."""
+        output = (
+            "============================= test session starts "
+            "==============================\ncollected 100 items\n\n"
+            "tests/test_a.py::test_1 PASSED\n"
+            "tests/test_a.py::test_2 PASSED\n"
+            "tests/test_a.py::test_3 FAILED\n"
+            "tests/test_a.py::test_4 SKIPPED\n"
+            "tests/test_a.py::test_5 ERROR\n"
+            "tests/test_a.py::test_6 PASSED"
+        )
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 3
+        assert result.failed == 1
+        assert result.errors == 1
+        assert result.skipped == 1
+
+    def test_pytest_verbose_requires_session_marker(self):
+        """Verbose line parser requires pytest context to avoid false positives."""
+        output = (
+            "some/path::test_one PASSED\n"
+            "some/path::test_two FAILED"
+        )
+        result = _parse_test_results(output)
+        assert result is None
+
+    def test_pytest_full_output_prefers_summary_line(self):
+        """When full summary is present, primary parser is used over fallbacks."""
+        output = (
+            "============================= test session starts "
+            "==============================\n"
+            "tests/test_foo.py::test_one PASSED\n"
+            "tests/test_foo.py::test_two PASSED\n"
+            "tests/test_foo.py::test_three PASSED\n"
+            "============================== 3 passed in 1.23s "
+            "=============================="
+        )
+        result = _parse_test_results(output)
+        assert result is not None
+        assert result.passed == 3
+        assert result.duration == "1.23s"
+
 
 class TestFormatTestSummary:
     """Test _format_test_summary formatting."""

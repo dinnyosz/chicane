@@ -785,7 +785,13 @@ async def _process_message(
                                 )
                             else:
                                 meta = _snippet_metadata_from_tool(tool_name, tool_input, result_text)
-                                if len(fmt.text) > 500:
+                                # Always upload diffs as snippets (even short
+                                # ones) so Slack renders syntax highlighting.
+                                use_snippet = (
+                                    len(fmt.text) > 500
+                                    or meta.filetype == "diff"
+                                )
+                                if use_snippet:
                                     await _send_snippet(
                                         client, channel, thread_ts,
                                         fmt.text,
@@ -1196,7 +1202,11 @@ async def _process_message(
                                         )
                                     else:
                                         meta = _snippet_metadata_from_tool(tool_name, tool_input, result_text_out)
-                                        if len(fmt.text) > 500:
+                                        use_snippet = (
+                                            len(fmt.text) > 500
+                                            or meta.filetype == "diff"
+                                        )
+                                        if use_snippet:
                                             await _send_snippet(
                                                 client, channel, thread_ts,
                                                 fmt.text,
@@ -2030,6 +2040,84 @@ def _parse_pytest(output: str) -> ParsedTestResult | None:
     return None
 
 
+# Pytest short summary without === wrapping (pytest -q):
+# "42 passed, 2 failed in 3.45s" or "42 passed in 3.45s"
+_PYTEST_SHORT_SUMMARY_RE = re.compile(
+    r"^(\d+\s+(?:passed|failed|error|skipped)"
+    r"(?:,\s+\d+\s+(?:passed|failed|errors?|skipped))*"
+    r"(?:\s+in\s+[\d.]+s)?)\s*$",
+    re.MULTILINE,
+)
+
+
+def _parse_pytest_short(output: str) -> ParsedTestResult | None:
+    """Parse pytest short-form summary (``pytest -q``) without ``===`` wrapping.
+
+    Matches lines like ``42 passed, 2 failed in 3.45s`` that appear at the
+    end of ``pytest -q`` output or in truncated output.
+    """
+    # Only try if the output looks like pytest (session starts or collected)
+    if "test session starts" not in output and "collected" not in output:
+        return None
+    m = _PYTEST_SHORT_SUMMARY_RE.search(output)
+    if not m:
+        return None
+    line = m.group(1)
+    m_passed = _PYTEST_PASSED_RE.search(line)
+    m_failed = _PYTEST_FAILED_RE.search(line)
+    m_error = _PYTEST_ERROR_RE.search(line)
+    if not (m_passed or m_failed or m_error):
+        return None
+    m_skipped = _PYTEST_SKIPPED_RE.search(line)
+    m_duration = _PYTEST_DURATION_RE.search(line)
+    return ParsedTestResult(
+        passed=int(m_passed.group(1)) if m_passed else 0,
+        failed=int(m_failed.group(1)) if m_failed else 0,
+        errors=int(m_error.group(1)) if m_error else 0,
+        skipped=int(m_skipped.group(1)) if m_skipped else 0,
+        duration=f"{m_duration.group(1)}s" if m_duration else None,
+    )
+
+
+# Pytest verbose individual results: "tests/foo.py::test_bar PASSED"
+_PYTEST_VERBOSE_RESULT_RE = re.compile(
+    r"^\S+::\S+\s+(PASSED|FAILED|ERROR|SKIPPED)",
+    re.MULTILINE,
+)
+# Pytest collected line: "collected 42 items"
+_PYTEST_COLLECTED_RE = re.compile(r"collected\s+(\d+)\s+items?")
+
+
+def _parse_pytest_verbose_lines(output: str) -> ParsedTestResult | None:
+    """Count individual PASSED/FAILED/SKIPPED/ERROR lines from verbose pytest output.
+
+    This is a last-resort fallback for truncated pytest output where the
+    summary line is missing. Requires ``test session starts`` or
+    ``collected N items`` to confirm it's pytest output.
+    """
+    if "test session starts" not in output and "collected" not in output:
+        return None
+
+    results = _PYTEST_VERBOSE_RESULT_RE.findall(output)
+    if not results:
+        return None
+
+    passed = results.count("PASSED")
+    failed = results.count("FAILED")
+    errors = results.count("ERROR")
+    skipped = results.count("SKIPPED")
+
+    if not (passed or failed or errors):
+        return None
+
+    return ParsedTestResult(
+        passed=passed,
+        failed=failed,
+        errors=errors,
+        skipped=skipped,
+    )
+
+
 # Jest/Vitest: "Tests:  1 failed, 5 passed, 6 total"
 _JEST_SUMMARY_RE = re.compile(
     r"Tests:\s+"
@@ -2189,6 +2277,8 @@ def _parse_tap(output: str) -> ParsedTestResult | None:
 
 
 # Ordered list of parsers — tried in sequence, first match wins.
+# The primary pytest parser is first (exact summary line match), with
+# fallbacks at the end for truncated/short output.
 _TEST_PARSERS = [
     _parse_pytest,
     _parse_jest,
@@ -2198,6 +2288,8 @@ _TEST_PARSERS = [
     _parse_go_test,
     _parse_mocha,
     _parse_tap,
+    _parse_pytest_short,
+    _parse_pytest_verbose_lines,
 ]
 
 

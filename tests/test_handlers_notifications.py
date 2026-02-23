@@ -588,3 +588,198 @@ class TestVerbosityFiltering:
 
             all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
             assert any(":no_entry_sign:" in t for t in all_texts), f"Permission denial not shown at {verbosity}"
+
+
+class TestTestResultCards:
+    """Test that pytest result summary cards are posted for test tool results."""
+
+    @pytest.mark.asyncio
+    async def test_pytest_full_summary_shows_card(self):
+        """Normal pytest output with summary line produces a test result card."""
+        config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="normal")
+        sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
+
+        pytest_output = (
+            "============================= test session starts "
+            "==============================\ncollected 42 items\n"
+            "tests/test_foo.py ......  [100%]\n"
+            "============================== 42 passed in 3.45s "
+            "=============================="
+        )
+
+        async def fake_stream(prompt):
+            yield make_tool_event(tool_block("Bash", id="tu_pytest_1", command="pytest tests/"))
+            yield make_user_event_with_results([
+                {"type": "tool_result", "tool_use_id": "tu_pytest_1", "is_error": False, "content": pytest_output},
+            ])
+            yield make_event("assistant", text="All tests pass!")
+            yield make_event("result", text="All tests pass!", num_turns=2, duration_ms=5000)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "40000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "run tests", client, config, sessions, queue)
+
+        all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        summary_calls = [t for t in all_texts if ":white_check_mark:" in t and "passed" in t]
+        assert len(summary_calls) == 1
+        assert "42 passed" in summary_calls[0]
+        assert "3.45s" in summary_calls[0]
+
+    @pytest.mark.asyncio
+    async def test_truncated_pytest_output_shows_card(self):
+        """Truncated pytest output (no summary line) still shows a test result card."""
+        config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="normal")
+        sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
+
+        # Truncated output — has verbose PASSED/FAILED lines but no summary
+        truncated_output = (
+            "============================= test session starts "
+            "==============================\ncollected 42 items\n\n"
+            "tests/test_foo.py::test_one PASSED\n"
+            "tests/test_foo.py::test_two PASSED\n"
+            "tests/test_foo.py::test_three FAILED\n"
+            "tests/test_bar.py::test_four PASSED"
+        )
+
+        async def fake_stream(prompt):
+            yield make_tool_event(tool_block("Bash", id="tu_pytest_2", command="pytest tests/ -v"))
+            yield make_user_event_with_results([
+                {"type": "tool_result", "tool_use_id": "tu_pytest_2", "is_error": False, "content": truncated_output},
+            ])
+            yield make_event("assistant", text="Some tests failed.")
+            yield make_event("result", text="Some tests failed.", num_turns=2, duration_ms=5000)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "40001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "run tests", client, config, sessions, queue)
+
+        all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        # Should show failure card from verbose line counting
+        summary_calls = [t for t in all_texts if ":x:" in t and "failed" in t]
+        assert len(summary_calls) == 1
+        assert "3 passed" in summary_calls[0]
+        assert "1 failed" in summary_calls[0]
+
+    @pytest.mark.asyncio
+    async def test_pytest_short_format_shows_card(self):
+        """pytest -q short format (no === wrapping) still shows a card."""
+        config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="normal")
+        sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
+
+        short_output = (
+            "============================= test session starts "
+            "==============================\ncollected 42 items\n\n"
+            "..........................................\n"
+            "42 passed in 3.45s"
+        )
+
+        async def fake_stream(prompt):
+            yield make_tool_event(tool_block("Bash", id="tu_pytest_3", command="pytest tests/ -q"))
+            yield make_user_event_with_results([
+                {"type": "tool_result", "tool_use_id": "tu_pytest_3", "is_error": False, "content": short_output},
+            ])
+            yield make_event("assistant", text="All pass!")
+            yield make_event("result", text="All pass!", num_turns=2, duration_ms=3000)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "40002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "run tests", client, config, sessions, queue)
+
+        all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        summary_calls = [t for t in all_texts if ":white_check_mark:" in t and "passed" in t]
+        assert len(summary_calls) == 1
+        assert "42 passed" in summary_calls[0]
+
+    @pytest.mark.asyncio
+    async def test_no_card_for_non_test_bash(self):
+        """Bash tool running non-test commands shouldn't produce test result cards."""
+        config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="normal")
+        sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
+
+        async def fake_stream(prompt):
+            yield make_tool_event(tool_block("Bash", id="tu_bash_1", command="echo hello"))
+            yield make_user_event_with_results([
+                {"type": "tool_result", "tool_use_id": "tu_bash_1", "is_error": False, "content": "hello"},
+            ])
+            yield make_event("assistant", text="Done.")
+            yield make_event("result", text="Done.", num_turns=1, duration_ms=1000)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "40003.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "say hello", client, config, sessions, queue)
+
+        all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        assert not any(":white_check_mark:" in t for t in all_texts)
+        assert not any(":x:" in t for t in all_texts)
+
+
+class TestDiffSnippetUpload:
+    """Test that git diff output is always uploaded as a snippet for syntax highlighting."""
+
+    @pytest.mark.asyncio
+    async def test_short_diff_uploaded_as_snippet(self):
+        """Even short git diff output should be uploaded as a snippet, not inline code."""
+        config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="verbose")
+        sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
+
+        short_diff = (
+            "diff --git a/foo.py b/foo.py\n"
+            "--- a/foo.py\n"
+            "+++ b/foo.py\n"
+            "@@ -1,3 +1,4 @@\n"
+            " line1\n"
+            "+new line\n"
+            " line2\n"
+        )
+
+        async def fake_stream(prompt):
+            yield make_tool_event(tool_block("Bash", id="tu_diff_1", command="git diff HEAD~1"))
+            yield make_user_event_with_results([
+                {"type": "tool_result", "tool_use_id": "tu_diff_1", "is_error": False, "content": short_diff},
+            ])
+            yield make_event("assistant", text="Here's the diff.")
+            yield make_event("result", text="Here's the diff.", num_turns=2, duration_ms=2000)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "50000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "show diff", client, config, sessions, queue)
+
+        # Should upload as snippet, not post inline
+        client.files_upload_v2.assert_called_once()
+        upload_kwargs = client.files_upload_v2.call_args.kwargs
+        assert upload_kwargs["snippet_type"] == "diff"
+        assert upload_kwargs["filename"] == "diff.diff"
+
+        # No inline code blocks with diff content
+        all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        assert not any("diff --git" in t for t in all_texts)
