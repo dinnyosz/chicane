@@ -178,6 +178,13 @@ def _patch_snippet_io():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _isolate_handoff_map(tmp_path):
+    """Redirect handoff_sessions.json to a temp dir so tests never pollute the real file."""
+    with patch("chicane.config._HANDOFF_MAP_FILE", tmp_path / "handoff_sessions.json"):
+        yield
+
+
 def capture_app_handlers(mock_app):
     """Set up a mock AsyncApp to capture registered event handlers.
 
