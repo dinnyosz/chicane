@@ -106,6 +106,10 @@ class SessionInfo:
     # proper response (text or tool use).
     empty_continue_count: int = 0
 
+    # Previous TodoWrite state for contextual diff — avoids reprinting the
+    # full checklist on every update.
+    todo_snapshot: list[dict] | None = None
+
     def touch(self) -> None:
         self.last_used = datetime.now()
 

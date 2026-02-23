@@ -135,7 +135,7 @@ _QUIET_TOOLS = frozenset({"Read"})
 # Tools that are completely suppressed — no activity notifications, no error
 # messages.  These are interactive tools that always fail in streamed mode
 # (the system prompt says not to use them, but Claude sometimes tries anyway).
-_SILENT_TOOLS = frozenset({"EnterPlanMode", "ExitPlanMode", "AskUserQuestion"})
+_SILENT_TOOLS = frozenset({"EnterPlanMode", "ExitPlanMode", "AskUserQuestion", "TodoWrite"})
 
 
 
@@ -692,6 +692,18 @@ async def _process_message(
                     if _has_question(event_data):
                         await _add_thread_reaction(client, channel, session_info, "speech_balloon")
 
+                    # Detect TodoWrite — contextual updates instead of full checklist
+                    for block in (event_data.raw.get("message", {}).get("content", [])):
+                        if block.get("type") == "tool_use" and block.get("name") == "TodoWrite":
+                            todos = block.get("input", {}).get("todos", [])
+                            if todos:
+                                msg = _format_todo_update(session_info.todo_snapshot, todos)
+                                session_info.todo_snapshot = [
+                                    {k: t[k] for k in ("content", "status") if k in t}
+                                    for t in todos
+                                ]
+                                await queue.post_message(channel, thread_ts, msg)
+
                     # Accumulate text
                     chunk = event_data.text
                     if chunk:
@@ -1072,6 +1084,18 @@ async def _process_message(
                             chunk = event_data.text
                             if chunk:
                                 full_text += chunk
+                            # Detect TodoWrite during retry
+                            for block in (event_data.raw.get("message", {}).get("content", [])):
+                                if block.get("type") == "tool_use" and block.get("name") == "TodoWrite":
+                                    todos = block.get("input", {}).get("todos", [])
+                                    if todos:
+                                        msg = _format_todo_update(session_info.todo_snapshot, todos)
+                                        session_info.todo_snapshot = [
+                                            {k: t[k] for k in ("content", "status") if k in t}
+                                            for t in todos
+                                        ]
+                                        await queue.post_message(channel, thread_ts, msg)
+
                             # Detect git commits during retry
                             retry_commit_ids = _get_git_commit_tool_ids(event_data)
                             if retry_commit_ids:
@@ -2216,6 +2240,125 @@ def _format_test_summary(result: ParsedTestResult) -> tuple[str, str]:
     return f"{emoji} {summary}", color
 
 
+# ---------------------------------------------------------------------------
+# TodoWrite contextual updates — diff-based instead of full checklist
+# ---------------------------------------------------------------------------
+
+def _diff_todos(
+    previous: list[dict] | None,
+    current: list[dict],
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    """Diff two TodoWrite snapshots.
+
+    Returns ``(newly_completed, newly_in_progress, newly_added, remaining)``.
+    Each list contains task content strings.
+    """
+    if not current:
+        return [], [], [], []
+
+    prev_map: dict[str, str] = {}  # content → status
+    if previous:
+        for t in previous:
+            prev_map[t.get("content", "")] = t.get("status", "pending")
+
+    newly_completed: list[str] = []
+    newly_in_progress: list[str] = []
+    newly_added: list[str] = []
+    remaining: list[str] = []
+
+    for t in current:
+        content = t.get("content", "")
+        status = t.get("status", "pending")
+        prev_status = prev_map.get(content)
+
+        if prev_status is None and previous is not None:
+            # Task wasn't in the previous snapshot → newly added
+            newly_added.append(content)
+        elif status == "completed" and prev_status != "completed":
+            newly_completed.append(content)
+        elif status == "in_progress" and prev_status != "in_progress":
+            newly_in_progress.append(content)
+
+        if status != "completed":
+            remaining.append(content)
+
+    return newly_completed, newly_in_progress, newly_added, remaining
+
+
+def _format_todo_update(
+    previous: list[dict] | None,
+    current: list[dict],
+) -> str:
+    """Format a contextual todo update message from the diff.
+
+    Instead of reprinting the full checklist, shows what just changed
+    plus compact lists of what's done and what's remaining.
+    """
+    if not current:
+        return ":clipboard: Updating tasks"
+
+    total = len(current)
+    completed_count = sum(1 for t in current if t.get("status") == "completed")
+
+    # All tasks complete
+    if completed_count == total:
+        return f":white_check_mark: All tasks complete ({total}/{total})"
+
+    # First call — no previous snapshot, show initial plan
+    if previous is None:
+        labels = [t.get("content", "?") for t in current]
+        return f":clipboard: *Tasks* ({total})\n{', '.join(labels)}"
+
+    newly_completed, newly_in_progress, newly_added, remaining = _diff_todos(
+        previous, current,
+    )
+
+    lines: list[str] = []
+
+    for label in newly_completed:
+        lines.append(f":white_check_mark: {label}")
+
+    for label in newly_in_progress:
+        lines.append(
+            f":arrows_counterclockwise: {label} ({completed_count + 1}/{total})"
+        )
+
+    if newly_added:
+        lines.append(f":new: Added: {', '.join(newly_added)}")
+
+    # No detectable changes — still show progress
+    if not lines:
+        in_progress = [
+            t.get("content", "?")
+            for t in current
+            if t.get("status") == "in_progress"
+        ]
+        if in_progress:
+            lines.append(
+                f":arrows_counterclockwise: {in_progress[0]} "
+                f"({completed_count + 1}/{total})"
+            )
+        else:
+            lines.append(f":clipboard: Tasks ({completed_count}/{total})")
+
+    # Show what's already done (if anything)
+    all_done = [
+        t.get("content", "?")
+        for t in current
+        if t.get("status") == "completed"
+    ]
+    if all_done:
+        lines.append(f"Done: {', '.join(all_done)}")
+
+    if remaining:
+        lines.append(f"Remaining: {', '.join(remaining)}")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+
+
 @dataclass(frozen=True)
 class ToolActivity:
     """A tool activity notification, optionally with a snippet to upload."""
@@ -2443,23 +2586,6 @@ def _format_tool_activity(event: ClaudeEvent) -> list[ToolActivity]:
                 activities.append(ToolActivity(f":card_index: Reading MCP resource `{uri}`"))
             else:
                 activities.append(ToolActivity(":card_index: Reading MCP resource"))
-        elif tool_name == "TodoWrite":
-            todos = tool_input.get("todos", [])
-            if todos:
-                _STATUS_EMOJI = {
-                    "completed": ":white_check_mark:",
-                    "in_progress": ":arrows_counterclockwise:",
-                    "pending": ":white_circle:",
-                }
-                lines = [":clipboard: *Tasks*"]
-                for todo in todos:
-                    status = todo.get("status", "pending")
-                    emoji = _STATUS_EMOJI.get(status, ":white_circle:")
-                    label = todo.get("content", "?")
-                    lines.append(f"{emoji} {label}")
-                activities.append(ToolActivity("\n".join(lines)))
-            else:
-                activities.append(ToolActivity(":clipboard: Updating tasks"))
         else:
             # Clean up tool names for display: strip MCP prefixes
             # (mcp__server__tool → Tool), split snake/camel case.

@@ -521,7 +521,8 @@ class TestFormatToolActivity:
         )
         assert _format_tool_activity(event) == []
 
-    def test_todo_write_with_tasks(self):
+    def test_todo_write_suppressed(self):
+        """TodoWrite is now in _SILENT_TOOLS — handled as a side-effect in the event loop."""
         event = make_tool_event(
             tool_block(
                 "TodoWrite",
@@ -532,20 +533,15 @@ class TestFormatToolActivity:
                 ],
             )
         )
-        result = _format_tool_activity(event)
-        assert len(result) == 1
-        assert ":clipboard: *Tasks*" in result[0].text
-        assert ":white_check_mark: Set up database" in result[0].text
-        assert ":arrows_counterclockwise: Write API endpoints" in result[0].text
-        assert ":white_circle: Add tests" in result[0].text
+        assert _format_tool_activity(event) == []
 
-    def test_todo_write_empty_todos(self):
+    def test_todo_write_empty_suppressed(self):
         event = make_tool_event(tool_block("TodoWrite", todos=[]))
-        assert _format_tool_activity(event) == [":clipboard: Updating tasks"]
+        assert _format_tool_activity(event) == []
 
-    def test_todo_write_no_todos_key(self):
+    def test_todo_write_no_todos_key_suppressed(self):
         event = make_tool_event(tool_block("TodoWrite"))
-        assert _format_tool_activity(event) == [":clipboard: Updating tasks"]
+        assert _format_tool_activity(event) == []
 
     def test_unknown_tool_fallback(self):
         event = make_tool_event(tool_block("CustomTool"))

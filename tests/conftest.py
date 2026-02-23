@@ -142,6 +142,7 @@ def mock_session_info(mock_session, thread_ts="1000.0"):
     info.total_cost_usd = 0.0
     info.total_commits = 0
     info.empty_continue_count = 0
+    info.todo_snapshot = None
     return info
 
 
