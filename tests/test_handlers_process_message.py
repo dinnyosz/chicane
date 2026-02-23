@@ -468,8 +468,8 @@ class TestProcessMessageEdgeCases:
         assert len(error_msgs) == 0
 
     @pytest.mark.asyncio
-    async def test_long_response_uploaded_as_snippet(self, config, sessions, queue):
-        """Responses exceeding SNIPPET_THRESHOLD are uploaded as a file snippet."""
+    async def test_long_response_uses_markdown_block(self, config, sessions, queue):
+        """Responses within markdown block limit are posted as markdown blocks."""
         long_text = "a" * 8000
 
         async def fake_stream(prompt):
@@ -485,15 +485,41 @@ class TestProcessMessageEdgeCases:
             event = {"ts": "5004.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions, queue)
 
-        # Snippet uploaded via files_upload_v2
-        client.files_upload_v2.assert_called_once()
-        upload_kwargs = client.files_upload_v2.call_args.kwargs
-        assert upload_kwargs["channel"] == "C_CHAN"
+        # Should be posted via chat_postMessage with markdown blocks
+        post_calls = client.chat_postMessage.call_args_list
+        md_calls = [c for c in post_calls if c.kwargs.get("blocks")]
+        assert len(md_calls) >= 1
+        blocks = md_calls[0].kwargs["blocks"]
+        assert blocks[0]["type"] == "markdown"
 
     @pytest.mark.asyncio
-    async def test_moderate_response_split_into_chunks(self, config, sessions, queue):
-        """Responses between SLACK_MAX_LENGTH and SNIPPET_THRESHOLD still chunk."""
-        # 3950 chars: above SLACK_MAX_LENGTH (3900) but below SNIPPET_THRESHOLD (4000)
+    async def test_very_long_response_split_into_multiple_markdown_blocks(self, config, sessions, queue):
+        """Very long responses are split into multiple markdown block messages."""
+        long_text = "a" * 25000
+
+        async def fake_stream(prompt):
+            yield make_event("result", text=long_text)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "5004.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions, queue)
+
+        # Should be split into multiple messages with markdown blocks, not a snippet
+        client.files_upload_v2.assert_not_called()
+        post_calls = client.chat_postMessage.call_args_list
+        md_calls = [c for c in post_calls if c.kwargs.get("blocks")]
+        assert len(md_calls) >= 3  # 25k / 11k = at least 3 chunks
+
+    @pytest.mark.asyncio
+    async def test_moderate_response_uses_single_markdown_block(self, config, sessions, queue):
+        """Responses within markdown block limit fit in a single message."""
+        # 3950 chars: fits in a single markdown block (limit 11k)
         text = "a" * 3950
 
         async def fake_stream(prompt):
@@ -509,10 +535,39 @@ class TestProcessMessageEdgeCases:
             event = {"ts": "5004.1", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions, queue)
 
-        # Should be split into multiple messages, not uploaded as snippet
+        # Should be a single message with markdown block, not a snippet
         client.files_upload_v2.assert_not_called()
-        # At least 2 chat_postMessage calls for the split text
-        assert client.chat_postMessage.call_count >= 2
+        post_calls = client.chat_postMessage.call_args_list
+        md_calls = [c for c in post_calls if c.kwargs.get("blocks")]
+        assert len(md_calls) == 1
+        assert md_calls[0].kwargs["blocks"][0]["type"] == "markdown"
+
+    @pytest.mark.asyncio
+    async def test_markdown_response_split_at_limit(self, config, sessions, queue):
+        """Responses exceeding markdown block limit are split into multiple messages."""
+        # 15000 chars: above MARKDOWN_BLOCK_LIMIT (11k) but below snippet threshold (22k)
+        text = ("a" * 100 + "\n\n") * 150  # ~15300 chars with paragraph breaks
+
+        async def fake_stream(prompt):
+            yield make_event("result", text=text)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "5004.2", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions, queue)
+
+        # Should be split into 2+ messages, each with markdown blocks
+        client.files_upload_v2.assert_not_called()
+        post_calls = client.chat_postMessage.call_args_list
+        md_calls = [c for c in post_calls if c.kwargs.get("blocks")]
+        assert len(md_calls) >= 2
+        for call in md_calls:
+            assert call.kwargs["blocks"][0]["type"] == "markdown"
 
     @pytest.mark.asyncio
     async def test_text_only_response_posted_as_reply(self, config, sessions, queue):
@@ -1216,8 +1271,8 @@ class TestEmptyContinueRetryEdgeCases:
         assert len(text_posts) == 1
 
     @pytest.mark.asyncio
-    async def test_retry_long_response_uploaded_as_snippet(self, config, sessions, queue):
-        """During retry, long response should be uploaded as snippet."""
+    async def test_retry_long_response_uses_markdown_block(self, config, sessions, queue):
+        """During retry, response within markdown limit uses markdown blocks."""
         call_count = 0
         long_text = "a" * 8000
 
@@ -1241,7 +1296,43 @@ class TestEmptyContinueRetryEdgeCases:
             event = {"ts": "6003.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions, queue)
 
-        client.files_upload_v2.assert_called_once()
+        # Should be posted with markdown blocks, not as a snippet
+        post_calls = client.chat_postMessage.call_args_list
+        md_calls = [c for c in post_calls if c.kwargs.get("blocks")]
+        assert len(md_calls) >= 1
+        assert md_calls[0].kwargs["blocks"][0]["type"] == "markdown"
+
+    @pytest.mark.asyncio
+    async def test_retry_very_long_response_split_into_markdown_blocks(self, config, sessions, queue):
+        """During retry, very long response should be split into markdown blocks."""
+        call_count = 0
+        long_text = "a" * 25000
+
+        async def fake_stream(prompt):
+            nonlocal call_count
+            call_count += 1
+            yield make_event("system", subtype="init", session_id="s1")
+            if call_count == 1:
+                pass
+            else:
+                yield make_event("result", text=long_text)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        si = mock_session_info(mock_session)
+
+        with patch.object(sessions, "get_or_create", return_value=si):
+            event = {"ts": "6003.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hello", client, config, sessions, queue)
+
+        # Should be split into markdown blocks, not a snippet
+        client.files_upload_v2.assert_not_called()
+        post_calls = client.chat_postMessage.call_args_list
+        md_calls = [c for c in post_calls if c.kwargs.get("blocks")]
+        assert len(md_calls) >= 3
 
     @pytest.mark.asyncio
     async def test_retry_verbose_tool_results_posted(self, config, sessions, queue):

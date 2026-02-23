@@ -6,6 +6,8 @@ from chicane.claude import ClaudeEvent
 from chicane.handlers import (
     _format_completion_summary,
     _markdown_to_mrkdwn,
+    _split_markdown,
+    MARKDOWN_BLOCK_LIMIT,
 )
 from chicane.sessions import SessionInfo
 
@@ -480,4 +482,68 @@ class TestMarkdownToMrkdwn:
         """Angle brackets in converted links should not be escaped."""
         result = _markdown_to_mrkdwn("[click](https://example.com)")
         assert "<https://example.com|click>" in result
+
+
+class TestSplitMarkdown:
+    """Test _split_markdown for Slack markdown block splitting."""
+
+    def test_short_text_no_split(self):
+        text = "Hello world"
+        result = _split_markdown(text)
+        assert result == ["Hello world"]
+
+    def test_text_under_limit_no_split(self):
+        text = "a" * MARKDOWN_BLOCK_LIMIT
+        result = _split_markdown(text)
+        assert len(result) == 1
+
+    def test_text_over_limit_splits(self):
+        text = "a" * (MARKDOWN_BLOCK_LIMIT + 1000)
+        result = _split_markdown(text)
+        assert len(result) >= 2
+
+    def test_splits_at_paragraph_boundary(self):
+        # Create text with paragraph breaks
+        para = "a" * 5000
+        text = f"{para}\n\n{para}\n\n{para}"
+        result = _split_markdown(text, limit=6000)
+        assert len(result) >= 2
+        # First chunk should end at a paragraph boundary
+        assert result[0].strip() == para
+
+    def test_splits_at_heading_boundary(self):
+        section = "a" * 4000
+        text = f"{section}\n# Heading\n{section}"
+        result = _split_markdown(text, limit=5000)
+        assert len(result) >= 2
+        # Second chunk should start with heading
+        assert result[1].startswith("# Heading")
+
+    def test_hard_split_when_no_boundaries(self):
+        text = "a" * 25000  # No newlines at all
+        result = _split_markdown(text, limit=11000)
+        assert len(result) >= 2
+        # All content preserved
+        assert "".join(result) == text
+
+    def test_preserves_all_content(self):
+        para = "paragraph content here"
+        text = "\n\n".join([para] * 100)
+        result = _split_markdown(text, limit=200)
+        # Rejoin (accounting for stripped newlines) should contain all paragraphs
+        rejoined = "\n".join(result)
+        assert rejoined.count("paragraph content here") == 100
+
+    def test_empty_text(self):
+        assert _split_markdown("") == [""]
+
+    def test_single_newline_fallback(self):
+        # Lines without paragraph breaks, no headings
+        lines = ["line " + str(i) for i in range(200)]
+        text = "\n".join(lines)
+        result = _split_markdown(text, limit=500)
+        assert len(result) >= 2
+        # Should split at single newlines
+        for chunk in result:
+            assert len(chunk) <= 500
         assert "&lt;" not in result

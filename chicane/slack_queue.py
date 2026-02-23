@@ -63,18 +63,23 @@ class SlackMessageQueue:
         channel: str,
         thread_ts: str,
         text: str,
+        *,
+        blocks: list[dict] | None = None,
     ) -> PostResult:
         """Post a message, throttling to respect Slack's rate limit.
 
         Blocks until the message is posted and returns a :class:`PostResult`
         with the Slack timestamp.
+
+        If *blocks* is provided, the message is sent with Block Kit blocks
+        and *text* serves as the notification/accessibility fallback.
         """
         if self._client is None:
             raise RuntimeError("SlackMessageQueue: client not bound — call ensure_client() first")
 
         async with self._lock:
             await self._throttle(channel)
-            result = await self._post_with_retry(channel, thread_ts, text)
+            result = await self._post_with_retry(channel, thread_ts, text, blocks=blocks)
             self._last_post_time[channel] = monotonic()
             return result
 
@@ -92,12 +97,15 @@ class SlackMessageQueue:
         channel: str,
         thread_ts: str,
         text: str,
+        *,
+        blocks: list[dict] | None = None,
     ) -> PostResult:
         """Post message, retrying once on HTTP 429."""
+        kwargs: dict = dict(channel=channel, thread_ts=thread_ts, text=text)
+        if blocks:
+            kwargs["blocks"] = blocks
         try:
-            resp = await self._client.chat_postMessage(
-                channel=channel, thread_ts=thread_ts, text=text,
-            )
+            resp = await self._client.chat_postMessage(**kwargs)
             return PostResult(ts=resp["ts"], channel=channel, thread_ts=thread_ts)
         except SlackApiError as exc:
             if exc.response.status_code == 429:
@@ -109,8 +117,6 @@ class SlackMessageQueue:
                     channel, retry_after,
                 )
                 await asyncio.sleep(retry_after)
-                resp = await self._client.chat_postMessage(
-                    channel=channel, thread_ts=thread_ts, text=text,
-                )
+                resp = await self._client.chat_postMessage(**kwargs)
                 return PostResult(ts=resp["ts"], channel=channel, thread_ts=thread_ts)
             raise

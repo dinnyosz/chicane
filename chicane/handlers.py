@@ -24,8 +24,12 @@ from .slack_queue import SlackMessageQueue
 logger = logging.getLogger(__name__)
 security_logger = logging.getLogger("chicane.security")
 
-# Max message length for Slack
+# Max message length for Slack (mrkdwn fallback path)
 SLACK_MAX_LENGTH = 3900
+
+# Slack's cumulative limit for markdown blocks per payload.
+# We stay a bit under to leave room for other blocks/metadata.
+MARKDOWN_BLOCK_LIMIT = 11_000
 
 # Maximum tool activities to batch before flushing to Slack.
 _MAX_ACTIVITY_BATCH = 10
@@ -883,11 +887,9 @@ async def _process_message(
                 else:
                     # Reaction interrupt — show partial text + stop indicator
                     if full_text:
-                        mrkdwn = _markdown_to_mrkdwn(full_text)
-                        for chunk in _split_message(mrkdwn):
-                            await queue.post_message(
-                                channel, thread_ts, chunk,
-                            )
+                        await _post_markdown_response(
+                            queue, client, channel, thread_ts, full_text,
+                        )
                     await queue.post_message(
                         channel, thread_ts,
                         ":stop_sign: _Interrupted_",
@@ -913,19 +915,9 @@ async def _process_message(
 
             # Final: send remaining text
             if full_text:
-                mrkdwn = _markdown_to_mrkdwn(full_text)
-
-                if len(mrkdwn) > SNIPPET_THRESHOLD:
-                    stype = _guess_snippet_type(mrkdwn)
-                    await _send_snippet(
-                        client, channel, thread_ts, mrkdwn,
-                        snippet_type=stype, queue=queue,
-                    )
-                else:
-                    for chunk in _split_message(mrkdwn):
-                        await queue.post_message(
-                            channel, thread_ts, chunk,
-                        )
+                await _post_markdown_response(
+                    queue, client, channel, thread_ts, full_text,
+                )
 
             # Reset empty-continue counter on any proper response
             if full_text or had_tool_use:
@@ -1037,18 +1029,9 @@ async def _process_message(
                         # Success — reset counter
                         session_info.empty_continue_count = 0
                         if full_text:
-                            mrkdwn = _markdown_to_mrkdwn(full_text)
-                            if len(mrkdwn) > SNIPPET_THRESHOLD:
-                                stype = _guess_snippet_type(mrkdwn)
-                                await _send_snippet(
-                                    client, channel, thread_ts, mrkdwn,
-                                    snippet_type=stype, queue=queue,
-                                )
-                            else:
-                                for chunk in _split_message(mrkdwn):
-                                    await queue.post_message(
-                                        channel, thread_ts, chunk,
-                                    )
+                            await _post_markdown_response(
+                                queue, client, channel, thread_ts, full_text,
+                            )
                     # If still empty after max retries, fall through
                     # to the warning below on next empty response.
 
@@ -2389,6 +2372,107 @@ async def _send_snippet(
             await client.chat_postMessage(
                 channel=channel, thread_ts=thread_ts, text=chunk,
             )
+
+
+def _split_markdown(text: str, limit: int = MARKDOWN_BLOCK_LIMIT) -> list[str]:
+    """Split markdown text into chunks that fit Slack's markdown block limit.
+
+    Prefers splitting at paragraph boundaries (double newline) or heading
+    boundaries (``\\n#``).  Falls back to single newlines, then hard split.
+    """
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    remaining = text
+
+    while remaining:
+        if len(remaining) <= limit:
+            chunks.append(remaining)
+            break
+
+        # Try split points in order of preference:
+        # 1. Last paragraph break (double newline) before limit
+        split_at = remaining.rfind("\n\n", 0, limit)
+        if split_at >= limit // 4:
+            split_at += 1  # include one newline in current chunk
+        else:
+            # 2. Last heading boundary before limit
+            heading_match = None
+            for m in re.finditer(r"\n(?=#)", remaining[:limit]):
+                heading_match = m
+            if heading_match and heading_match.start() >= limit // 4:
+                split_at = heading_match.start()
+            else:
+                # 3. Last single newline
+                split_at = remaining.rfind("\n", 0, limit)
+                if split_at < limit // 4:
+                    # 4. Hard split at limit
+                    split_at = limit
+
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:].lstrip("\n")
+
+    return chunks
+
+
+async def _post_markdown_response(
+    queue: SlackMessageQueue,
+    client: AsyncWebClient,
+    channel: str,
+    thread_ts: str,
+    text: str,
+) -> None:
+    """Post Claude's response using Slack's native markdown block.
+
+    For responses within the 12k markdown block limit, sends a single
+    message with a ``markdown`` block and the raw text as mrkdwn fallback.
+    Longer responses are split into multiple messages at semantic
+    boundaries (paragraph breaks, headings).
+
+    Falls back to the legacy ``_markdown_to_mrkdwn()`` path if the
+    markdown block post fails (e.g. older Slack workspace).
+    """
+    chunks = _split_markdown(text)
+
+    for chunk in chunks:
+        # Build the fallback text (plain mrkdwn for notifications/search)
+        fallback = _markdown_to_mrkdwn(chunk)
+        # Truncate fallback to Slack's limit — it's only for notifications
+        if len(fallback) > SLACK_MAX_LENGTH:
+            fallback = fallback[:SLACK_MAX_LENGTH - 20] + "\n_(continued)_"
+
+        blocks = [{"type": "markdown", "text": chunk}]
+        try:
+            await queue.post_message(
+                channel, thread_ts, fallback, blocks=blocks,
+            )
+        except Exception:
+            # Markdown block not supported — fall back to mrkdwn
+            logger.info(
+                "Markdown block failed, falling back to mrkdwn",
+                exc_info=True,
+            )
+            mrkdwn = _markdown_to_mrkdwn(chunk)
+            if len(mrkdwn) > SNIPPET_THRESHOLD:
+                stype = _guess_snippet_type(text)
+                await _send_snippet(
+                    client, channel, thread_ts, mrkdwn,
+                    snippet_type=stype, queue=queue,
+                )
+            else:
+                for sub_chunk in _split_message(mrkdwn):
+                    await queue.post_message(
+                        channel, thread_ts, sub_chunk,
+                    )
+            # Once we fall back, use mrkdwn for remaining chunks too
+            for remaining_chunk in chunks[chunks.index(chunk) + 1:]:
+                mrkdwn = _markdown_to_mrkdwn(remaining_chunk)
+                for sub_chunk in _split_message(mrkdwn):
+                    await queue.post_message(
+                        channel, thread_ts, sub_chunk,
+                    )
+            return
 
 
 def _split_message(text: str) -> list[str]:

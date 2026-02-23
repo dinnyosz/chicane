@@ -121,6 +121,21 @@ class TestFormatToolActivity:
         assert "+y = 3" in item
         assert "+z = 4" in item
 
+    def test_edit_tool_empty_diff_fallback(self):
+        """Edit where old_string==new_string produces empty diff → header only."""
+        event = make_tool_event(
+            tool_block(
+                "Edit",
+                file_path="/src/handlers.py",
+                old_string="same",
+                new_string="same",
+            )
+        )
+        result = _format_tool_activity(event)
+        assert len(result) == 1
+        assert result[0] == ":pencil2: Editing `handlers.py`"
+        assert "```" not in result[0]
+
     def test_edit_tool_no_strings_fallback(self):
         """Edit with no old/new strings falls back to simple message."""
         event = make_tool_event(
@@ -620,6 +635,12 @@ class TestFormatEditDiff:
         result = _format_edit_diff("", "")
         assert result == ""
 
+    def test_only_headers_returns_empty(self):
+        """Diff where all lines are headers (---/+++/@@) → empty result."""
+        # Identical single-line strings produce a diff with only headers
+        result = _format_edit_diff("same", "same")
+        assert result == ""
+
 
 class TestCatchAllToolDisplay:
     """Test that the catch-all else branch shows args."""
@@ -813,7 +834,7 @@ class TestToolActivityStreaming:
         assert read_idx < text_idx < edit_idx < done_idx
 
     @pytest.mark.asyncio
-    async def test_long_text_with_activities_uploaded_as_snippet(
+    async def test_long_text_with_activities_uses_markdown_block(
         self, config, sessions, queue
     ):
         long_text = "a" * 8000
@@ -834,10 +855,71 @@ class TestToolActivityStreaming:
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions, queue)
 
-        # Long text should be uploaded as a snippet via files_upload_v2
-        client.files_upload_v2.assert_called_once()
-        upload_kwargs = client.files_upload_v2.call_args.kwargs
-        assert upload_kwargs["channel"] == "C_CHAN"
+        # 8000 chars fits in a markdown block (under 11k limit)
+        post_calls = client.chat_postMessage.call_args_list
+        md_calls = [c for c in post_calls if c.kwargs.get("blocks")]
+        assert len(md_calls) >= 1
+        assert md_calls[0].kwargs["blocks"][0]["type"] == "markdown"
+
+
+class TestSubagentActivityPrefix:
+    """Test that subagent tool activities get :arrow_right_hook: prefix during streaming."""
+
+    @pytest.mark.asyncio
+    async def test_subagent_activities_get_hook_prefix(self, config, sessions, queue):
+        """Tool activities with parent_tool_use_id get :arrow_right_hook: prefix."""
+        async def fake_stream(prompt):
+            yield make_tool_event(
+                tool_block("Read", file_path="/src/config.py"),
+                parent_tool_use_id="toolu_parent123",
+            )
+            yield make_event("assistant", text="Found it.")
+            yield make_event("result", text="Found it.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "check config", client, config, sessions, queue)
+
+        activity_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":arrow_right_hook:" in c.kwargs.get("text", "")
+        ]
+        assert len(activity_posts) >= 1
+        assert ":mag: Reading `config.py`" in activity_posts[0].kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_non_subagent_activities_no_prefix(self, config, sessions, queue):
+        """Tool activities without parent_tool_use_id don't get prefix."""
+        async def fake_stream(prompt):
+            yield make_tool_event(
+                tool_block("Read", file_path="/src/config.py"),
+            )
+            yield make_event("assistant", text="Found it.")
+            yield make_event("result", text="Found it.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "check config", client, config, sessions, queue)
+
+        activity_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":mag: Reading `config.py`" in c.kwargs.get("text", "")
+        ]
+        assert len(activity_posts) >= 1
+        for post in activity_posts:
+            assert ":arrow_right_hook:" not in post.kwargs["text"]
 
 
 class TestToolErrorHandling:
