@@ -296,12 +296,12 @@ class TestUploadNewImages:
 
 
 class TestPostImagesConfig:
-    def test_default_false(self):
+    def test_default_true(self):
         config = Config(
             slack_bot_token="xoxb-test",
             slack_app_token="xapp-test",
         )
-        assert config.post_images is False
+        assert config.post_images is True
 
     def test_enabled(self):
         config = Config(
