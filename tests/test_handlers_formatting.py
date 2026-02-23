@@ -11,7 +11,9 @@ from chicane.handlers import (
     _format_commit_card,
     _format_completion_summary,
     _format_test_summary,
+    _format_tool_result_text,
     _format_unified_diff,
+    _format_web_search_result,
     _LANG_TO_FILETYPE,
     _markdown_to_mrkdwn,
     _parse_test_results,
@@ -1149,3 +1151,105 @@ class TestFormatCommitCard:
         text = _format_commit_card(info)
         assert "+10" in text
         assert "-" not in text.split("\n")[-1]  # no deletions in stats line
+
+
+# ---------------------------------------------------------------------------
+# WebSearch result formatting
+# ---------------------------------------------------------------------------
+
+
+class TestFormatWebSearchResult:
+    """Test _format_web_search_result formatting."""
+
+    def test_standard_format(self):
+        raw = (
+            'Web search results for query: "test query"\n\n'
+            'Links: [{"title":"Result One","url":"https://example.com/1"},'
+            '{"title":"Result Two","url":"https://example.com/2"}]'
+        )
+        result = _format_web_search_result(raw)
+        assert "- [Result One](https://example.com/1)" in result
+        assert "- [Result Two](https://example.com/2)" in result
+        # Should NOT contain raw JSON
+        assert '{"title"' not in result
+
+    def test_query_included_as_header(self):
+        raw = 'Links: [{"title":"A","url":"https://a.com"}]'
+        result = _format_web_search_result(raw, query="python async")
+        assert "python async" in result
+        assert ":globe_with_meridians:" in result
+        assert "- [A](https://a.com)" in result
+
+    def test_no_query_no_header(self):
+        raw = 'Links: [{"title":"A","url":"https://a.com"}]'
+        result = _format_web_search_result(raw)
+        assert ":globe_with_meridians:" not in result
+        assert "- [A](https://a.com)" in result
+
+    def test_missing_title_uses_url(self):
+        raw = 'Links: [{"url":"https://example.com/bare"}]'
+        result = _format_web_search_result(raw)
+        assert "https://example.com/bare" in result
+
+    def test_malformed_json_returns_original(self):
+        raw = 'Links: [{"title": broken json'
+        result = _format_web_search_result(raw)
+        assert result == raw
+
+    def test_no_links_section_returns_original(self):
+        raw = "Just some text without any links"
+        result = _format_web_search_result(raw)
+        assert result == raw
+
+    def test_empty_links_array_returns_original(self):
+        raw = "Summary\n\nLinks: []"
+        result = _format_web_search_result(raw)
+        assert result == raw
+
+    def test_links_not_list_returns_original(self):
+        raw = 'Links: {"not": "a list"}'
+        result = _format_web_search_result(raw)
+        assert result == raw
+
+    def test_extra_content_after_links(self):
+        raw = (
+            'Summary text\n\n'
+            'Links: [{"title":"A","url":"https://a.com"}]\n\n'
+            'Some trailing text'
+        )
+        result = _format_web_search_result(raw)
+        assert "- [A](https://a.com)" in result
+
+    def test_nested_brackets_in_urls(self):
+        raw = 'Links: [{"title":"Wiki","url":"https://en.wikipedia.org/wiki/Test_(assessment)"}]'
+        result = _format_web_search_result(raw)
+        assert "- [Wiki]" in result
+
+    def test_format_tool_result_text_dispatches(self):
+        raw = 'Links: [{"title":"A","url":"https://a.com"}]'
+        fmt = _format_tool_result_text("WebSearch", {"query": "test"}, raw)
+        assert "- [A](https://a.com)" in fmt.text
+        assert fmt.is_markdown is True
+        assert "test" in fmt.text  # query included
+
+    def test_format_tool_result_text_websearch_fallback(self):
+        """When formatting fails, is_markdown should be False."""
+        fmt = _format_tool_result_text("WebSearch", {"query": "test"}, "no links here")
+        assert fmt.is_markdown is False
+        assert fmt.text == "no links here"
+
+    def test_format_tool_result_text_passthrough(self):
+        text = "plain output"
+        fmt = _format_tool_result_text("Bash", {}, text)
+        assert fmt.text == text
+        assert fmt.is_markdown is False
+
+
+class TestWebSearchSnippetMeta:
+    """Test _snippet_metadata_from_tool for WebSearch."""
+
+    def test_websearch_meta(self):
+        meta = _snippet_metadata_from_tool("WebSearch", {"query": "test query"}, "")
+        assert meta.filetype == "markdown"
+        assert meta.filename == "search-results.md"
+        assert "test query" in meta.label

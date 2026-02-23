@@ -765,22 +765,28 @@ async def _process_message(
                             if tool_name in _QUIET_TOOLS:
                                 continue
                             tool_input = tool_id_to_input.get(tool_use_id, {})
-                            meta = _snippet_metadata_from_tool(tool_name, tool_input, result_text)
-                            # Upload long tool output as a snippet (>500 chars)
-                            if len(result_text) > 500:
-                                await _send_snippet(
-                                    client, channel, thread_ts,
-                                    result_text,
-                                    initial_comment=meta.label,
-                                    snippet_type=meta.filetype,
-                                    filename=meta.filename,
-                                    queue=queue,
+                            fmt = _format_tool_result_text(tool_name, tool_input, result_text)
+                            if fmt.is_markdown:
+                                # Formatted result — post as markdown block
+                                await _post_markdown_response(
+                                    queue, client, channel, thread_ts, fmt.text,
                                 )
                             else:
-                                wrapped = f"{meta.label}\n```\n{result_text}\n```"
-                                await queue.post_message(
-                                    channel, thread_ts, wrapped,
-                                )
+                                meta = _snippet_metadata_from_tool(tool_name, tool_input, result_text)
+                                if len(fmt.text) > 500:
+                                    await _send_snippet(
+                                        client, channel, thread_ts,
+                                        fmt.text,
+                                        initial_comment=meta.label,
+                                        snippet_type=meta.filetype,
+                                        filename=meta.filename,
+                                        queue=queue,
+                                    )
+                                else:
+                                    wrapped = f"{meta.label}\n```\n{fmt.text}\n```"
+                                    await queue.post_message(
+                                        channel, thread_ts, wrapped,
+                                    )
 
                     # Post images: upload pending Write-tool images that now
                     # exist on disk, plus any image paths found in tool results.
@@ -1159,21 +1165,27 @@ async def _process_message(
                                     if tool_name in _QUIET_TOOLS:
                                         continue
                                     tool_input = tool_id_to_input.get(tool_use_id, {})
-                                    meta = _snippet_metadata_from_tool(tool_name, tool_input, result_text_out)
-                                    if len(result_text_out) > 500:
-                                        await _send_snippet(
-                                            client, channel, thread_ts,
-                                            result_text_out,
-                                            initial_comment=meta.label,
-                                            snippet_type=meta.filetype,
-                                            filename=meta.filename,
-                                            queue=queue,
+                                    fmt = _format_tool_result_text(tool_name, tool_input, result_text_out)
+                                    if fmt.is_markdown:
+                                        await _post_markdown_response(
+                                            queue, client, channel, thread_ts, fmt.text,
                                         )
                                     else:
-                                        wrapped = f"{meta.label}\n```\n{result_text_out}\n```"
-                                        await queue.post_message(
-                                            channel, thread_ts, wrapped,
-                                        )
+                                        meta = _snippet_metadata_from_tool(tool_name, tool_input, result_text_out)
+                                        if len(fmt.text) > 500:
+                                            await _send_snippet(
+                                                client, channel, thread_ts,
+                                                fmt.text,
+                                                initial_comment=meta.label,
+                                                snippet_type=meta.filetype,
+                                                filename=meta.filename,
+                                                queue=queue,
+                                            )
+                                        else:
+                                            wrapped = f"{meta.label}\n```\n{fmt.text}\n```"
+                                            await queue.post_message(
+                                                channel, thread_ts, wrapped,
+                                            )
 
                     await _flush_activities()
 
@@ -3033,6 +3045,11 @@ def _snippet_metadata_from_tool(
         short = url[:50] if url else "web content"
         return _SnippetMeta("markdown", "web-content.md", f":clipboard: Content from `{short}`")
 
+    if tool_name == "WebSearch":
+        query = tool_input.get("query", "")
+        short = query[:50] if query else "web search"
+        return _SnippetMeta("markdown", "search-results.md", f":globe_with_meridians: Results for `{short}`")
+
     # Fallback: content-based detection
     filetype = _guess_snippet_type(result_text)
     display = tool_name
@@ -3041,6 +3058,106 @@ def _snippet_metadata_from_tool(
         display = parts[-1] if len(parts) >= 3 else display
     ext = _SNIPPET_EXT.get(filetype, ".txt")
     return _SnippetMeta(filetype, f"output{ext}", f":clipboard: {display} output")
+
+
+# ---------------------------------------------------------------------------
+# Tool result formatters — transform raw tool output for nicer display
+# ---------------------------------------------------------------------------
+
+def _format_web_search_result(result_text: str, *, query: str = "") -> str:
+    """Format raw WebSearch tool output into clean markdown.
+
+    Transforms the JSON-like ``Links: [{"title":..., "url":...}, ...]``
+    format into a readable markdown list with titles and URLs.
+
+    When *query* is provided it is included as a header so the result
+    is self-contained even when displayed without the preceding tool
+    activity notification.
+
+    Gracefully falls back to the original text if the format is
+    unrecognised or the JSON is malformed.
+    """
+    import json as _json
+
+    # Extract everything before "Links:"
+    parts = result_text.split("Links:", 1)
+
+    if len(parts) < 2:
+        return result_text
+
+    raw_links = parts[1].strip()
+
+    # Try to parse as JSON array — tolerate whitespace and trailing content
+    formatted_links: list[str] = []
+    try:
+        # Find the outermost [...] bracket pair
+        start = raw_links.find("[")
+        if start == -1:
+            return result_text
+        depth = 0
+        end = -1
+        for i, ch in enumerate(raw_links[start:], start):
+            if ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end == -1:
+            return result_text
+
+        links_json = _json.loads(raw_links[start:end])
+        if not isinstance(links_json, list):
+            return result_text
+
+        for link in links_json:
+            if not isinstance(link, dict):
+                continue
+            title = str(link.get("title", "")).strip()
+            url = str(link.get("url", "")).strip()
+            if title and url:
+                formatted_links.append(f"- [{title}]({url})")
+            elif url:
+                formatted_links.append(f"- {url}")
+    except (ValueError, TypeError, AttributeError):
+        return result_text
+
+    if not formatted_links:
+        return result_text
+
+    output_parts = []
+    if query:
+        output_parts.append(f":globe_with_meridians: *Search results for \"{query}\"*")
+    output_parts.append("\n".join(formatted_links))
+    return "\n\n".join(output_parts)
+
+
+@dataclass(frozen=True)
+class _FormattedResult:
+    """Result of formatting a tool output for display."""
+
+    text: str
+    is_markdown: bool = False  # If True, post as markdown block, not code/snippet
+
+
+def _format_tool_result_text(
+    tool_name: str,
+    tool_input: dict,
+    result_text: str,
+) -> _FormattedResult:
+    """Apply tool-specific formatting to raw tool result text.
+
+    Returns a :class:`_FormattedResult` with the transformed text and
+    a flag indicating whether it should be posted as native markdown.
+    Falls back to the original text if no formatter applies.
+    """
+    if tool_name == "WebSearch":
+        query = tool_input.get("query", "")
+        formatted = _format_web_search_result(result_text, query=query)
+        is_md = formatted != result_text
+        return _FormattedResult(formatted, is_markdown=is_md)
+    return _FormattedResult(result_text)
 
 
 async def _send_snippet(
