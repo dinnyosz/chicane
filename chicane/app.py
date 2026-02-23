@@ -409,17 +409,42 @@ def _run_detached() -> None:
         print("Run 'chicane setup' to set a log directory.", file=sys.stderr)
         sys.exit(1)
 
-    pid = os.fork()
-    if pid > 0:
-        # Parent — print PID and exit
-        print(f"Chicane running in background (PID {pid}). Logs -> {config.log_dir}")
+    # Use a pipe so the daemon (grandchild) can report its PID back
+    # to the original parent for accurate user-facing output.
+    read_fd, write_fd = os.pipe()
+
+    # First fork — parent waits for daemon PID, prints it, and exits.
+    pid1 = os.fork()
+    if pid1 > 0:
+        os.close(write_fd)
+        # Read the daemon PID from the pipe (grandchild writes it).
+        with os.fdopen(read_fd, "r") as f:
+            daemon_pid = f.read().strip()
+        # Redirect stderr to suppress aiohttp __del__ tracebacks during
+        # GC cleanup (ClientResponse objects outlive the event loop).
+        sys.stderr = open(os.devnull, "w")
+        print(f"Chicane running in background (PID {daemon_pid}). Logs -> {config.log_dir}")
         sys.exit(0)
 
-    # Child — detach from terminal
+    # First child — create new session, then fork again so the final
+    # daemon is not a session leader and can never acquire a terminal.
+    os.close(read_fd)
     os.setsid()
-    sys.stdin.close()
-    sys.stdout = open(os.devnull, "w")
-    sys.stderr = open(os.devnull, "w")
+
+    pid2 = os.fork()
+    if pid2 > 0:
+        os.close(write_fd)
+        os._exit(0)
+
+    # Daemon — report PID, redirect stdio, and run.
+    os.write(write_fd, f"{os.getpid()}\n".encode())
+    os.close(write_fd)
+
+    devnull_r = open(os.devnull, "r")
+    devnull_w = open(os.devnull, "w")
+    os.dup2(devnull_r.fileno(), sys.stdin.fileno())
+    os.dup2(devnull_w.fileno(), sys.stdout.fileno())
+    os.dup2(devnull_w.fileno(), sys.stderr.fileno())
     asyncio.run(start(config))
 
 
