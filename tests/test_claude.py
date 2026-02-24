@@ -632,17 +632,27 @@ class TestBuildOptions:
 
 
 def _mock_sdk_client(messages):
-    """Create a mock ClaudeSDKClient that yields the given messages."""
+    """Create a mock ClaudeSDKClient that yields the given messages.
+
+    Provides ``receive_messages()`` (the streaming-input API used by
+    ``ClaudeSession.stream()``) plus the legacy ``receive_response()``
+    for any tests that still reference it.
+    """
     client = AsyncMock()
     client.connect = AsyncMock()
     client.disconnect = AsyncMock()
     client.query = AsyncMock()
     client.interrupt = MagicMock()
 
+    async def _receive_messages():
+        for msg in messages:
+            yield msg
+
     async def _receive_response():
         for msg in messages:
             yield msg
 
+    client.receive_messages = _receive_messages
     client.receive_response = _receive_response
     return client
 
@@ -732,7 +742,7 @@ class TestClaudeSessionStream:
             raise RuntimeError("boom")
             yield  # make it an async generator  # noqa: unreachable
 
-        client.receive_response = _exploding_response
+        client.receive_messages = _exploding_response
 
         session = ClaudeSession()
         with patch.object(session, "_ensure_connected", return_value=client):
@@ -743,7 +753,8 @@ class TestClaudeSessionStream:
         assert not session.is_streaming
 
     @pytest.mark.asyncio
-    async def test_stream_calls_query_with_prompt(self):
+    async def test_stream_pushes_prompt_into_queue(self):
+        """stream() pushes the prompt into the message queue (not query())."""
         mock_client = _mock_sdk_client([])
 
         session = ClaudeSession()
@@ -751,14 +762,24 @@ class TestClaudeSessionStream:
             async for _ in session.stream("test prompt"):
                 pass
 
-        mock_client.query.assert_awaited_once_with("test prompt")
+        # The prompt should NOT go through query() — it's pushed into the
+        # queue for the streaming input generator to deliver.
+        mock_client.query.assert_not_awaited()
+        # Queue should be empty after being consumed (or in this mock case,
+        # the prompt was put but not consumed by a real generator)
+        assert session._message_queue.qsize() == 1  # unconsumed in mock
+        assert session._message_queue.get_nowait() == "test prompt"
 
     @pytest.mark.asyncio
     async def test_stream_skips_message_parse_error(self, caplog):
         """MessageParseError mid-stream is logged and skipped, not fatal."""
-        from claude_agent_sdk import ResultMessage
+        from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
         from claude_agent_sdk._errors import MessageParseError
 
+        assistant_msg = AssistantMessage(
+            content=[TextBlock(text="before error")],
+            model="opus", parent_tool_use_id=None, error=None,
+        )
         result_msg = ResultMessage(
             subtype="success", duration_ms=100, duration_api_ms=90,
             is_error=False, num_turns=1, session_id="s1",
@@ -769,11 +790,16 @@ class TestClaudeSessionStream:
         client = AsyncMock()
         client.query = AsyncMock()
 
+        call_count = 0
+
         async def _response_with_parse_error():
-            yield result_msg
+            nonlocal call_count
+            yield assistant_msg
+            call_count += 1
+            # Simulate a parse error from an unknown message type
             raise MessageParseError("Unknown message type: rate_limit_event", {})
 
-        client.receive_response = _response_with_parse_error
+        client.receive_messages = _response_with_parse_error
 
         session = ClaudeSession()
         with patch.object(session, "_ensure_connected", return_value=client):
@@ -781,7 +807,8 @@ class TestClaudeSessionStream:
 
         # The valid message before the error should still be yielded
         assert len(events) == 1
-        assert events[0].type == "result"
+        assert events[0].type == "assistant"
+        assert events[0].text == "before error"
         assert any("MessageParseError" in r.message for r in caplog.records)
 
     @pytest.mark.asyncio
@@ -812,7 +839,7 @@ class TestClaudeSessionStream:
             call_count += 1
             raise MessageParseError("Unknown message type: rate_limit_event", {})
 
-        client.receive_response = _response_with_mid_stream_error
+        client.receive_messages = _response_with_mid_stream_error
 
         session = ClaudeSession()
         with patch.object(session, "_ensure_connected", return_value=client):
@@ -961,6 +988,169 @@ class TestClaudeSessionDisconnect:
 
         # stream() should have reset the flag
         assert not session.was_interrupted
+
+
+class TestStreamingInput:
+    """Tests for the streaming input queue and between-turn message delivery."""
+
+    @pytest.mark.asyncio
+    async def test_message_generator_yields_formatted_messages(self):
+        session = ClaudeSession()
+        await session._message_queue.put("hello")
+        await session._message_queue.put("world")
+        await session._message_queue.put(None)  # sentinel
+
+        gen = session._message_generator()
+        messages = []
+        async for msg in gen:
+            messages.append(msg)
+
+        assert len(messages) == 2
+        assert messages[0] == {
+            "type": "user",
+            "message": {"role": "user", "content": "hello"},
+        }
+        assert messages[1] == {
+            "type": "user",
+            "message": {"role": "user", "content": "world"},
+        }
+
+    @pytest.mark.asyncio
+    async def test_message_generator_stops_on_sentinel(self):
+        session = ClaudeSession()
+        await session._message_queue.put(None)
+
+        gen = session._message_generator()
+        messages = [msg async for msg in gen]
+        assert messages == []
+
+    @pytest.mark.asyncio
+    async def test_queue_message_puts_into_queue(self):
+        session = ClaudeSession()
+        await session.queue_message("follow-up")
+        assert session._message_queue.qsize() == 1
+        assert session._message_queue.get_nowait() == "follow-up"
+
+    @pytest.mark.asyncio
+    async def test_stream_continues_when_queue_has_pending_messages(self):
+        """When queue_message() is called during streaming, stream() should
+        continue past the first ResultMessage to process the next turn."""
+        from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+
+        assistant1 = AssistantMessage(
+            content=[TextBlock(text="working on it")],
+            model="opus", parent_tool_use_id=None, error=None,
+        )
+        result1 = ResultMessage(
+            subtype="success", duration_ms=100, duration_api_ms=90,
+            is_error=False, num_turns=1, session_id="s1",
+            total_cost_usd=0.01, usage=None, result="turn 1 done",
+        )
+        assistant2 = AssistantMessage(
+            content=[TextBlock(text="handling follow-up")],
+            model="opus", parent_tool_use_id=None, error=None,
+        )
+        result2 = ResultMessage(
+            subtype="success", duration_ms=200, duration_api_ms=180,
+            is_error=False, num_turns=2, session_id="s1",
+            total_cost_usd=0.02, usage=None, result="turn 2 done",
+        )
+
+        session = ClaudeSession()
+
+        client = AsyncMock()
+        client.query = AsyncMock()
+
+        async def _two_turn_stream():
+            yield assistant1
+            # Simulate a follow-up arriving mid-stream
+            await session.queue_message("follow-up")
+            yield result1
+            yield assistant2
+            yield result2
+
+        client.receive_messages = _two_turn_stream
+
+        with patch.object(session, "_ensure_connected", return_value=client):
+            events = [e async for e in session.stream("initial")]
+
+        # Should see all 4 events — stream continued past first result
+        assert len(events) == 4
+        assert events[0].type == "assistant"
+        assert events[1].type == "result"
+        assert events[2].type == "assistant"
+        assert events[3].type == "result"
+
+    @pytest.mark.asyncio
+    async def test_stream_stops_at_result_when_queue_empty(self):
+        """Normal case: stream stops at ResultMessage when no queued messages."""
+        from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+
+        result = ResultMessage(
+            subtype="success", duration_ms=100, duration_api_ms=90,
+            is_error=False, num_turns=1, session_id="s1",
+            total_cost_usd=0.01, usage=None, result="done",
+        )
+        # This message should never be reached
+        extra = AssistantMessage(
+            content=[TextBlock(text="should not appear")],
+            model="opus", parent_tool_use_id=None, error=None,
+        )
+
+        client = AsyncMock()
+        client.query = AsyncMock()
+
+        async def _stream_with_extra():
+            yield result
+            yield extra
+
+        client.receive_messages = _stream_with_extra
+
+        session = ClaudeSession()
+        with patch.object(session, "_ensure_connected", return_value=client):
+            events = [e async for e in session.stream("hello")]
+
+        # Should stop after the result — the extra message is not yielded
+        assert len(events) == 1
+        assert events[0].type == "result"
+
+    @pytest.mark.asyncio
+    async def test_disconnect_sends_sentinel(self):
+        session = ClaudeSession()
+        session._client = AsyncMock()
+        session._connected = True
+        session._generator_started = True
+
+        await session.disconnect()
+
+        # Sentinel should have been sent to stop the generator
+        assert not session._generator_started
+        # Queue should have the sentinel
+        # (in real life the generator would consume it, but here it's unconsumed)
+
+    @pytest.mark.asyncio
+    async def test_disconnect_without_generator_skips_sentinel(self):
+        session = ClaudeSession()
+        session._client = AsyncMock()
+        session._connected = True
+        session._generator_started = False
+
+        await session.disconnect()
+
+        # Queue should be empty — no sentinel was sent
+        assert session._message_queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_ensure_connected_sets_generator_started(self):
+        session = ClaudeSession(cwd=Path("/tmp"))
+
+        with patch("chicane.claude.ClaudeSDKClient") as MockClient:
+            mock_instance = AsyncMock()
+            MockClient.return_value = mock_instance
+
+            await session._ensure_connected()
+
+            assert session._generator_started
 
 
 class TestEnsureConnected:

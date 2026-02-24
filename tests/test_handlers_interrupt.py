@@ -141,12 +141,13 @@ class TestNewMessageQueue:
 
     @pytest.mark.asyncio
     async def test_new_message_queued_when_streaming(self, config, sessions, queue):
-        """When a second message arrives while streaming, it should be queued, not interrupt."""
+        """When a second message arrives while streaming, it should be delivered via queue_message()."""
         mock_session = MagicMock()
         mock_session.session_id = "s1"
         mock_session.is_streaming = True  # Stream is active
         mock_session.was_interrupted = False
         mock_session.interrupt = AsyncMock()
+        mock_session.queue_message = AsyncMock()
 
         info = MagicMock()
         info.session = mock_session
@@ -162,11 +163,8 @@ class TestNewMessageQueue:
         # interrupt() should NOT have been called
         mock_session.interrupt.assert_not_awaited()
 
-        # Message should be in the queue
-        assert len(info.pending_messages) == 1
-        pending = info.pending_messages[0]
-        assert pending["prompt"] == "second message"
-        assert pending["event"]["ts"] == "5001.0"
+        # Message should have been delivered via queue_message for between-turn delivery
+        mock_session.queue_message.assert_awaited_once_with("second message")
 
     @pytest.mark.asyncio
     async def test_queued_message_gets_speech_balloon(self, config, sessions, queue):
@@ -175,6 +173,7 @@ class TestNewMessageQueue:
         mock_session.session_id = "s1"
         mock_session.is_streaming = True
         mock_session.was_interrupted = False
+        mock_session.queue_message = AsyncMock()
 
         info = MagicMock()
         info.session = mock_session
@@ -194,11 +193,12 @@ class TestNewMessageQueue:
 
     @pytest.mark.asyncio
     async def test_multiple_messages_queue_in_order(self, config, sessions, queue):
-        """Multiple messages during streaming should queue in FIFO order."""
+        """Multiple messages during streaming should be delivered via queue_message in order."""
         mock_session = MagicMock()
         mock_session.session_id = "s1"
         mock_session.is_streaming = True
         mock_session.was_interrupted = False
+        mock_session.queue_message = AsyncMock()
 
         info = MagicMock()
         info.session = mock_session
@@ -212,8 +212,9 @@ class TestNewMessageQueue:
             with patch.object(sessions, "get_or_create", return_value=info):
                 await _process_message(event, msg, client, config, sessions, queue)
 
-        assert len(info.pending_messages) == 3
-        assert [p["prompt"] for p in info.pending_messages] == ["first", "second", "third"]
+        assert mock_session.queue_message.await_count == 3
+        queued = [c.args[0] for c in mock_session.queue_message.call_args_list]
+        assert queued == ["first", "second", "third"]
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +375,7 @@ class TestInterruptedStreamDisplay:
         mock_session.session_id = "s1"
         mock_session.is_streaming = True
         mock_session.was_interrupted = False
+        mock_session.queue_message = AsyncMock()
 
         info = MagicMock()
         info.session = mock_session
@@ -396,8 +398,8 @@ class TestInterruptedStreamDisplay:
         bulb_messages = [t for t in all_texts if ":bulb:" in t]
         assert len(bulb_messages) == 0
 
-        # Message should be queued instead
-        assert len(info.pending_messages) == 1
+        # Message should have been delivered via queue_message
+        mock_session.queue_message.assert_awaited_once_with("do something")
 
 
 class TestInterruptExceptionHandling:
@@ -410,6 +412,7 @@ class TestInterruptExceptionHandling:
         mock_session.session_id = "s1"
         mock_session.is_streaming = True
         mock_session.was_interrupted = False
+        mock_session.queue_message = AsyncMock()
 
         info = MagicMock()
         info.session = mock_session
@@ -424,8 +427,8 @@ class TestInterruptExceptionHandling:
             # Should not raise despite reactions_remove failing
             await _process_message(event, "queued msg", client, config, sessions, queue)
 
-        # Message should still be queued
-        assert len(info.pending_messages) == 1
+        # Message should still be delivered via queue_message
+        mock_session.queue_message.assert_awaited_once_with("queued msg")
         # speech_balloon should still be attempted
         speech_calls = [
             c for c in client.reactions_add.call_args_list
