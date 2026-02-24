@@ -34,11 +34,11 @@ MARKDOWN_BLOCK_LIMIT = 11_000
 # Maximum tool activities to batch before flushing to Slack.
 _MAX_ACTIVITY_BATCH = 10
 
-# Seconds to wait before auto-flushing accumulated assistant text.
-# When the SDK blocks between events (e.g. writing a huge file), text
-# sits invisible to the user.  This timer ensures it gets posted even
-# if no new event arrives for a while.
-_TEXT_FLUSH_DELAY = 5.0
+# Seconds of silence before auto-flushing any pending output (text
+# and/or batched tool activities).  When the SDK blocks between events
+# (e.g. writing a huge file), accumulated output sits invisible to the
+# user.  This timer ensures it gets posted even if no new event arrives.
+_IDLE_FLUSH_DELAY = 5.0
 
 
 # ---------------------------------------------------------------------------
@@ -552,36 +552,43 @@ async def _process_message(
         pending_activities: list[ToolActivity] = []
         first_activity_posted = False  # reset per tool sequence
 
-        # Timed text flush — post accumulated text if the SDK blocks
-        # between events (e.g. generating a huge file).
-        _text_flush_task: asyncio.Task | None = None
+        # Idle flush — when the SDK blocks between events (e.g. Claude
+        # is generating a huge file), any accumulated text or batched tool
+        # activities sit invisible to the user.  This timer fires after
+        # _IDLE_FLUSH_DELAY seconds of no new events and posts whatever
+        # is pending.
+        _idle_flush_task: asyncio.Task | None = None
 
-        async def _timed_text_flush() -> None:
-            """Background coroutine: waits, then flushes ``full_text``."""
-            nonlocal full_text
+        async def _idle_flush() -> None:
+            """Background coroutine: waits, then flushes all pending output."""
+            nonlocal full_text, first_activity_posted
             try:
-                await asyncio.sleep(_TEXT_FLUSH_DELAY)
+                await asyncio.sleep(_IDLE_FLUSH_DELAY)
+                # Flush pending tool activities first (they came before text)
+                await _flush_activities()
+                # Then flush accumulated text
                 if full_text:
                     for chunk in _split_message(_markdown_to_mrkdwn(full_text)):
                         r = await queue.post_message(channel, thread_ts, chunk)
                         sessions.register_bot_message(r.ts, thread_ts)
                     full_text = ""
+                    first_activity_posted = False
             except asyncio.CancelledError:
                 pass
 
-        def _schedule_text_flush() -> None:
-            """(Re)start the text flush timer."""
-            nonlocal _text_flush_task
-            if _text_flush_task and not _text_flush_task.done():
-                _text_flush_task.cancel()
-            _text_flush_task = asyncio.ensure_future(_timed_text_flush())
+        def _schedule_idle_flush() -> None:
+            """(Re)start the idle flush timer.  Called after each SDK event."""
+            nonlocal _idle_flush_task
+            if _idle_flush_task and not _idle_flush_task.done():
+                _idle_flush_task.cancel()
+            _idle_flush_task = asyncio.ensure_future(_idle_flush())
 
-        def _cancel_text_flush() -> None:
-            """Cancel any pending text flush timer."""
-            nonlocal _text_flush_task
-            if _text_flush_task and not _text_flush_task.done():
-                _text_flush_task.cancel()
-                _text_flush_task = None
+        def _cancel_idle_flush() -> None:
+            """Cancel the idle flush timer (stream ended or flushed normally)."""
+            nonlocal _idle_flush_task
+            if _idle_flush_task and not _idle_flush_task.done():
+                _idle_flush_task.cancel()
+                _idle_flush_task = None
 
         async def _flush_activities() -> None:
             """Post accumulated tool activities as a single combined message.
@@ -665,7 +672,7 @@ async def _process_message(
                     show_activities = _should_show("tool_activity", config.verbosity)
 
                     if show_activities and activities and full_text:
-                        _cancel_text_flush()
+                        _cancel_idle_flush()
                         await _flush_activities()
                         for chunk in _split_message(_markdown_to_mrkdwn(full_text)):
                             r = await queue.post_message(channel, thread_ts, chunk)
@@ -746,12 +753,9 @@ async def _process_message(
                     chunk = event_data.text
                     if chunk:
                         full_text += chunk
-                        # Start/reset the timed flush so text gets posted
-                        # even if the SDK blocks for a long time.
-                        _schedule_text_flush()
 
                 elif event_data.type == "result":
-                    _cancel_text_flush()
+                    _cancel_idle_flush()
                     await _flush_activities()
                     first_activity_posted = False
                     result_event = event_data
@@ -1017,8 +1021,16 @@ async def _process_message(
                 else:
                     logger.debug(f"Event type={event_data.type} subtype={event_data.subtype}")
 
+                # (Re)start the idle flush timer if anything is pending.
+                # If the SDK delivers the next event quickly, the timer resets.
+                # If the SDK blocks (e.g. writing a huge file), the timer fires
+                # and posts whatever has accumulated so the user isn't staring
+                # at silence.
+                if full_text or pending_activities:
+                    _schedule_idle_flush()
+
             # Handle interrupted stream — skip normal completion flow
-            _cancel_text_flush()
+            _cancel_idle_flush()
             await _flush_activities()
             if session.was_interrupted:
                 if session.interrupt_source == "new_message":
@@ -1379,7 +1391,7 @@ async def _process_message(
                     await _add_thread_reaction(client, channel, session_info, "white_check_mark")
 
         except Exception as exc:
-            _cancel_text_flush()
+            _cancel_idle_flush()
             exc_msg = str(exc)
 
             # SDK buffer overflow — should be rare now that we set
