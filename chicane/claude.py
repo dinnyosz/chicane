@@ -4,6 +4,15 @@ Uses the ``claude-agent-sdk`` Python package (``ClaudeSDKClient``) to maintain
 a persistent Claude Code session per Slack thread.  Each call to ``stream()``
 sends a new user message into the *same* running session, enabling inter-turn
 messaging and interruption.
+
+Streaming input mode
+--------------------
+Messages are delivered via an ``asyncio.Queue`` feeding an async generator
+passed to ``client.connect(prompt=generator)``.  The SDK runs the generator
+as a concurrent background task, picking up new messages *between* agentic
+turns — exactly like interactive Claude Code handles queued user input.
+This means a user's follow-up sent mid-stream arrives at the next turn
+boundary rather than waiting until the entire stream completes.
 """
 
 import asyncio
@@ -12,7 +21,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -276,9 +285,11 @@ class ClaudeEvent:
 class ClaudeSession:
     """Manages a persistent Claude Agent SDK session for a single conversation.
 
-    Unlike the old subprocess-per-message approach, this keeps the SDK client
-    alive across multiple ``stream()`` calls.  Each call sends a new user
-    message into the running session, enabling inter-turn messaging.
+    Uses the SDK's **streaming input mode**: an ``asyncio.Queue`` feeds an
+    async generator that is passed to ``client.query()`` once.  Subsequent
+    messages are pushed into the queue and the SDK picks them up between
+    agentic turns — exactly like interactive Claude Code handles queued
+    user input.
     """
 
     def __init__(
@@ -309,6 +320,26 @@ class ClaudeSession:
         self._is_streaming = False
         self._interrupted = False
         self._interrupt_source: str | None = None  # "reaction" or "new_message"
+        # Streaming input queue — messages pushed here are yielded by
+        # _message_generator() and picked up by the SDK between turns.
+        self._message_queue: asyncio.Queue[str | None] = asyncio.Queue()
+        self._generator_started = False
+
+    async def _message_generator(self) -> AsyncIterator[dict[str, Any]]:
+        """Async generator that feeds the SDK's streaming input.
+
+        Blocks on ``_message_queue.get()`` and yields each message in the
+        format expected by the SDK transport.  A ``None`` sentinel stops
+        the generator (used during ``disconnect()``).
+        """
+        while True:
+            prompt = await self._message_queue.get()
+            if prompt is None:  # sentinel — time to shut down
+                return
+            yield {
+                "type": "user",
+                "message": {"role": "user", "content": prompt},
+            }
 
     def _build_options(self) -> ClaudeAgentOptions:
         """Build SDK options from session config."""
@@ -358,7 +389,7 @@ class ClaudeSession:
             opts = self._build_options()
             client = ClaudeSDKClient(options=opts)
             try:
-                await client.connect()
+                await client.connect(prompt=self._message_generator())
             except (TimeoutError, asyncio.TimeoutError) as exc:
                 last_exc = exc
                 self._client = None
@@ -389,6 +420,7 @@ class ClaudeSession:
 
             self._client = client
             self._connected = True
+            self._generator_started = True
             if attempt > 0:
                 logger.info(
                     "SDK client connected after %d retries (session_id=%s, cwd=%s)",
@@ -433,27 +465,37 @@ class ClaudeSession:
             await self._client.interrupt()
             logger.info("Interrupted active stream (source=%s)", source)
 
+    async def queue_message(self, prompt: str) -> None:
+        """Queue a message for between-turn delivery during active streaming.
+
+        The SDK picks up queued messages at the next turn boundary — after
+        the current tool execution finishes but before the next one starts.
+        """
+        await self._message_queue.put(prompt)
+        logger.info("Queued between-turn message (%d chars)", len(prompt))
+
     async def stream(self, prompt: str) -> AsyncIterator[ClaudeEvent]:
         """Send a message and yield streaming events.
 
-        On the first call this connects the SDK client. On subsequent calls
-        it reuses the same client, sending the new prompt into the existing
-        conversation.
+        On the first call this connects the SDK client.  On subsequent calls
+        it reuses the same client, pushing the new prompt into the streaming
+        input queue so the SDK picks it up between turns.
         """
         client = await self._ensure_connected()
         self._is_streaming = True
         self._interrupted = False
         self._interrupt_source = None
 
+        # Push prompt into the generator — the SDK picks it up between turns
+        await self._message_queue.put(prompt)
+
         event_count = 0
         try:
-            await client.query(prompt)
-
             # Manual iteration so we can catch MessageParseError per-message
             # and continue the stream.  The SDK raises this for message types
             # it doesn't recognise yet (e.g. rate_limit_event) which would
             # otherwise kill the entire stream.
-            response_iter = client.receive_response().__aiter__()
+            response_iter = client.receive_messages().__aiter__()
             while True:
                 try:
                     msg = await response_iter.__anext__()
@@ -474,6 +516,16 @@ class ClaudeSession:
                     logger.info(f"Session started: {self.session_id}")
 
                 yield event
+
+                # Stop at ResultMessage — like receive_response() does,
+                # but only when no queued messages are waiting.  If the
+                # user pushed a follow-up via queue_message(), the SDK
+                # will deliver it as the next turn and we keep iterating.
+                if isinstance(msg, ResultMessage):
+                    if self._message_queue.empty():
+                        break
+                    # More messages queued — continue to pick up the next turn
+                    logger.info("Result received but queue has pending messages; continuing")
         finally:
             self._is_streaming = False
             if event_count == 0:
@@ -492,6 +544,9 @@ class ClaudeSession:
     async def disconnect(self) -> None:
         """Disconnect the SDK client.
 
+        Sends a sentinel to stop the streaming input generator before
+        tearing down the SDK connection.
+
         The SDK uses anyio task groups internally.  When ``disconnect()``
         is called from a *different* asyncio task than the one that created
         the connection (e.g. during shutdown), anyio raises
@@ -499,6 +554,9 @@ class ClaudeSession:
         …")``.  This is harmless — the subprocess is cleaned up when the
         event loop exits — so we suppress it silently.
         """
+        if self._generator_started:
+            await self._message_queue.put(None)  # stop the generator
+            self._generator_started = False
         if self._client:
             try:
                 await self._client.disconnect()
