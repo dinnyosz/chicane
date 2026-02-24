@@ -21,12 +21,13 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    HookMatcher,
     ResultMessage,
     SystemMessage,
     TextBlock,
@@ -36,8 +37,55 @@ from claude_agent_sdk import (
     UserMessage,
 )
 from claude_agent_sdk._errors import MessageParseError
+from claude_agent_sdk.types import (
+    PermissionResultAllow,
+    PermissionResultDeny,
+    ToolPermissionContext,
+)
 
 logger = logging.getLogger(__name__)
+
+# Tools that need special handling in headless/Slack mode.
+# EnterPlanMode and ExitPlanMode are auto-approved via PreToolUse hook.
+# AskUserQuestion is routed through canUseTool to present questions in Slack.
+_PLAN_MODE_TOOLS = frozenset({"EnterPlanMode", "ExitPlanMode"})
+
+
+async def _auto_approve_plan_mode(input_data: dict, tool_use_id: str | None, context) -> dict:
+    """PreToolUse hook that auto-approves plan mode tools.
+
+    In headless/Slack mode there's no terminal UI to click approve, so
+    EnterPlanMode and ExitPlanMode must be allowed programmatically.
+    """
+    tool_name = input_data.get("tool_name", "")
+    if tool_name in _PLAN_MODE_TOOLS:
+        logger.debug("Auto-approving %s via PreToolUse hook", tool_name)
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": input_data["hook_event_name"],
+                "permissionDecision": "allow",
+                "permissionDecisionReason": f"{tool_name} auto-approved in Slack mode",
+            }
+        }
+    return {}
+
+
+async def _dummy_hook(input_data: dict, tool_use_id: str | None, context) -> dict:
+    """No-op PreToolUse hook required by the Python SDK.
+
+    The SDK needs at least one catch-all PreToolUse hook that returns
+    ``{"continue_": True}`` to keep the stream open when ``can_use_tool``
+    is configured.  Without this, the stream closes before the permission
+    callback can be invoked.
+    """
+    return {"continue_": True}
+
+
+# Type alias for the async callback that posts AskUserQuestion to Slack
+# and returns the user's answers.
+# Signature: (questions: list[dict]) -> dict[str, str]  (question_text -> answer)
+AskUserCallback = Callable[[list[dict]], Awaitable[dict[str, str]]]
+
 
 # SDK message type → ClaudeEvent type string
 _MSG_TYPE_MAP = {
@@ -304,6 +352,7 @@ class ClaudeSession:
         setting_sources: list[str] | None = None,
         max_turns: int | None = None,
         max_budget_usd: float | None = None,
+        ask_user_callback: AskUserCallback | None = None,
     ):
         self.cwd = cwd or Path.cwd()
         self.session_id = session_id
@@ -315,6 +364,7 @@ class ClaudeSession:
         self.setting_sources = setting_sources or ["user", "project", "local"]
         self.max_turns = max_turns
         self.max_budget_usd = max_budget_usd
+        self._ask_user_callback = ask_user_callback
         self._client: ClaudeSDKClient | None = None
         self._connected = False
         self._is_streaming = False
@@ -324,6 +374,10 @@ class ClaudeSession:
         # _message_generator() and picked up by the SDK between turns.
         self._message_queue: asyncio.Queue[str | None] = asyncio.Queue()
         self._generator_started = False
+        # Count of between-turn messages queued via queue_message() during
+        # an active stream.  Checked at ResultMessage to decide whether to
+        # continue iterating for the next turn.
+        self._between_turn_pending = 0
 
     async def _message_generator(self) -> AsyncIterator[dict[str, Any]]:
         """Async generator that feeds the SDK's streaming input.
@@ -370,6 +424,51 @@ class ClaudeSession:
         # already have it, so resending wastes tokens.
         if self.system_prompt and not self.session_id:
             opts.system_prompt = self.system_prompt
+
+        # --- Headless hooks & permission handling ---
+        # Auto-approve EnterPlanMode/ExitPlanMode (no terminal UI to click).
+        # The dummy hook is required by the Python SDK to keep the stream
+        # open when can_use_tool is set (see SDK docs).
+        hooks: dict[str, list] = {
+            "PreToolUse": [
+                HookMatcher(
+                    matcher="EnterPlanMode|ExitPlanMode",
+                    hooks=[_auto_approve_plan_mode],
+                ),
+                HookMatcher(matcher=None, hooks=[_dummy_hook]),
+            ],
+        }
+        opts.hooks = hooks
+
+        # Route AskUserQuestion through canUseTool so we can present
+        # questions in Slack and wait for the user's reply.
+        if self._ask_user_callback:
+            callback = self._ask_user_callback
+
+            async def _can_use_tool(
+                tool_name: str,
+                input_data: dict,
+                context: ToolPermissionContext,
+            ) -> PermissionResultAllow | PermissionResultDeny:
+                if tool_name == "AskUserQuestion":
+                    questions = input_data.get("questions", [])
+                    try:
+                        answers = await callback(questions)
+                    except Exception:
+                        logger.exception("AskUserQuestion callback failed")
+                        return PermissionResultDeny(
+                            message="Failed to collect user answers via Slack."
+                        )
+                    return PermissionResultAllow(
+                        updated_input={
+                            "questions": questions,
+                            "answers": answers,
+                        }
+                    )
+                # Everything else: allow (permission mode handles the rest)
+                return PermissionResultAllow(updated_input=input_data)
+
+            opts.can_use_tool = _can_use_tool
 
         return opts
 
@@ -471,8 +570,10 @@ class ClaudeSession:
         The SDK picks up queued messages at the next turn boundary — after
         the current tool execution finishes but before the next one starts.
         """
+        self._between_turn_pending += 1
         await self._message_queue.put(prompt)
-        logger.info("Queued between-turn message (%d chars)", len(prompt))
+        logger.info("Queued between-turn message (%d chars, %d pending)",
+                     len(prompt), self._between_turn_pending)
 
     async def stream(self, prompt: str) -> AsyncIterator[ClaudeEvent]:
         """Send a message and yield streaming events.
@@ -485,6 +586,7 @@ class ClaudeSession:
         self._is_streaming = True
         self._interrupted = False
         self._interrupt_source = None
+        self._between_turn_pending = 0
 
         # Push prompt into the generator — the SDK picks it up between turns
         await self._message_queue.put(prompt)
@@ -518,14 +620,17 @@ class ClaudeSession:
                 yield event
 
                 # Stop at ResultMessage — like receive_response() does,
-                # but only when no queued messages are waiting.  If the
-                # user pushed a follow-up via queue_message(), the SDK
-                # will deliver it as the next turn and we keep iterating.
+                # but only when no between-turn messages are waiting.
+                # If the user pushed a follow-up via queue_message(),
+                # the SDK will deliver it as the next turn and we keep
+                # iterating.
                 if isinstance(msg, ResultMessage):
-                    if self._message_queue.empty():
+                    if self._between_turn_pending <= 0:
                         break
-                    # More messages queued — continue to pick up the next turn
-                    logger.info("Result received but queue has pending messages; continuing")
+                    # Consume one pending count and continue
+                    self._between_turn_pending -= 1
+                    logger.info("Result received but %d between-turn messages pending; continuing",
+                                self._between_turn_pending)
         finally:
             self._is_streaming = False
             if event_count == 0:

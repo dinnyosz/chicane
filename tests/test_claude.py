@@ -630,6 +630,136 @@ class TestBuildOptions:
         opts = session._build_options()
         assert opts.max_budget_usd is None
 
+    def test_hooks_always_present(self):
+        """_build_options always includes PreToolUse hooks for plan mode."""
+        session = ClaudeSession()
+        opts = session._build_options()
+        assert opts.hooks is not None
+        assert "PreToolUse" in opts.hooks
+        matchers = opts.hooks["PreToolUse"]
+        assert len(matchers) >= 2  # plan mode hook + dummy hook
+
+    def test_hooks_plan_mode_matcher(self):
+        """Plan mode hook targets EnterPlanMode|ExitPlanMode."""
+        session = ClaudeSession()
+        opts = session._build_options()
+        plan_matcher = opts.hooks["PreToolUse"][0]
+        assert plan_matcher.matcher == "EnterPlanMode|ExitPlanMode"
+
+    def test_can_use_tool_set_with_callback(self):
+        """can_use_tool is set when ask_user_callback is provided."""
+        async def fake_callback(questions):
+            return {}
+        session = ClaudeSession(ask_user_callback=fake_callback)
+        opts = session._build_options()
+        assert opts.can_use_tool is not None
+
+    def test_can_use_tool_none_without_callback(self):
+        """can_use_tool is not set when no ask_user_callback is provided."""
+        session = ClaudeSession()
+        opts = session._build_options()
+        assert opts.can_use_tool is None
+
+
+class TestAutoApprovePlanMode:
+    """Tests for the _auto_approve_plan_mode hook."""
+
+    @pytest.mark.asyncio
+    async def test_approves_enter_plan_mode(self):
+        from chicane.claude import _auto_approve_plan_mode
+        result = await _auto_approve_plan_mode(
+            {"hook_event_name": "PreToolUse", "tool_name": "EnterPlanMode", "tool_input": {}},
+            "tu_1", None,
+        )
+        assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+    @pytest.mark.asyncio
+    async def test_approves_exit_plan_mode(self):
+        from chicane.claude import _auto_approve_plan_mode
+        result = await _auto_approve_plan_mode(
+            {"hook_event_name": "PreToolUse", "tool_name": "ExitPlanMode", "tool_input": {}},
+            "tu_2", None,
+        )
+        assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+    @pytest.mark.asyncio
+    async def test_ignores_other_tools(self):
+        from chicane.claude import _auto_approve_plan_mode
+        result = await _auto_approve_plan_mode(
+            {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {}},
+            "tu_3", None,
+        )
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_dummy_hook_returns_continue(self):
+        from chicane.claude import _dummy_hook
+        result = await _dummy_hook(
+            {"hook_event_name": "PreToolUse", "tool_name": "Bash"},
+            "tu_4", None,
+        )
+        assert result == {"continue_": True}
+
+
+class TestCanUseTool:
+    """Tests for the canUseTool callback built by _build_options."""
+
+    @pytest.mark.asyncio
+    async def test_ask_user_question_routes_to_callback(self):
+        """AskUserQuestion triggers the ask_user_callback."""
+        captured_questions = []
+
+        async def fake_callback(questions):
+            captured_questions.extend(questions)
+            return {"What color?": "Blue"}
+
+        session = ClaudeSession(ask_user_callback=fake_callback)
+        opts = session._build_options()
+
+        questions = [{"question": "What color?", "options": [{"label": "Blue"}]}]
+        result = await opts.can_use_tool(
+            "AskUserQuestion",
+            {"questions": questions},
+            None,
+        )
+        assert captured_questions == questions
+        assert result.updated_input["answers"] == {"What color?": "Blue"}
+
+    @pytest.mark.asyncio
+    async def test_ask_user_question_callback_error_returns_deny(self):
+        """If the callback raises, canUseTool returns Deny."""
+        async def failing_callback(questions):
+            raise RuntimeError("Slack timeout")
+
+        session = ClaudeSession(ask_user_callback=failing_callback)
+        opts = session._build_options()
+
+        from claude_agent_sdk.types import PermissionResultDeny
+        result = await opts.can_use_tool(
+            "AskUserQuestion",
+            {"questions": []},
+            None,
+        )
+        assert isinstance(result, PermissionResultDeny)
+
+    @pytest.mark.asyncio
+    async def test_other_tools_auto_allowed(self):
+        """Non-AskUserQuestion tools are auto-allowed."""
+        async def fake_callback(questions):
+            return {}
+
+        session = ClaudeSession(ask_user_callback=fake_callback)
+        opts = session._build_options()
+
+        from claude_agent_sdk.types import PermissionResultAllow
+        result = await opts.can_use_tool(
+            "Bash",
+            {"command": "ls"},
+            None,
+        )
+        assert isinstance(result, PermissionResultAllow)
+        assert result.updated_input == {"command": "ls"}
+
 
 def _mock_sdk_client(messages):
     """Create a mock ClaudeSDKClient that yields the given messages.

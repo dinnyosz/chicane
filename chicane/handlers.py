@@ -139,9 +139,13 @@ _SESSION_ALIAS_RE = re.compile(r"_?\(session:\s*([a-z]+(?:-[a-z]+)+)\)_?")
 _QUIET_TOOLS = frozenset({"Read"})
 
 # Tools that are completely suppressed — no activity notifications, no error
-# messages.  These are interactive tools that always fail in streamed mode
-# (the system prompt says not to use them, but Claude sometimes tries anyway).
+# messages.  These tools are handled internally (plan mode via hooks,
+# AskUserQuestion via canUseTool) and their SDK-level activity is not
+# useful to show in Slack.
 _SILENT_TOOLS = frozenset({"EnterPlanMode", "ExitPlanMode", "AskUserQuestion", "TodoWrite"})
+
+# Timeout for waiting for user's answer to AskUserQuestion (seconds).
+_ASK_USER_TIMEOUT = 300  # 5 minutes
 
 
 
@@ -366,6 +370,133 @@ async def _should_ignore(event: dict, config: Config, client: AsyncWebClient) ->
     return False
 
 
+def _format_question_blocks(questions: list[dict]) -> tuple[str, list[dict]]:
+    """Format AskUserQuestion questions as Slack mrkdwn + blocks.
+
+    Returns (fallback_text, blocks) for chat_postMessage.
+    """
+    lines: list[str] = []
+    for i, q in enumerate(questions, 1):
+        header = q.get("header", f"Q{i}")
+        question_text = q.get("question", "")
+        multi = q.get("multiSelect", False)
+        options = q.get("options", [])
+
+        lines.append(f"*{header}:* {question_text}")
+        if multi:
+            lines.append("_(select multiple — list your choices separated by commas)_")
+        for j, opt in enumerate(options, 1):
+            label = opt.get("label", "")
+            desc = opt.get("description", "")
+            lines.append(f"  {j}. *{label}* — {desc}")
+        lines.append("")
+
+    lines.append(":speech_balloon: _Reply in this thread to answer._")
+    text = "\n".join(lines)
+    blocks = [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": text},
+        }
+    ]
+    return text, blocks
+
+
+def _parse_question_answer(
+    raw_reply: str, questions: list[dict],
+) -> dict[str, str]:
+    """Parse the user's reply text into the answers dict.
+
+    Supports:
+    - Numeric answers ("1" or "1, 3") → mapped to option labels
+    - Free-text answers → used verbatim
+    - Multi-question: lines separated by newlines, one per question
+    """
+    # Split reply into per-question parts.  If there are fewer lines
+    # than questions, the last line answers all remaining questions.
+    parts = [p.strip() for p in raw_reply.strip().split("\n") if p.strip()]
+    answers: dict[str, str] = {}
+
+    for i, q in enumerate(questions):
+        question_text = q.get("question", f"Q{i+1}")
+        options = q.get("options", [])
+        raw = parts[i] if i < len(parts) else parts[-1] if parts else ""
+
+        # Try to parse as numeric option selection(s)
+        try:
+            indices = [int(s.strip()) - 1 for s in raw.split(",")]
+            labels = [
+                options[idx]["label"]
+                for idx in indices
+                if 0 <= idx < len(options)
+            ]
+            if labels:
+                answers[question_text] = ", ".join(labels)
+                continue
+        except (ValueError, IndexError):
+            pass
+
+        # Free-text answer
+        answers[question_text] = raw
+
+    return answers
+
+
+def _make_ask_user_callback(
+    session_info: "SessionInfo",
+    client: AsyncWebClient,
+    channel: str,
+    thread_ts: str,
+    queue: "SlackMessageQueue",
+):
+    """Build an async callback that posts AskUserQuestion to Slack and waits for an answer.
+
+    The returned callback is passed to ClaudeSession as ``ask_user_callback``.
+    When the SDK calls ``canUseTool("AskUserQuestion", ...)``, this callback:
+    1. Formats the questions as a Slack message
+    2. Posts it in the thread
+    3. Creates an asyncio.Future on session_info.pending_question
+    4. Awaits the future (the next message in the thread resolves it)
+    5. Parses the reply and returns the answers dict
+    """
+
+    async def _callback(questions: list[dict]) -> dict[str, str]:
+        text, blocks = _format_question_blocks(questions)
+        await queue.post_message(channel, thread_ts, text, blocks=blocks)
+        # Add speech balloon to indicate we're waiting for user input
+        try:
+            await client.reactions_add(
+                channel=channel, name="speech_balloon",
+                timestamp=session_info.thread_ts,
+            )
+        except Exception:
+            pass
+
+        # Create a future and wait for the user's reply
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[str] = loop.create_future()
+        session_info.pending_question = future
+
+        try:
+            raw_reply = await asyncio.wait_for(future, timeout=_ASK_USER_TIMEOUT)
+        except asyncio.TimeoutError:
+            raise RuntimeError("Timed out waiting for user's answer (5 minutes)")
+        finally:
+            session_info.pending_question = None
+            # Remove speech balloon
+            try:
+                await client.reactions_remove(
+                    channel=channel, name="speech_balloon",
+                    timestamp=session_info.thread_ts,
+                )
+            except Exception:
+                pass
+
+        return _parse_question_answer(raw_reply, questions)
+
+    return _callback
+
+
 async def _process_message(
     event: dict,
     prompt: str,
@@ -379,6 +510,22 @@ async def _process_message(
     channel = event["channel"]
     thread_ts = event.get("thread_ts", event["ts"])
     user = event.get("user", "unknown")
+
+    # AskUserQuestion interception — if Claude is waiting for the user's
+    # answer to a clarifying question, resolve the future with the raw
+    # text and return immediately.  The canUseTool callback in claude.py
+    # will wake up, parse the answer, and feed it back to the SDK.
+    existing = sessions.get(thread_ts)
+    if existing and existing.pending_question and not existing.pending_question.done():
+        answer_text = prompt or event.get("text", "").strip()
+        existing.pending_question.set_result(answer_text)
+        logger.info("Resolved pending AskUserQuestion for thread %s", thread_ts)
+        # Acknowledge receipt
+        try:
+            await client.reactions_add(channel=channel, name="white_check_mark", timestamp=event["ts"])
+        except Exception:
+            pass
+        return
 
     # Check for a handoff session_id embedded in the prompt
     handoff_session_id: str | None = None
@@ -447,6 +594,14 @@ async def _process_message(
         session_id=handoff_session_id,
     )
     session = session_info.session
+
+    # Wire up the AskUserQuestion callback if not already set.
+    # This gives the SDK's canUseTool a way to post questions to Slack
+    # and wait for the user's reply.
+    if session._ask_user_callback is None:
+        session._ask_user_callback = _make_ask_user_callback(
+            session_info, client, channel, thread_ts, queue,
+        )
 
     # On reconnect (new SessionInfo for an existing thread), sync our
     # in-memory reaction set from Slack so _remove_thread_reaction can
@@ -752,6 +907,18 @@ async def _process_message(
                     if _has_question(event_data):
                         await _add_thread_reaction(client, channel, session_info, "speech_balloon")
 
+                    # Brief notifications for interactive tools (plan mode, etc.)
+                    for block in event_data.raw.get("message", {}).get("content", []):
+                        if block.get("type") != "tool_use":
+                            continue
+                        tool_name = block.get("name", "")
+                        if tool_name == "EnterPlanMode":
+                            await queue.post_message(
+                                channel, thread_ts, ":clipboard: _Entering plan mode_",
+                            )
+                        elif tool_name == "ExitPlanMode":
+                            pass  # shown after tool result with plan path
+
                     # Detect TodoWrite — contextual updates instead of full checklist
                     for block in (event_data.raw.get("message", {}).get("content", [])):
                         if block.get("type") == "tool_use" and block.get("name") == "TodoWrite":
@@ -834,12 +1001,35 @@ async def _process_message(
                                 attachments=[{"color": "danger"}],
                             )
 
+                    # Brief notifications for interactive tool results
+                    for tool_use_id, result_text in event_data.tool_results:
+                        tool_name = tool_id_to_name.get(tool_use_id, "")
+                        if tool_name == "ExitPlanMode":
+                            # Extract plan file path from the result
+                            plan_path = ""
+                            for line in result_text.splitlines():
+                                if "plan" in line.lower() and ("/" in line or "\\" in line):
+                                    m = re.search(r'(/\S+\.md)', line)
+                                    if m:
+                                        plan_path = m.group(1)
+                                        break
+                            if plan_path:
+                                await queue.post_message(
+                                    channel, thread_ts,
+                                    f":white_check_mark: _Exited plan mode — plan saved to `{plan_path}`_",
+                                )
+                            else:
+                                await queue.post_message(
+                                    channel, thread_ts,
+                                    ":white_check_mark: _Exited plan mode_",
+                                )
+
                     # Show tool outputs in verbose mode (skip noisy tools
                     # and tools already shown as commit/test cards)
                     if _should_show("tool_result", config.verbosity):
                         for tool_use_id, result_text in event_data.tool_results:
                             tool_name = tool_id_to_name.get(tool_use_id, "")
-                            if tool_name in _QUIET_TOOLS:
+                            if tool_name in _QUIET_TOOLS or tool_name in _SILENT_TOOLS:
                                 continue
                             if tool_use_id in shown_commit_tool_ids:
                                 continue
@@ -1254,7 +1444,7 @@ async def _process_message(
                             if _should_show("tool_result", config.verbosity):
                                 for tool_use_id, result_text_out in event_data.tool_results:
                                     tool_name = tool_id_to_name.get(tool_use_id, "")
-                                    if tool_name in _QUIET_TOOLS:
+                                    if tool_name in _QUIET_TOOLS or tool_name in _SILENT_TOOLS:
                                         continue
                                     if tool_use_id in shown_commit_tool_ids:
                                         continue

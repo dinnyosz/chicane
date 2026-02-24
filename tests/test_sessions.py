@@ -217,13 +217,13 @@ class TestSessionStore:
         assert "open a terminal" in prompt.lower()
         assert "ONLY interact via Slack" in prompt
 
-    def test_system_prompt_forbids_interactive_tools(self, store, config):
-        """System prompt must tell Claude not to use blocking interactive tools."""
+    def test_system_prompt_mentions_interactive_tools(self, store, config):
+        """System prompt must mention interactive tools and how they're handled."""
         info = store.get_or_create("thread-1", config)
         prompt = info.session.system_prompt
         assert "AskUserQuestion" in prompt
         assert "streamed output mode" in prompt.lower()
-        assert "will fail" in prompt.lower()
+        assert "supported" in prompt.lower()
 
     @pytest.mark.asyncio
     async def test_shutdown_clears_sessions(self, store, config):

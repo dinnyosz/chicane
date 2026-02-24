@@ -60,7 +60,9 @@ INTERACTION:
 - The user is remote and can ONLY interact via Slack. Never suggest they open \
 a terminal, run commands, or modify files locally.
 - You are in streamed output mode. Interactive tools (AskUserQuestion, \
-EnterPlanMode, ExitPlanMode) will fail. Ask questions via normal messages.
+EnterPlanMode, ExitPlanMode) are supported — they are handled automatically \
+via SDK hooks. AskUserQuestion posts the question to Slack and waits for the \
+user's reply in the thread.
 - Just do the work. Don't ask for permission — the message IS the request. \
 Only ask if truly ambiguous.
 
@@ -118,6 +120,12 @@ class SessionInfo:
     # Previous TodoWrite state for contextual diff — avoids reprinting the
     # full checklist on every update.
     todo_snapshot: list[dict] | None = None
+
+    # AskUserQuestion support — when Claude asks a clarifying question via
+    # the SDK's AskUserQuestion tool, the canUseTool callback posts the
+    # question to Slack and sets this future.  The next user message in
+    # the thread resolves it (instead of being sent to Claude directly).
+    pending_question: asyncio.Future | None = field(default=None, repr=False)
 
     def touch(self) -> None:
         self.last_used = datetime.now()

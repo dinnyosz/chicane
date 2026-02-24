@@ -132,6 +132,7 @@ def mock_session_info(mock_session, thread_ts="1000.0"):
     mock_session.interrupt_source = None
     mock_session.interrupt = AsyncMock()
     mock_session.disconnect = AsyncMock()
+    mock_session._ask_user_callback = None
     info = MagicMock()
     info.session = mock_session
     info.lock = asyncio.Lock()
@@ -145,6 +146,7 @@ def mock_session_info(mock_session, thread_ts="1000.0"):
     info.empty_continue_count = 0
     info.todo_snapshot = None
     info.pending_messages = deque()
+    info.pending_question = None
     return info
 
 
