@@ -149,8 +149,8 @@ class TestFormatTodoUpdate:
         assert "Remaining:" in result
         assert "• B" in result
         assert "• C" in result
-        # Done is last, single item → inline
-        assert result.endswith("Done: A")
+        # No Done section — redundant with the checkmark line
+        assert "Done:" not in result
 
     def test_task_started_only(self):
         previous = [_todo("A", "pending"), _todo("B", "pending")]
@@ -198,8 +198,8 @@ class TestFormatTodoUpdate:
         result = _format_todo_update(todos, todos)
         assert ":clipboard: Tasks (0/2)" in result
 
-    def test_done_line_shows_completed_tasks(self):
-        """The 'Done:' line should list all completed tasks as bullets."""
+    def test_no_done_section(self):
+        """Done section is never shown — checkmark lines are sufficient."""
         previous = [
             _todo("A", "completed"),
             _todo("B", "in_progress"),
@@ -211,17 +211,10 @@ class TestFormatTodoUpdate:
             _todo("C", "in_progress"),
         ]
         result = _format_todo_update(previous, current)
-        # 2 done → bullets
-        assert "Done:\n• A\n• B" in result
-        # 1 remaining → inline
-        assert "Remaining: C" in result
-
-    def test_done_line_absent_when_nothing_completed(self):
-        """No 'Done:' line when nothing is completed yet."""
-        previous = [_todo("A", "pending"), _todo("B", "pending")]
-        current = [_todo("A", "in_progress"), _todo("B", "pending")]
-        result = _format_todo_update(previous, current)
         assert "Done:" not in result
+        # But the newly completed task is still announced
+        assert ":white_check_mark: B finished" in result
+        assert "Remaining: C" in result
 
     def test_single_task_remaining(self):
         """Single-task list: 'Remaining' is inline for 1 item."""
@@ -231,19 +224,21 @@ class TestFormatTodoUpdate:
         assert ":arrows_counterclockwise: A in progress (1/1)" in result
         assert "Remaining: A" in result
 
-    def test_done_always_last(self):
-        """Done section always appears after Remaining."""
+    def test_no_done_section_even_with_multiple_completed(self):
+        """Done section never appears, even with many completed tasks."""
         previous = [
-            _todo("A", "in_progress"),
-            _todo("B", "pending"),
-            _todo("C", "pending"),
+            _todo("A", "completed"),
+            _todo("B", "completed"),
+            _todo("C", "in_progress"),
+            _todo("D", "pending"),
         ]
         current = [
             _todo("A", "completed"),
-            _todo("B", "in_progress"),
-            _todo("C", "pending"),
+            _todo("B", "completed"),
+            _todo("C", "completed"),
+            _todo("D", "in_progress"),
         ]
         result = _format_todo_update(previous, current)
-        remaining_pos = result.index("Remaining:")
-        done_pos = result.index("Done:")
-        assert done_pos > remaining_pos
+        assert "Done:" not in result
+        assert ":white_check_mark: C finished" in result
+        assert ":arrows_counterclockwise: D in progress (4/4)" in result

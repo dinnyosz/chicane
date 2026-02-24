@@ -152,13 +152,13 @@ _ASK_USER_TIMEOUT = 300  # 5 minutes
 def _should_show(event_type: str, verbosity: str) -> bool:
     """Check whether an event type should be displayed at the given verbosity level.
 
-    Event types: tool_activity, tool_error, tool_result, compact_boundary.
+    Event types: tool_activity, tool_error, tool_result, compact_boundary, pre_compact.
     Text, completion summary, permission denials, and empty warnings are always shown.
     """
     if verbosity == "verbose":
         return True
     if verbosity == "normal":
-        return event_type in ("tool_activity", "tool_error")
+        return event_type in ("tool_activity", "tool_error", "pre_compact")
     # minimal
     return False
 
@@ -370,28 +370,27 @@ async def _should_ignore(event: dict, config: Config, client: AsyncWebClient) ->
     return False
 
 
-def _format_question_blocks(questions: list[dict]) -> tuple[str, list[dict]]:
-    """Format AskUserQuestion questions as Slack mrkdwn + blocks.
+def _format_single_question(q: dict, index: int = 1, total: int = 1) -> tuple[str, list[dict]]:
+    """Format a single AskUserQuestion question as Slack mrkdwn + blocks.
 
     Returns (fallback_text, blocks) for chat_postMessage.
     """
+    header = q.get("header", f"Q{index}")
+    question_text = q.get("question", "")
+    multi = q.get("multiSelect", False)
+    options = q.get("options", [])
+
     lines: list[str] = []
-    for i, q in enumerate(questions, 1):
-        header = q.get("header", f"Q{i}")
-        question_text = q.get("question", "")
-        multi = q.get("multiSelect", False)
-        options = q.get("options", [])
-
-        lines.append(f"*{header}:* {question_text}")
-        if multi:
-            lines.append("_(select multiple — list your choices separated by commas)_")
-        for j, opt in enumerate(options, 1):
-            label = opt.get("label", "")
-            desc = opt.get("description", "")
-            lines.append(f"  {j}. *{label}* — {desc}")
-        lines.append("")
-
-    lines.append(":speech_balloon: _Reply in this thread to answer._")
+    prefix = f"({index}/{total}) " if total > 1 else ""
+    lines.append(f":speech_balloon: {prefix}*{header}:* {question_text}")
+    if multi:
+        lines.append("_(select multiple — list your choices separated by commas)_")
+    for j, opt in enumerate(options, 1):
+        label = opt.get("label", "")
+        desc = opt.get("description", "")
+        lines.append(f"  {j}. *{label}* — {desc}")
+    lines.append("")
+    lines.append("_Reply in this thread to answer._")
     text = "\n".join(lines)
     blocks = [
         {
@@ -402,42 +401,63 @@ def _format_question_blocks(questions: list[dict]) -> tuple[str, list[dict]]:
     return text, blocks
 
 
+def _parse_single_answer(raw_reply: str, question: dict) -> str:
+    """Parse a single user reply into an answer string.
+
+    Supports:
+    - Numeric answers ("1" or "1, 3") → mapped to option labels
+    - Free-text answers → used verbatim
+    """
+    options = question.get("options", [])
+    raw = raw_reply.strip()
+
+    # Try to parse as numeric option selection(s)
+    try:
+        indices = [int(s.strip()) - 1 for s in raw.split(",")]
+        labels = [
+            options[idx]["label"]
+            for idx in indices
+            if 0 <= idx < len(options)
+        ]
+        if labels:
+            return ", ".join(labels)
+    except (ValueError, IndexError):
+        pass
+
+    # Free-text answer
+    return raw
+
+
+# Keep for backward compat / tests
+def _format_question_blocks(questions: list[dict]) -> tuple[str, list[dict]]:
+    """Format all AskUserQuestion questions as a single Slack message.
+
+    Legacy helper — the callback now posts one question at a time.
+    """
+    lines: list[str] = []
+    for i, q in enumerate(questions, 1):
+        text, _ = _format_single_question(q, i, len(questions))
+        lines.append(text)
+    full = "\n".join(lines)
+    blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": full}}]
+    return full, blocks
+
+
 def _parse_question_answer(
     raw_reply: str, questions: list[dict],
 ) -> dict[str, str]:
     """Parse the user's reply text into the answers dict.
 
-    Supports:
-    - Numeric answers ("1" or "1, 3") → mapped to option labels
-    - Free-text answers → used verbatim
-    - Multi-question: lines separated by newlines, one per question
+    Legacy helper — the callback now collects answers one at a time.
+    Kept for backward compat / tests.
     """
-    # Split reply into per-question parts.  If there are fewer lines
-    # than questions, the last line answers all remaining questions.
     parts = [p.strip() for p in raw_reply.strip().split("\n") if p.strip()]
     answers: dict[str, str] = {}
 
     for i, q in enumerate(questions):
         question_text = q.get("question", f"Q{i+1}")
-        options = q.get("options", [])
         raw = parts[i] if i < len(parts) else parts[-1] if parts else ""
-
-        # Try to parse as numeric option selection(s)
-        try:
-            indices = [int(s.strip()) - 1 for s in raw.split(",")]
-            labels = [
-                options[idx]["label"]
-                for idx in indices
-                if 0 <= idx < len(options)
-            ]
-            if labels:
-                answers[question_text] = ", ".join(labels)
-                continue
-        except (ValueError, IndexError):
-            pass
-
-        # Free-text answer
-        answers[question_text] = raw
+        answers[question_text] = _parse_single_answer(raw, q)
 
     return answers
 
@@ -449,20 +469,31 @@ def _make_ask_user_callback(
     thread_ts: str,
     queue: "SlackMessageQueue",
 ):
-    """Build an async callback that posts AskUserQuestion to Slack and waits for an answer.
+    """Build an async callback that posts AskUserQuestion to Slack and waits for answers.
 
     The returned callback is passed to ClaudeSession as ``ask_user_callback``.
-    When the SDK calls ``canUseTool("AskUserQuestion", ...)``, this callback:
-    1. Formats the questions as a Slack message
-    2. Posts it in the thread
-    3. Creates an asyncio.Future on session_info.pending_question
-    4. Awaits the future (the next message in the thread resolves it)
-    5. Parses the reply and returns the answers dict
+    When the SDK calls ``canUseTool("AskUserQuestion", ...)``, this callback
+    posts each question *one at a time*, waiting for the user's reply to each
+    before posting the next.  This is more natural in Slack than dumping all
+    questions at once and expecting a multi-line reply.
     """
 
+    async def _wait_for_reply() -> str:
+        """Create a future on session_info and await the user's reply."""
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[str] = loop.create_future()
+        session_info.pending_question = future
+        try:
+            return await asyncio.wait_for(future, timeout=_ASK_USER_TIMEOUT)
+        except asyncio.TimeoutError:
+            raise RuntimeError("Timed out waiting for user's answer (5 minutes)")
+        finally:
+            session_info.pending_question = None
+
     async def _callback(questions: list[dict]) -> dict[str, str]:
-        text, blocks = _format_question_blocks(questions)
-        await queue.post_message(channel, thread_ts, text, blocks=blocks)
+        answers: dict[str, str] = {}
+        total = len(questions)
+
         # Add speech balloon to indicate we're waiting for user input
         try:
             await client.reactions_add(
@@ -472,17 +503,18 @@ def _make_ask_user_callback(
         except Exception:
             pass
 
-        # Create a future and wait for the user's reply
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[str] = loop.create_future()
-        session_info.pending_question = future
-
         try:
-            raw_reply = await asyncio.wait_for(future, timeout=_ASK_USER_TIMEOUT)
-        except asyncio.TimeoutError:
-            raise RuntimeError("Timed out waiting for user's answer (5 minutes)")
+            for i, q in enumerate(questions, 1):
+                question_text = q.get("question", f"Q{i}")
+
+                # Post this question
+                text, blocks = _format_single_question(q, i, total)
+                await queue.post_message(channel, thread_ts, text, blocks=blocks)
+
+                # Wait for user's reply
+                raw_reply = await _wait_for_reply()
+                answers[question_text] = _parse_single_answer(raw_reply, q)
         finally:
-            session_info.pending_question = None
             # Remove speech balloon
             try:
                 await client.reactions_remove(
@@ -492,7 +524,7 @@ def _make_ask_user_callback(
             except Exception:
                 pass
 
-        return _parse_question_answer(raw_reply, questions)
+        return answers
 
     return _callback
 
@@ -1211,6 +1243,17 @@ async def _process_message(
                         )
                         await _add_thread_reaction(
                             client, channel, session_info, noun_emoji,
+                        )
+
+                elif event_data.type == "system" and event_data.subtype == "pre_compact":
+                    # Fires *before* compaction starts — let the user know
+                    # what's happening so there's no mysterious silence.
+                    await _flush_activities()
+                    first_activity_posted = False
+                    if _should_show("pre_compact", config.verbosity):
+                        await queue.post_message(
+                            channel, thread_ts,
+                            ":brain: Compacting context — this may take a moment…",
                         )
 
                 elif event_data.type == "system" and event_data.subtype == "compact_boundary":
