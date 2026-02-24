@@ -191,6 +191,106 @@ class TestCompactBoundaryNotification:
         assert "automatically compacted" in brain_calls[0].kwargs["text"]
 
 
+class TestPreCompactNotification:
+    """Test that a 'compacting...' message is shown before compaction starts."""
+
+    @pytest.fixture
+    def config(self):
+        return Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            verbosity="normal",
+        )
+
+    @pytest.mark.asyncio
+    async def test_pre_compact_and_boundary_both_shown_at_verbose(self):
+        """At verbose verbosity, both pre_compact and compact_boundary appear in order."""
+        config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            verbosity="verbose",
+        )
+        sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
+
+        async def fake_stream(prompt):
+            yield make_event("assistant", text="Working...")
+            yield make_event("system", subtype="pre_compact", trigger="auto")
+            yield make_event(
+                "system",
+                subtype="compact_boundary",
+                compact_metadata={"trigger": "auto", "pre_tokens": 90000},
+            )
+            yield make_event("assistant", text="Done after compaction.")
+            yield make_event("result", text="Done after compaction.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "13000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "big task", client, config, sessions, queue)
+
+        brain_calls = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":brain:" in c.kwargs.get("text", "")
+        ]
+        # Should have both: pre_compact ("Compacting...") and compact_boundary ("was compacted")
+        assert len(brain_calls) == 2
+        assert "Compacting context" in brain_calls[0].kwargs["text"]
+        assert "compacted" in brain_calls[1].kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_pre_compact_shown_at_normal_verbosity(self, config, sessions, queue):
+        async def fake_stream(prompt):
+            yield make_event("system", subtype="pre_compact", trigger="auto")
+            yield make_event("result", text="done")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "13001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hi", client, config, sessions, queue)
+
+        brain_calls = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":brain:" in c.kwargs.get("text", "")
+        ]
+        assert len(brain_calls) == 1
+        assert "Compacting context" in brain_calls[0].kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_pre_compact_hidden_at_minimal_verbosity(self):
+        config = Config(slack_bot_token="xoxb-test", slack_app_token="xapp-test", verbosity="minimal")
+        sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
+
+        async def fake_stream(prompt):
+            yield make_event("system", subtype="pre_compact", trigger="auto")
+            yield make_event("result", text="done")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "13002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "hi", client, config, sessions, queue)
+
+        brain_calls = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":brain:" in c.kwargs.get("text", "")
+        ]
+        assert len(brain_calls) == 0
+
+
 class TestPermissionDenialNotification:
     """Test that permission denials from result events are surfaced."""
 

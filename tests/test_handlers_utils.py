@@ -799,19 +799,22 @@ class TestShouldShow:
     """Unit tests for the _should_show helper."""
 
     def test_verbose_shows_everything(self):
-        for event_type in ("tool_activity", "tool_error", "tool_result", "compact_boundary"):
+        for event_type in ("tool_activity", "tool_error", "tool_result", "compact_boundary", "pre_compact"):
             assert _should_show(event_type, "verbose") is True
 
     def test_normal_shows_tools_and_errors(self):
         assert _should_show("tool_activity", "normal") is True
         assert _should_show("tool_error", "normal") is True
 
+    def test_normal_shows_pre_compact(self):
+        assert _should_show("pre_compact", "normal") is True
+
     def test_normal_hides_results_and_compact(self):
         assert _should_show("tool_result", "normal") is False
         assert _should_show("compact_boundary", "normal") is False
 
     def test_minimal_hides_everything(self):
-        for event_type in ("tool_activity", "tool_error", "tool_result", "compact_boundary"):
+        for event_type in ("tool_activity", "tool_error", "tool_result", "compact_boundary", "pre_compact"):
             assert _should_show(event_type, "minimal") is False
 
 

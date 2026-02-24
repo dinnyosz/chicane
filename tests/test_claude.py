@@ -10,6 +10,7 @@ from chicane.claude import (
     ClaudeEvent,
     ClaudeSession,
     _content_blocks_to_dicts,
+    _make_pre_compact_hook,
     _sdk_message_to_raw,
 )
 
@@ -659,6 +660,48 @@ class TestBuildOptions:
         session = ClaudeSession()
         opts = session._build_options()
         assert opts.can_use_tool is None
+
+    def test_pre_compact_hook_registered(self):
+        """_build_options always includes a PreCompact hook."""
+        session = ClaudeSession()
+        opts = session._build_options()
+        assert "PreCompact" in opts.hooks
+        matchers = opts.hooks["PreCompact"]
+        assert len(matchers) == 1
+        assert matchers[0].matcher is None  # catch-all
+
+
+class TestPreCompactHook:
+    """Tests for _make_pre_compact_hook."""
+
+    @pytest.mark.asyncio
+    async def test_pushes_synthetic_event(self):
+        queue = asyncio.Queue()
+        hook = _make_pre_compact_hook(queue)
+        result = await hook(
+            {"hook_event_name": "PreCompact", "trigger": "auto", "custom_instructions": None},
+            None,
+            None,
+        )
+        assert result == {}
+        assert not queue.empty()
+        event = queue.get_nowait()
+        assert isinstance(event, ClaudeEvent)
+        assert event.type == "system"
+        assert event.subtype == "pre_compact"
+        assert event.raw["trigger"] == "auto"
+
+    @pytest.mark.asyncio
+    async def test_manual_trigger(self):
+        queue = asyncio.Queue()
+        hook = _make_pre_compact_hook(queue)
+        await hook(
+            {"hook_event_name": "PreCompact", "trigger": "manual", "custom_instructions": None},
+            None,
+            None,
+        )
+        event = queue.get_nowait()
+        assert event.raw["trigger"] == "manual"
 
 
 class TestAutoApprovePlanMode:

@@ -70,6 +70,28 @@ async def _auto_approve_plan_mode(input_data: dict, tool_use_id: str | None, con
     return {}
 
 
+def _make_pre_compact_hook(event_queue: asyncio.Queue):
+    """Create a PreCompact hook that pushes a synthetic event onto *event_queue*.
+
+    The hook fires *before* compaction starts, giving handlers.py a chance to
+    notify the user immediately rather than leaving them staring at silence
+    until the ``compact_boundary`` SystemMessage arrives afterward.
+    """
+
+    async def _pre_compact_hook(input_data: dict, tool_use_id: str | None, context) -> dict:
+        trigger = input_data.get("trigger", "auto")
+        logger.info("PreCompact hook fired (trigger=%s)", trigger)
+        await event_queue.put(
+            ClaudeEvent(
+                type="system",
+                raw={"type": "system", "subtype": "pre_compact", "trigger": trigger},
+            )
+        )
+        return {}
+
+    return _pre_compact_hook
+
+
 async def _dummy_hook(input_data: dict, tool_use_id: str | None, context) -> dict:
     """No-op PreToolUse hook required by the Python SDK.
 
@@ -378,6 +400,9 @@ class ClaudeSession:
         # an active stream.  Checked at ResultMessage to decide whether to
         # continue iterating for the next turn.
         self._between_turn_pending = 0
+        # Queue for synthetic events emitted by hooks (e.g. PreCompact).
+        # The stream() loop drains this between SDK messages.
+        self._synthetic_events: asyncio.Queue[ClaudeEvent] = asyncio.Queue()
 
     async def _message_generator(self) -> AsyncIterator[dict[str, Any]]:
         """Async generator that feeds the SDK's streaming input.
@@ -436,6 +461,12 @@ class ClaudeSession:
                     hooks=[_auto_approve_plan_mode],
                 ),
                 HookMatcher(matcher=None, hooks=[_dummy_hook]),
+            ],
+            "PreCompact": [
+                HookMatcher(
+                    matcher=None,
+                    hooks=[_make_pre_compact_hook(self._synthetic_events)],
+                ),
             ],
         }
         opts.hooks = hooks
@@ -606,6 +637,15 @@ class ClaudeSession:
                 except MessageParseError as exc:
                     logger.warning("SDK MessageParseError (skipped): %s", exc)
                     continue
+
+                # Drain any synthetic events pushed by hooks (e.g. PreCompact)
+                # before yielding the SDK message.  This ensures the
+                # "compacting…" notification reaches Slack *before* the
+                # post-compaction boundary event.
+                while not self._synthetic_events.empty():
+                    synthetic = self._synthetic_events.get_nowait()
+                    event_count += 1
+                    yield synthetic
 
                 event_type = _MSG_TYPE_MAP.get(type(msg), "unknown")
                 raw = _sdk_message_to_raw(msg)
