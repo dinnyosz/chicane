@@ -2,6 +2,7 @@
 
 import asyncio
 import itertools
+from collections import deque
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -143,6 +144,7 @@ def mock_session_info(mock_session, thread_ts="1000.0"):
     info.total_commits = 0
     info.empty_continue_count = 0
     info.todo_snapshot = None
+    info.pending_messages = deque()
     return info
 
 

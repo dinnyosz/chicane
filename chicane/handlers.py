@@ -517,14 +517,28 @@ async def _process_message(
         )
         prompt = (prompt + file_note) if prompt else file_note.lstrip()
 
-    # If another stream is active for this thread, interrupt it so we
-    # can acquire the lock quickly instead of waiting for it to finish.
-    queued = session_info.lock.locked()
+    # If another stream is active for this thread, queue the message
+    # instead of interrupting.  Interrupting injects an ugly SDK
+    # rejection message into the conversation context.  Queued messages
+    # are drained after the active stream completes (see below).
     if session_info.session.is_streaming:
-        logger.info(f"New message in {thread_ts} -- interrupting active stream")
-        await session_info.session.interrupt(source="new_message")
+        logger.info(f"New message in {thread_ts} -- queueing behind active stream")
+        session_info.pending_messages.append(
+            {"event": event, "prompt": prompt, "client": client}
+        )
+        # Swap eyes → speech_balloon to show the message was received & queued
+        try:
+            await client.reactions_remove(channel=channel, name="eyes", timestamp=event["ts"])
+        except Exception:
+            pass
+        try:
+            await client.reactions_add(channel=channel, name="speech_balloon", timestamp=event["ts"])
+        except Exception:
+            pass
+        return
 
     # Show hourglass on thread root while waiting for the lock
+    queued = session_info.lock.locked()
     if queued:
         await _add_thread_reaction(client, channel, session_info, "hourglass")
 
@@ -1038,57 +1052,37 @@ async def _process_message(
                 if full_text or pending_activities:
                     _schedule_idle_flush()
 
-            # Handle interrupted stream — skip normal completion flow
+            # Handle interrupted stream (reaction only — new-message
+            # interrupts no longer happen; those are queued instead).
             _cancel_idle_flush()
             await _flush_activities()
             if session.was_interrupted:
-                if session.interrupt_source == "new_message":
-                    # New message will process next — post partial text, then note
-                    if full_text:
-                        mrkdwn = _markdown_to_mrkdwn(full_text)
-                        for chunk in _split_message(mrkdwn):
-                            await queue.post_message(
-                                channel, thread_ts, chunk,
-                            )
-                    await queue.post_message(
-                        channel, thread_ts,
-                        ":bulb: _Thought added_",
+                # Reaction interrupt — show partial text + stop indicator
+                if full_text:
+                    await _post_markdown_response(
+                        queue, client, channel, thread_ts, full_text,
                     )
-                    try:
-                        await client.reactions_remove(
-                            channel=channel, name="eyes", timestamp=event["ts"]
-                        )
-                    except Exception:
-                        pass
-                    # Thread-root eyes will be re-added by the new message's
-                    # _process_message call, so no action needed here.
-                else:
-                    # Reaction interrupt — show partial text + stop indicator
-                    if full_text:
-                        await _post_markdown_response(
-                            queue, client, channel, thread_ts, full_text,
-                        )
-                    await queue.post_message(
-                        channel, thread_ts,
-                        ":stop_sign: _Interrupted_",
+                await queue.post_message(
+                    channel, thread_ts,
+                    ":stop_sign: _Interrupted_",
+                )
+                # Swap eyes → stop sign reaction on user's message
+                try:
+                    await client.reactions_remove(
+                        channel=channel, name="eyes", timestamp=event["ts"]
                     )
-                    # Swap eyes → stop sign reaction on user's message
-                    try:
-                        await client.reactions_remove(
-                            channel=channel, name="eyes", timestamp=event["ts"]
-                        )
-                        await client.reactions_add(
-                            channel=channel, name="octagonal_sign", timestamp=event["ts"]
-                        )
-                    except Exception:
-                        pass
-                    # Thread-root: swap eyes/speech_balloon → stop sign
-                    # Also clean up pencil2/package from partial streaming
-                    if thread_ts != event["ts"]:
-                        for int_emoji in ("eyes", "speech_balloon",
-                                          "pencil2", "package"):
-                            await _remove_thread_reaction(client, channel, session_info, int_emoji)
-                        await _add_thread_reaction(client, channel, session_info, "octagonal_sign")
+                    await client.reactions_add(
+                        channel=channel, name="octagonal_sign", timestamp=event["ts"]
+                    )
+                except Exception:
+                    pass
+                # Thread-root: swap eyes/speech_balloon → stop sign
+                # Also clean up pencil2/package from partial streaming
+                if thread_ts != event["ts"]:
+                    for int_emoji in ("eyes", "speech_balloon",
+                                      "pencil2", "package"):
+                        await _remove_thread_reaction(client, channel, session_info, int_emoji)
+                    await _add_thread_reaction(client, channel, session_info, "octagonal_sign")
                 return
 
             # Final: send remaining text
@@ -1485,6 +1479,25 @@ async def _process_message(
                                   "pencil2", "package"):
                     await _remove_thread_reaction(client, channel, session_info, err_emoji)
                 await _add_thread_reaction(client, channel, session_info, "x")
+
+    # Drain any messages queued while the stream was active.
+    # We're outside the lock now, so _process_message will re-acquire it
+    # for each queued message — preserving the full streaming flow
+    # (reactions, completion summary, etc.) for each one.
+    while session_info.pending_messages:
+        pending = session_info.pending_messages.popleft()
+        p_event = pending["event"]
+        p_prompt = pending["prompt"]
+        p_client = pending["client"]
+        # Swap speech_balloon → eyes to show we're now processing this message
+        try:
+            await p_client.reactions_remove(
+                channel=p_event["channel"], name="speech_balloon",
+                timestamp=p_event["ts"],
+            )
+        except Exception:
+            pass
+        await _process_message(p_event, p_prompt, p_client, config, sessions, queue)
 
 
 async def _fetch_thread_history(

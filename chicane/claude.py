@@ -420,8 +420,12 @@ class ClaudeSession:
     async def interrupt(self, source: str = "reaction") -> None:
         """Interrupt the current stream (sends interrupt signal via SDK).
 
-        *source* identifies why: ``"reaction"`` (user clicked stop emoji)
-        or ``"new_message"`` (new thread reply arrived).
+        *source* identifies why the stream was interrupted (e.g.
+        ``"reaction"`` when the user clicks the stop emoji).
+
+        Note: new-message interrupts have been replaced by message
+        queueing in handlers.py — messages arriving during an active
+        stream are queued and drained after the stream completes.
         """
         if self._client and self._is_streaming:
             self._interrupted = True

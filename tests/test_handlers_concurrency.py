@@ -1,6 +1,7 @@
 """Tests for concurrent message handling: queue via per-session lock."""
 
 import asyncio
+from collections import deque
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -37,6 +38,7 @@ class TestSessionLock:
         info = MagicMock()
         info.session = mock_session
         info.lock = lock
+        info.pending_messages = deque()
 
         client = mock_client()
 
@@ -81,6 +83,7 @@ class TestSessionLock:
         info = MagicMock()
         info.session = mock_session
         info.lock = lock
+        info.pending_messages = deque()
 
         client = mock_client()
 
@@ -114,6 +117,7 @@ class TestSessionLock:
         info = MagicMock()
         info.session = mock_session
         info.lock = lock
+        info.pending_messages = deque()
 
         client = mock_client()
 
@@ -155,6 +159,7 @@ class TestSessionLock:
         info = MagicMock()
         info.session = mock_session
         info.lock = lock
+        info.pending_messages = deque()
 
         client = mock_client()
 

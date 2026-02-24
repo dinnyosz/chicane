@@ -4,9 +4,11 @@ import asyncio
 import logging
 import shutil
 import tempfile
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from .claude import ClaudeSession
 from .config import Config
@@ -105,6 +107,13 @@ class SessionInfo:
     # Auto-sends "continue" up to 2 times per thread, resets on any
     # proper response (text or tool use).
     empty_continue_count: int = 0
+
+    # Messages queued while a stream is active.  Instead of interrupting
+    # the SDK (which injects an ugly rejection message into the context),
+    # new messages wait here and are drained after the active stream
+    # completes.  Each entry is a dict with ``event``, ``prompt``, and
+    # ``client`` keys.
+    pending_messages: deque[dict[str, Any]] = field(default_factory=deque)
 
     # Previous TodoWrite state for contextual diff — avoids reprinting the
     # full checklist on every update.
