@@ -783,3 +783,93 @@ class TestDiffSnippetUpload:
         # No inline code blocks with diff content
         all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
         assert not any("diff --git" in t for t in all_texts)
+
+
+class TestCommitCardNoDuplicate:
+    """Test that git commit output is not duplicated in verbose mode.
+
+    When a commit card is shown, the raw tool output should be suppressed
+    in the verbose tool_result section to avoid showing the same info twice.
+    """
+
+    @pytest.mark.asyncio
+    async def test_commit_output_not_duplicated_in_verbose_mode(self):
+        """Verbose mode should skip raw tool output when a commit card was posted."""
+        config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            verbosity="verbose",
+        )
+        sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
+
+        commit_output = (
+            "[main 39c1f84] refactor: use bullet lists\n"
+            " 2 files changed, 138 insertions(+), 30 deletions(-)\n"
+        )
+
+        async def fake_stream(prompt):
+            yield make_tool_event(
+                tool_block("Bash", id="tu_commit_1", command='git commit -m "refactor: use bullet lists"')
+            )
+            yield make_user_event_with_results([
+                {"type": "tool_result", "tool_use_id": "tu_commit_1", "is_error": False, "content": commit_output},
+            ])
+            yield make_event("assistant", text="Done — committed `39c1f84`.")
+            yield make_event("result", text="Done — committed `39c1f84`.", num_turns=2, duration_ms=3000)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "60000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "commit it", client, config, sessions, queue)
+
+        all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+
+        # Commit card should be posted exactly once
+        commit_cards = [t for t in all_texts if ":package: *Committed*" in t]
+        assert len(commit_cards) == 1
+        assert "`39c1f84`" in commit_cards[0]
+
+        # Raw git output should NOT appear as a separate snippet or inline code
+        assert not client.files_upload_v2.called, "Raw commit output should not be uploaded as snippet"
+        raw_output_posts = [t for t in all_texts if "[main 39c1f84]" in t]
+        assert len(raw_output_posts) == 0, "Raw commit output should not appear in inline messages"
+
+    @pytest.mark.asyncio
+    async def test_non_commit_bash_still_shown_in_verbose(self):
+        """Other Bash outputs should still appear in verbose mode."""
+        config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            verbosity="verbose",
+        )
+        sessions = SessionStore()
+        queue = SlackMessageQueue(min_interval=0.0)
+
+        async def fake_stream(prompt):
+            yield make_tool_event(
+                tool_block("Bash", id="tu_ls_1", command="ls -la")
+            )
+            yield make_user_event_with_results([
+                {"type": "tool_result", "tool_use_id": "tu_ls_1", "is_error": False, "content": "total 42\ndrwxr-xr-x file.txt"},
+            ])
+            yield make_event("assistant", text="Here are the files.")
+            yield make_event("result", text="Here are the files.", num_turns=1, duration_ms=1000)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "60001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "list files", client, config, sessions, queue)
+
+        # The ls output should still be shown (not suppressed)
+        all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        output_posts = [t for t in all_texts if "total 42" in t or "file.txt" in t]
+        assert len(output_posts) > 0, "Non-commit Bash output should still appear in verbose mode"

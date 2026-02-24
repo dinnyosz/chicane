@@ -541,6 +541,7 @@ async def _process_message(
         git_committed = False  # track whether a git commit happened (since last edit)
         files_changed = False  # track uncommitted file changes
         pending_commit_tool_ids: set[str] = set()  # tool IDs for git commit cards
+        shown_commit_tool_ids: set[str] = set()  # tool IDs already shown as commit cards
         tool_id_to_name: dict[str, str] = {}  # tool_use_id → tool name
         tool_id_to_input: dict[str, dict] = {}  # tool_use_id → tool input
         stale_context_prompt: str | None = None  # set during init if session was stale
@@ -776,12 +777,14 @@ async def _process_message(
                                 pending_commit_tool_ids.discard(tool_use_id)
                                 commit_info = _extract_git_commit_info(result_text_out)
                                 if commit_info:
+                                    shown_commit_tool_ids.add(tool_use_id)
                                     card = _format_commit_card(commit_info)
                                     await queue.post_message(
                                         channel, thread_ts, card,
                                         attachments=[{"color": _GIT_PURPLE}],
                                     )
                     # Test result cards — shown at normal+ verbosity
+                    shown_test_tool_ids: set[str] = set()
                     if _should_show("tool_activity", config.verbosity):
                         for tool_use_id, result_text_out in event_data.tool_results:
                             tool_name = tool_id_to_name.get(tool_use_id, "")
@@ -791,6 +794,7 @@ async def _process_message(
                                 if re.search(r"\b(pytest|npm\s+test|jest|vitest|cargo\s+test|go\s+test|phpunit|mvn\s+test|gradle\s+test|mocha|rspec|prove)\b", cmd):
                                     test_result = _parse_test_results(result_text_out)
                                     if test_result:
+                                        shown_test_tool_ids.add(tool_use_id)
                                         summary, color = _format_test_summary(test_result)
                                         await queue.post_message(
                                             channel, thread_ts, summary,
@@ -816,11 +820,16 @@ async def _process_message(
                                 attachments=[{"color": "danger"}],
                             )
 
-                    # Show tool outputs in verbose mode (skip noisy tools)
+                    # Show tool outputs in verbose mode (skip noisy tools
+                    # and tools already shown as commit/test cards)
                     if _should_show("tool_result", config.verbosity):
                         for tool_use_id, result_text in event_data.tool_results:
                             tool_name = tool_id_to_name.get(tool_use_id, "")
                             if tool_name in _QUIET_TOOLS:
+                                continue
+                            if tool_use_id in shown_commit_tool_ids:
+                                continue
+                            if tool_use_id in shown_test_tool_ids:
                                 continue
                             tool_input = tool_id_to_input.get(tool_use_id, {})
                             fmt = _format_tool_result_text(tool_name, tool_input, result_text)
@@ -1203,6 +1212,7 @@ async def _process_message(
                                         pending_commit_tool_ids.discard(tool_use_id)
                                         commit_info = _extract_git_commit_info(result_text_out)
                                         if commit_info:
+                                            shown_commit_tool_ids.add(tool_use_id)
                                             card = _format_commit_card(commit_info)
                                             await queue.post_message(
                                                 channel, thread_ts, card,
@@ -1228,6 +1238,7 @@ async def _process_message(
                                         attachments=[{"color": "danger"}],
                                     )
                             # Test result cards — shown at normal+ verbosity
+                            retry_shown_test_ids: set[str] = set()
                             if _should_show("tool_activity", config.verbosity):
                                 for tool_use_id, result_text_out in event_data.tool_results:
                                     tool_name = tool_id_to_name.get(tool_use_id, "")
@@ -1237,17 +1248,23 @@ async def _process_message(
                                         if re.search(r"\b(pytest|npm\s+test|jest|vitest|cargo\s+test|go\s+test|phpunit|mvn\s+test|gradle\s+test|mocha|rspec|prove)\b", cmd):
                                             test_result = _parse_test_results(result_text_out)
                                             if test_result:
+                                                retry_shown_test_ids.add(tool_use_id)
                                                 summary, color = _format_test_summary(test_result)
                                                 await queue.post_message(
                                                     channel, thread_ts, summary,
                                                     attachments=[{"color": color}],
                                                 )
 
-                            # Tool outputs in verbose mode
+                            # Tool outputs in verbose mode (skip tools
+                            # already shown as commit/test cards)
                             if _should_show("tool_result", config.verbosity):
                                 for tool_use_id, result_text_out in event_data.tool_results:
                                     tool_name = tool_id_to_name.get(tool_use_id, "")
                                     if tool_name in _QUIET_TOOLS:
+                                        continue
+                                    if tool_use_id in shown_commit_tool_ids:
+                                        continue
+                                    if tool_use_id in retry_shown_test_ids:
                                         continue
                                     tool_input = tool_id_to_input.get(tool_use_id, {})
                                     fmt = _format_tool_result_text(tool_name, tool_input, result_text_out)
