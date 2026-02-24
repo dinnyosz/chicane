@@ -10,21 +10,142 @@ import pytest
 from chicane.config import Config
 from chicane.handlers import (
     _format_question_blocks,
+    _format_single_question,
     _make_ask_user_callback,
     _parse_question_answer,
+    _parse_single_answer,
 )
 from chicane.sessions import SessionInfo, SessionStore
 from chicane.claude import ClaudeSession
 from chicane.slack_queue import SlackMessageQueue
 
+# Save reference before conftest patches asyncio.sleep globally.
+_real_sleep = asyncio.sleep
+
 
 # ---------------------------------------------------------------------------
-# Question formatting
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+async def _wait_for_future(info, prev=None, max_iters=500):
+    """Wait until session_info.pending_question holds a *new*, non-done future.
+
+    Uses the *real* asyncio.sleep (saved before conftest patches it) so that
+    the polling loop actually yields to the event loop.
+    """
+    for _ in range(max_iters):
+        f = info.pending_question
+        if f is not None and f is not prev and not f.done():
+            return f
+        await _real_sleep(0.005)
+    raise AssertionError("Timed out waiting for new pending_question future")
+
+
+def _make_test_client():
+    """Build a mock Slack client with chat_postMessage returning a valid ts."""
+    client = AsyncMock()
+    client.reactions_add = AsyncMock()
+    client.reactions_remove = AsyncMock()
+    client.chat_postMessage = AsyncMock(return_value={"ts": "9999.0"})
+    return client
+
+
+# ---------------------------------------------------------------------------
+# Single-question formatting
+# ---------------------------------------------------------------------------
+
+
+class TestFormatSingleQuestion:
+    """Tests for _format_single_question."""
+
+    def test_basic_question(self):
+        q = {
+            "question": "Which language?",
+            "header": "Language",
+            "options": [
+                {"label": "Python", "description": "Dynamic typed"},
+                {"label": "Rust", "description": "Systems language"},
+            ],
+            "multiSelect": False,
+        }
+        text, blocks = _format_single_question(q, 1, 1)
+        assert "*Language:*" in text
+        assert "Which language?" in text
+        assert "1. *Python*" in text
+        assert "2. *Rust*" in text
+        assert "Reply in this thread" in text
+        assert len(blocks) == 1
+        assert blocks[0]["type"] == "section"
+
+    def test_index_prefix_when_multiple(self):
+        q = {"question": "Q1?", "header": "H", "options": [], "multiSelect": False}
+        text, _ = _format_single_question(q, 2, 3)
+        assert "(2/3)" in text
+
+    def test_no_prefix_when_single(self):
+        q = {"question": "Q?", "header": "H", "options": [], "multiSelect": False}
+        text, _ = _format_single_question(q, 1, 1)
+        assert "(1/1)" not in text
+
+    def test_multi_select_note(self):
+        q = {
+            "question": "Which features?",
+            "header": "Features",
+            "options": [
+                {"label": "Auth", "description": "Authentication"},
+                {"label": "Cache", "description": "Caching layer"},
+            ],
+            "multiSelect": True,
+        }
+        text, _ = _format_single_question(q, 1, 1)
+        assert "select multiple" in text
+
+
+# ---------------------------------------------------------------------------
+# Single-answer parsing
+# ---------------------------------------------------------------------------
+
+
+class TestParseSingleAnswer:
+    """Tests for _parse_single_answer."""
+
+    def test_numeric_single(self):
+        q = {"options": [{"label": "PostgreSQL"}, {"label": "SQLite"}]}
+        assert _parse_single_answer("1", q) == "PostgreSQL"
+
+    def test_numeric_second_option(self):
+        q = {"options": [{"label": "PostgreSQL"}, {"label": "SQLite"}]}
+        assert _parse_single_answer("2", q) == "SQLite"
+
+    def test_numeric_multi_select(self):
+        q = {"options": [{"label": "Auth"}, {"label": "Cache"}, {"label": "Logging"}]}
+        assert _parse_single_answer("1, 3", q) == "Auth, Logging"
+
+    def test_free_text(self):
+        q = {"options": [{"label": "Django"}, {"label": "Flask"}]}
+        assert _parse_single_answer("FastAPI", q) == "FastAPI"
+
+    def test_empty_reply(self):
+        q = {"options": [{"label": "A"}]}
+        assert _parse_single_answer("", q) == ""
+
+    def test_out_of_range_index_falls_through(self):
+        q = {"options": [{"label": "A"}]}
+        assert _parse_single_answer("5", q) == "5"
+
+    def test_no_options(self):
+        q = {"options": []}
+        assert _parse_single_answer("anything", q) == "anything"
+
+
+# ---------------------------------------------------------------------------
+# Legacy question formatting (backward compat)
 # ---------------------------------------------------------------------------
 
 
 class TestFormatQuestionBlocks:
-    """Tests for _format_question_blocks."""
+    """Tests for _format_question_blocks (legacy wrapper)."""
 
     def test_single_question_formatting(self):
         questions = [
@@ -83,12 +204,12 @@ class TestFormatQuestionBlocks:
 
 
 # ---------------------------------------------------------------------------
-# Answer parsing
+# Legacy answer parsing (backward compat)
 # ---------------------------------------------------------------------------
 
 
 class TestParseQuestionAnswer:
-    """Tests for _parse_question_answer."""
+    """Tests for _parse_question_answer (legacy wrapper)."""
 
     def test_numeric_single_answer(self):
         questions = [
@@ -188,7 +309,6 @@ class TestAskUserInterception:
         """When a question is pending, the next message resolves it."""
         from chicane.handlers import _process_message
 
-        # Create session with a pending question future
         info = sessions.get_or_create("1000.0", config, cwd=Path("/tmp"))
         loop = asyncio.get_running_loop()
         future = loop.create_future()
@@ -206,11 +326,9 @@ class TestAskUserInterception:
 
         await _process_message(event, "2", client, config, sessions, queue)
 
-        # The future should be resolved with the user's text
         assert future.done()
         assert future.result() == "2"
 
-        # Should have reacted with checkmark
         client.reactions_add.assert_any_call(
             channel="C123", name="white_check_mark", timestamp="1001.0"
         )
@@ -228,7 +346,6 @@ class TestAskUserInterception:
         client = AsyncMock()
         client.reactions_add = AsyncMock()
         client.conversations_info = AsyncMock(return_value={"channel": {"name": "general"}})
-        # The rest of _process_message will run — mock the session stream
         info.session.stream = AsyncMock(return_value=AsyncMock(__aiter__=lambda s: s, __anext__=AsyncMock(side_effect=StopAsyncIteration)))
 
         event = {
@@ -239,13 +356,10 @@ class TestAskUserInterception:
             "text": "hello",
         }
 
-        # Should NOT set the future — instead proceeds to streaming
-        # (will hit some error in the mock, but the point is it didn't
-        # short-circuit at the pending_question check)
         try:
             await _process_message(event, "hello", client, config, sessions, queue)
         except Exception:
-            pass  # Expected — the stream mock is minimal
+            pass
 
         assert info.pending_question is None
 
@@ -272,11 +386,9 @@ class TestMakeAskUserCallback:
         return SlackMessageQueue(min_interval=0.0)
 
     @pytest.mark.asyncio
-    async def test_callback_posts_and_waits(self, session_info, queue):
-        """Callback posts question, waits for answer, returns parsed result."""
-        client = AsyncMock()
-        client.reactions_add = AsyncMock()
-        client.reactions_remove = AsyncMock()
+    async def test_callback_single_question(self, session_info, queue):
+        """Callback posts one question, waits for answer, returns parsed result."""
+        client = _make_test_client()
         queue.ensure_client(client)
 
         callback = _make_ask_user_callback(
@@ -295,26 +407,146 @@ class TestMakeAskUserCallback:
             }
         ]
 
-        # Simulate user answering in a separate task
-        async def answer_after_delay():
-            await asyncio.sleep(0.05)
-            # The callback should have set pending_question by now
-            assert session_info.pending_question is not None
-            session_info.pending_question.set_result("2")
+        async def answer():
+            f = await _wait_for_future(session_info)
+            f.set_result("2")
 
-        asyncio.create_task(answer_after_delay())
+        asyncio.create_task(answer())
         result = await callback(questions)
 
         assert result == {"Pick a color?": "Blue"}
-        # pending_question should be cleared
         assert session_info.pending_question is None
+
+    @pytest.mark.asyncio
+    async def test_callback_multiple_questions_sequential(self, session_info, queue):
+        """Callback posts each question one at a time, collecting answers."""
+        client = _make_test_client()
+        queue.ensure_client(client)
+
+        callback = _make_ask_user_callback(
+            session_info, client, "C123", "1000.0", queue,
+        )
+
+        questions = [
+            {
+                "question": "Pick a color?",
+                "header": "Color",
+                "options": [
+                    {"label": "Red", "description": "Warm"},
+                    {"label": "Blue", "description": "Cool"},
+                ],
+                "multiSelect": False,
+            },
+            {
+                "question": "Pick a size?",
+                "header": "Size",
+                "options": [
+                    {"label": "Small", "description": "Compact"},
+                    {"label": "Large", "description": "Spacious"},
+                ],
+                "multiSelect": False,
+            },
+        ]
+
+        async def answer():
+            f = await _wait_for_future(session_info)
+            f.set_result("1")  # Red
+            f = await _wait_for_future(session_info, prev=f)
+            f.set_result("2")  # Large
+
+        asyncio.create_task(answer())
+        result = await callback(questions)
+
+        assert result == {"Pick a color?": "Red", "Pick a size?": "Large"}
+        assert session_info.pending_question is None
+
+    @pytest.mark.asyncio
+    async def test_callback_three_questions_mixed_answers(self, session_info, queue):
+        """Three questions: numeric, free-text, and numeric answers."""
+        client = _make_test_client()
+        queue.ensure_client(client)
+
+        callback = _make_ask_user_callback(
+            session_info, client, "C123", "1000.0", queue,
+        )
+
+        questions = [
+            {
+                "question": "Language?",
+                "header": "Lang",
+                "options": [{"label": "Python"}, {"label": "Rust"}],
+                "multiSelect": False,
+            },
+            {
+                "question": "Framework?",
+                "header": "FW",
+                "options": [{"label": "Django"}, {"label": "Flask"}],
+                "multiSelect": False,
+            },
+            {
+                "question": "Database?",
+                "header": "DB",
+                "options": [{"label": "PostgreSQL"}, {"label": "SQLite"}],
+                "multiSelect": False,
+            },
+        ]
+
+        async def answer():
+            f = await _wait_for_future(session_info)
+            f.set_result("1")  # Python
+            f = await _wait_for_future(session_info, prev=f)
+            f.set_result("FastAPI")  # free-text
+            f = await _wait_for_future(session_info, prev=f)
+            f.set_result("2")  # SQLite
+
+        asyncio.create_task(answer())
+        result = await callback(questions)
+
+        assert result == {
+            "Language?": "Python",
+            "Framework?": "FastAPI",
+            "Database?": "SQLite",
+        }
+
+    @pytest.mark.asyncio
+    async def test_callback_posts_with_index_prefix(self, session_info, queue):
+        """When multiple questions, each post includes (i/total) prefix."""
+        client = _make_test_client()
+
+        posted_texts = []
+
+        async def capture_post(channel, thread_ts, text, **kwargs):
+            posted_texts.append(text)
+
+        queue.post_message = capture_post
+        queue.ensure_client(client)
+
+        callback = _make_ask_user_callback(
+            session_info, client, "C123", "1000.0", queue,
+        )
+
+        questions = [
+            {"question": "Q1?", "header": "First", "options": [], "multiSelect": False},
+            {"question": "Q2?", "header": "Second", "options": [], "multiSelect": False},
+        ]
+
+        async def answer():
+            f = await _wait_for_future(session_info)
+            f.set_result("a")
+            f = await _wait_for_future(session_info, prev=f)
+            f.set_result("b")
+
+        asyncio.create_task(answer())
+        await callback(questions)
+
+        assert len(posted_texts) == 2
+        assert "(1/2)" in posted_texts[0]
+        assert "(2/2)" in posted_texts[1]
 
     @pytest.mark.asyncio
     async def test_callback_timeout(self, session_info, queue):
         """Callback raises on timeout."""
-        client = AsyncMock()
-        client.reactions_add = AsyncMock()
-        client.reactions_remove = AsyncMock()
+        client = _make_test_client()
         queue.ensure_client(client)
 
         callback = _make_ask_user_callback(
@@ -323,13 +555,37 @@ class TestMakeAskUserCallback:
 
         questions = [{"question": "Q?", "header": "Q", "options": [], "multiSelect": False}]
 
-        # Patch the timeout to be very short
         with patch("chicane.handlers._ASK_USER_TIMEOUT", 0.05):
             with pytest.raises(RuntimeError, match="Timed out"):
                 await callback(questions)
 
-        # Future should be cleaned up
         assert session_info.pending_question is None
+
+    @pytest.mark.asyncio
+    async def test_callback_adds_and_removes_speech_balloon(self, session_info, queue):
+        """Speech balloon reaction is added at start and removed at end."""
+        client = _make_test_client()
+        queue.ensure_client(client)
+
+        callback = _make_ask_user_callback(
+            session_info, client, "C123", "1000.0", queue,
+        )
+
+        questions = [{"question": "Q?", "header": "Q", "options": [{"label": "A"}], "multiSelect": False}]
+
+        async def answer():
+            f = await _wait_for_future(session_info)
+            f.set_result("1")
+
+        asyncio.create_task(answer())
+        await callback(questions)
+
+        client.reactions_add.assert_any_call(
+            channel="C123", name="speech_balloon", timestamp="1000.0",
+        )
+        client.reactions_remove.assert_any_call(
+            channel="C123", name="speech_balloon", timestamp="1000.0",
+        )
 
 
 # ---------------------------------------------------------------------------
