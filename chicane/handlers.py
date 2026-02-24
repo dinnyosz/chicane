@@ -34,6 +34,12 @@ MARKDOWN_BLOCK_LIMIT = 11_000
 # Maximum tool activities to batch before flushing to Slack.
 _MAX_ACTIVITY_BATCH = 10
 
+# Seconds to wait before auto-flushing accumulated assistant text.
+# When the SDK blocks between events (e.g. writing a huge file), text
+# sits invisible to the user.  This timer ensures it gets posted even
+# if no new event arrives for a while.
+_TEXT_FLUSH_DELAY = 5.0
+
 
 # ---------------------------------------------------------------------------
 # Thread-root reaction helpers — track state in SessionInfo to skip no-ops
@@ -546,6 +552,37 @@ async def _process_message(
         pending_activities: list[ToolActivity] = []
         first_activity_posted = False  # reset per tool sequence
 
+        # Timed text flush — post accumulated text if the SDK blocks
+        # between events (e.g. generating a huge file).
+        _text_flush_task: asyncio.Task | None = None
+
+        async def _timed_text_flush() -> None:
+            """Background coroutine: waits, then flushes ``full_text``."""
+            nonlocal full_text
+            try:
+                await asyncio.sleep(_TEXT_FLUSH_DELAY)
+                if full_text:
+                    for chunk in _split_message(_markdown_to_mrkdwn(full_text)):
+                        r = await queue.post_message(channel, thread_ts, chunk)
+                        sessions.register_bot_message(r.ts, thread_ts)
+                    full_text = ""
+            except asyncio.CancelledError:
+                pass
+
+        def _schedule_text_flush() -> None:
+            """(Re)start the text flush timer."""
+            nonlocal _text_flush_task
+            if _text_flush_task and not _text_flush_task.done():
+                _text_flush_task.cancel()
+            _text_flush_task = asyncio.ensure_future(_timed_text_flush())
+
+        def _cancel_text_flush() -> None:
+            """Cancel any pending text flush timer."""
+            nonlocal _text_flush_task
+            if _text_flush_task and not _text_flush_task.done():
+                _text_flush_task.cancel()
+                _text_flush_task = None
+
         async def _flush_activities() -> None:
             """Post accumulated tool activities as a single combined message.
 
@@ -628,6 +665,7 @@ async def _process_message(
                     show_activities = _should_show("tool_activity", config.verbosity)
 
                     if show_activities and activities and full_text:
+                        _cancel_text_flush()
                         await _flush_activities()
                         for chunk in _split_message(_markdown_to_mrkdwn(full_text)):
                             r = await queue.post_message(channel, thread_ts, chunk)
@@ -708,8 +746,12 @@ async def _process_message(
                     chunk = event_data.text
                     if chunk:
                         full_text += chunk
+                        # Start/reset the timed flush so text gets posted
+                        # even if the SDK blocks for a long time.
+                        _schedule_text_flush()
 
                 elif event_data.type == "result":
+                    _cancel_text_flush()
                     await _flush_activities()
                     first_activity_posted = False
                     result_event = event_data
@@ -976,6 +1018,7 @@ async def _process_message(
                     logger.debug(f"Event type={event_data.type} subtype={event_data.subtype}")
 
             # Handle interrupted stream — skip normal completion flow
+            _cancel_text_flush()
             await _flush_activities()
             if session.was_interrupted:
                 if session.interrupt_source == "new_message":
@@ -1336,6 +1379,7 @@ async def _process_message(
                     await _add_thread_reaction(client, channel, session_info, "white_check_mark")
 
         except Exception as exc:
+            _cancel_text_flush()
             exc_msg = str(exc)
 
             # SDK buffer overflow — should be rare now that we set
@@ -2377,6 +2421,13 @@ def _diff_todos(
     return newly_completed, newly_in_progress, newly_added, remaining
 
 
+def _format_list(label: str, items: list[str]) -> str:
+    """Format a labeled list: inline for 1 item, bullet list for 2+."""
+    if len(items) == 1:
+        return f"{label}: {items[0]}"
+    return f"{label}:\n" + "\n".join(f"• {item}" for item in items)
+
+
 def _format_todo_update(
     previous: list[dict] | None,
     current: list[dict],
@@ -2385,6 +2436,7 @@ def _format_todo_update(
 
     Instead of reprinting the full checklist, shows what just changed
     plus compact lists of what's done and what's remaining.
+    Order: changes → Remaining → Done (always last).
     """
     if not current:
         return ":clipboard: Updating tasks"
@@ -2399,7 +2451,10 @@ def _format_todo_update(
     # First call — no previous snapshot, show initial plan
     if previous is None:
         labels = [t.get("content", "?") for t in current]
-        return f":clipboard: *Tasks* ({total})\n{', '.join(labels)}"
+        header = f":clipboard: *Tasks* ({total})"
+        if len(labels) == 1:
+            return f"{header}\n{labels[0]}"
+        return header + "\n" + "\n".join(f"• {l}" for l in labels)
 
     newly_completed, newly_in_progress, newly_added, remaining = _diff_todos(
         previous, current,
@@ -2408,15 +2463,16 @@ def _format_todo_update(
     lines: list[str] = []
 
     for label in newly_completed:
-        lines.append(f":white_check_mark: {label}")
+        lines.append(f":white_check_mark: {label} finished")
 
     for label in newly_in_progress:
         lines.append(
-            f":arrows_counterclockwise: {label} ({completed_count + 1}/{total})"
+            f":arrows_counterclockwise: {label} in progress"
+            f" ({completed_count + 1}/{total})"
         )
 
     if newly_added:
-        lines.append(f":new: Added: {', '.join(newly_added)}")
+        lines.append(_format_list(":new: Added", newly_added))
 
     # No detectable changes — still show progress
     if not lines:
@@ -2427,23 +2483,23 @@ def _format_todo_update(
         ]
         if in_progress:
             lines.append(
-                f":arrows_counterclockwise: {in_progress[0]} "
-                f"({completed_count + 1}/{total})"
+                f":arrows_counterclockwise: {in_progress[0]} in progress"
+                f" ({completed_count + 1}/{total})"
             )
         else:
             lines.append(f":clipboard: Tasks ({completed_count}/{total})")
 
-    # Show what's already done (if anything)
+    if remaining:
+        lines.append(_format_list("Remaining", remaining))
+
+    # Done is always last
     all_done = [
         t.get("content", "?")
         for t in current
         if t.get("status") == "completed"
     ]
     if all_done:
-        lines.append(f"Done: {', '.join(all_done)}")
-
-    if remaining:
-        lines.append(f"Remaining: {', '.join(remaining)}")
+        lines.append(_format_list("Done", all_done))
 
     return "\n".join(lines)
 

@@ -2,7 +2,7 @@
 
 import pytest
 
-from chicane.handlers import _diff_todos, _format_todo_update
+from chicane.handlers import _diff_todos, _format_list, _format_todo_update
 
 
 def _todo(content: str, status: str = "pending") -> dict:
@@ -88,16 +88,35 @@ class TestDiffTodos:
         assert remaining == ["A", "B"]
 
 
+class TestFormatList:
+    """Test _format_list helper."""
+
+    def test_single_item_inline(self):
+        assert _format_list("Done", ["A"]) == "Done: A"
+
+    def test_multiple_items_bullets(self):
+        assert _format_list("Done", ["A", "B"]) == "Done:\n• A\n• B"
+
+    def test_three_items(self):
+        result = _format_list("Remaining", ["A", "B", "C"])
+        assert result == "Remaining:\n• A\n• B\n• C"
+
+
 class TestFormatTodoUpdate:
     """Test _format_todo_update contextual message formatting."""
 
     def test_empty_current(self):
         assert _format_todo_update(None, []) == ":clipboard: Updating tasks"
 
-    def test_first_call_shows_plan(self):
+    def test_first_call_shows_plan_multiple(self):
         todos = [_todo("A"), _todo("B"), _todo("C")]
         result = _format_todo_update(None, todos)
-        assert result == ":clipboard: *Tasks* (3)\nA, B, C"
+        assert result == ":clipboard: *Tasks* (3)\n• A\n• B\n• C"
+
+    def test_first_call_shows_plan_single(self):
+        todos = [_todo("A")]
+        result = _format_todo_update(None, todos)
+        assert result == ":clipboard: *Tasks* (1)\nA"
 
     def test_all_complete(self):
         previous = [_todo("A", "in_progress")]
@@ -124,20 +143,24 @@ class TestFormatTodoUpdate:
         ]
         result = _format_todo_update(previous, current)
         lines = result.split("\n")
-        assert ":white_check_mark: A" in lines[0]
-        assert ":arrows_counterclockwise: B (2/3)" in lines[1]
-        assert "Done: A" in lines[2]
-        assert "Remaining: B, C" in lines[3]
+        assert ":white_check_mark: A finished" in lines[0]
+        assert ":arrows_counterclockwise: B in progress (2/3)" in lines[1]
+        # Remaining has 2 items → bullets
+        assert "Remaining:" in result
+        assert "• B" in result
+        assert "• C" in result
+        # Done is last, single item → inline
+        assert result.endswith("Done: A")
 
     def test_task_started_only(self):
         previous = [_todo("A", "pending"), _todo("B", "pending")]
         current = [_todo("A", "in_progress"), _todo("B", "pending")]
         result = _format_todo_update(previous, current)
-        lines = result.split("\n")
-        assert ":arrows_counterclockwise: A (1/2)" in lines[0]
-        assert "Remaining: A, B" in lines[1]
+        assert ":arrows_counterclockwise: A in progress (1/2)" in result
+        # 2 remaining → bullets
+        assert "Remaining:\n• A\n• B" in result
 
-    def test_new_tasks_added(self):
+    def test_new_tasks_added_multiple(self):
         previous = [_todo("A", "in_progress")]
         current = [
             _todo("A", "in_progress"),
@@ -145,8 +168,19 @@ class TestFormatTodoUpdate:
             _todo("C", "pending"),
         ]
         result = _format_todo_update(previous, current)
-        assert ":new: Added: B, C" in result
+        # 2 added → bullets
+        assert ":new: Added:\n• B\n• C" in result
         assert "Remaining:" in result
+
+    def test_new_task_added_single(self):
+        previous = [_todo("A", "in_progress")]
+        current = [
+            _todo("A", "in_progress"),
+            _todo("B", "pending"),
+        ]
+        result = _format_todo_update(previous, current)
+        # 1 added → inline
+        assert ":new: Added: B" in result
 
     def test_no_changes_shows_current_progress(self):
         """When snapshot is identical, still show current in_progress task."""
@@ -156,7 +190,7 @@ class TestFormatTodoUpdate:
             _todo("C", "pending"),
         ]
         result = _format_todo_update(todos, todos)
-        assert ":arrows_counterclockwise: B (2/3)" in result
+        assert ":arrows_counterclockwise: B in progress (2/3)" in result
 
     def test_no_changes_no_in_progress(self):
         """All pending, no in_progress — show generic progress."""
@@ -165,7 +199,7 @@ class TestFormatTodoUpdate:
         assert ":clipboard: Tasks (0/2)" in result
 
     def test_done_line_shows_completed_tasks(self):
-        """The 'Done:' line should list all completed tasks."""
+        """The 'Done:' line should list all completed tasks as bullets."""
         previous = [
             _todo("A", "completed"),
             _todo("B", "in_progress"),
@@ -177,7 +211,9 @@ class TestFormatTodoUpdate:
             _todo("C", "in_progress"),
         ]
         result = _format_todo_update(previous, current)
-        assert "Done: A, B" in result
+        # 2 done → bullets
+        assert "Done:\n• A\n• B" in result
+        # 1 remaining → inline
         assert "Remaining: C" in result
 
     def test_done_line_absent_when_nothing_completed(self):
@@ -187,11 +223,27 @@ class TestFormatTodoUpdate:
         result = _format_todo_update(previous, current)
         assert "Done:" not in result
 
-    def test_single_task_no_remaining(self):
-        """Single-task list: no 'Remaining' line when it's in progress."""
+    def test_single_task_remaining(self):
+        """Single-task list: 'Remaining' is inline for 1 item."""
         previous = [_todo("A", "pending")]
         current = [_todo("A", "in_progress")]
         result = _format_todo_update(previous, current)
-        assert ":arrows_counterclockwise: A (1/1)" in result
-        # A is in_progress so it's in remaining, but it's also the only task
+        assert ":arrows_counterclockwise: A in progress (1/1)" in result
         assert "Remaining: A" in result
+
+    def test_done_always_last(self):
+        """Done section always appears after Remaining."""
+        previous = [
+            _todo("A", "in_progress"),
+            _todo("B", "pending"),
+            _todo("C", "pending"),
+        ]
+        current = [
+            _todo("A", "completed"),
+            _todo("B", "in_progress"),
+            _todo("C", "pending"),
+        ]
+        result = _format_todo_update(previous, current)
+        remaining_pos = result.index("Remaining:")
+        done_pos = result.index("Done:")
+        assert done_pos > remaining_pos
