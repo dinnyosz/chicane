@@ -33,6 +33,13 @@ class TestFormatToolActivity:
         )
         assert _format_tool_activity(event) == [":mag: Reading `big.py` (lines 50\u2013150)"]
 
+    def test_read_tool_with_string_offset_and_limit(self):
+        """SDK may pass offset/limit as strings — must not crash."""
+        event = make_tool_event(
+            tool_block("Read", file_path="/src/big.py", offset="50", limit="100")
+        )
+        assert _format_tool_activity(event) == [":mag: Reading `big.py` (lines 50\u2013150)"]
+
     def test_read_tool_with_offset_only(self):
         event = make_tool_event(
             tool_block("Read", file_path="/src/big.py", offset=200)
