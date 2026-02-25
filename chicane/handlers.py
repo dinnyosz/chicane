@@ -1253,7 +1253,7 @@ async def _process_message(
                     if _should_show("pre_compact", config.verbosity):
                         await queue.post_message(
                             channel, thread_ts,
-                            ":brain: Compacting context — this may take a moment…",
+                            ":exploding_head: Compacting context — this may take a moment…",
                         )
 
                 elif event_data.type == "system" and event_data.subtype == "compact_boundary":

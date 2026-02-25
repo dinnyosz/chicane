@@ -234,14 +234,16 @@ class TestPreCompactNotification:
             event = {"ts": "13000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "big task", client, config, sessions, queue)
 
-        brain_calls = [
+        compact_calls = [
             c for c in client.chat_postMessage.call_args_list
-            if ":brain:" in c.kwargs.get("text", "")
+            if ":exploding_head:" in c.kwargs.get("text", "") or ":brain:" in c.kwargs.get("text", "")
         ]
         # Should have both: pre_compact ("Compacting...") and compact_boundary ("was compacted")
-        assert len(brain_calls) == 2
-        assert "Compacting context" in brain_calls[0].kwargs["text"]
-        assert "compacted" in brain_calls[1].kwargs["text"]
+        assert len(compact_calls) == 2
+        assert ":exploding_head:" in compact_calls[0].kwargs["text"]
+        assert "Compacting context" in compact_calls[0].kwargs["text"]
+        assert ":brain:" in compact_calls[1].kwargs["text"]
+        assert "compacted" in compact_calls[1].kwargs["text"]
 
     @pytest.mark.asyncio
     async def test_pre_compact_shown_at_normal_verbosity(self, config, sessions, queue):
@@ -258,12 +260,12 @@ class TestPreCompactNotification:
             event = {"ts": "13001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hi", client, config, sessions, queue)
 
-        brain_calls = [
+        compact_calls = [
             c for c in client.chat_postMessage.call_args_list
-            if ":brain:" in c.kwargs.get("text", "")
+            if ":exploding_head:" in c.kwargs.get("text", "")
         ]
-        assert len(brain_calls) == 1
-        assert "Compacting context" in brain_calls[0].kwargs["text"]
+        assert len(compact_calls) == 1
+        assert "Compacting context" in compact_calls[0].kwargs["text"]
 
     @pytest.mark.asyncio
     async def test_pre_compact_hidden_at_minimal_verbosity(self):
@@ -284,11 +286,11 @@ class TestPreCompactNotification:
             event = {"ts": "13002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hi", client, config, sessions, queue)
 
-        brain_calls = [
+        compact_calls = [
             c for c in client.chat_postMessage.call_args_list
-            if ":brain:" in c.kwargs.get("text", "")
+            if ":exploding_head:" in c.kwargs.get("text", "") or ":brain:" in c.kwargs.get("text", "")
         ]
-        assert len(brain_calls) == 0
+        assert len(compact_calls) == 0
 
 
 class TestPermissionDenialNotification:
