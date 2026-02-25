@@ -1203,11 +1203,12 @@ class TestStreamingInput:
         await session.queue_message("follow-up")
         assert session._message_queue.qsize() == 1
         assert session._message_queue.get_nowait() == "follow-up"
+        assert session._between_turn_pending == 1
 
     @pytest.mark.asyncio
-    async def test_stream_continues_when_queue_has_pending_messages(self):
-        """When queue_message() is called during streaming, stream() should
-        continue past the first ResultMessage to process the next turn."""
+    async def test_stream_continues_when_between_turn_picked_up(self):
+        """When queue_message() is called during streaming and the SDK picks it
+        up within the timeout, stream() should continue past the first ResultMessage."""
         from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
 
         assistant1 = AssistantMessage(
@@ -1239,6 +1240,7 @@ class TestStreamingInput:
             # Simulate a follow-up arriving mid-stream
             await session.queue_message("follow-up")
             yield result1
+            # SDK picks up the between-turn message immediately
             yield assistant2
             yield result2
 
@@ -1253,6 +1255,57 @@ class TestStreamingInput:
         assert events[1].type == "result"
         assert events[2].type == "assistant"
         assert events[3].type == "result"
+        # The between-turn message was delivered
+        assert session.between_turn_delivered == 1
+
+    @pytest.mark.asyncio
+    async def test_stream_breaks_on_between_turn_timeout(self):
+        """When queue_message() is called but the SDK doesn't respond in time,
+        stream() should break after the timeout instead of hanging."""
+        from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+
+        assistant = AssistantMessage(
+            content=[TextBlock(text="working")],
+            model="opus", parent_tool_use_id=None, error=None,
+        )
+        result = ResultMessage(
+            subtype="success", duration_ms=100, duration_api_ms=90,
+            is_error=False, num_turns=1, session_id="s1",
+            total_cost_usd=0.01, usage=None, result="done",
+        )
+
+        session = ClaudeSession()
+
+        client = AsyncMock()
+        client.query = AsyncMock()
+
+        async def _stream_then_hang():
+            yield assistant
+            # Simulate a follow-up arriving mid-stream
+            await session.queue_message("follow-up")
+            yield result
+            # SDK never yields another message — simulate the hang
+            await asyncio.sleep(999)
+
+        client.receive_messages = _stream_then_hang
+
+        import chicane.claude as claude_mod
+        original_timeout = claude_mod._BETWEEN_TURN_TIMEOUT
+        claude_mod._BETWEEN_TURN_TIMEOUT = 0.1  # Fast timeout for test
+
+        try:
+            with patch.object(session, "_ensure_connected", return_value=client):
+                events = [e async for e in session.stream("initial")]
+        finally:
+            claude_mod._BETWEEN_TURN_TIMEOUT = original_timeout
+
+        # Should see only the 2 events before the timeout
+        assert len(events) == 2
+        assert events[0].type == "assistant"
+        assert events[1].type == "result"
+        # The between-turn message was NOT delivered
+        assert session.between_turn_delivered == 0
+        assert session.is_streaming is False
 
     @pytest.mark.asyncio
     async def test_stream_stops_at_result_when_queue_empty(self):

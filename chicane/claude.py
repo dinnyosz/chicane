@@ -109,6 +109,12 @@ async def _dummy_hook(input_data: dict, tool_use_id: str | None, context) -> dic
 AskUserCallback = Callable[[list[dict]], Awaitable[dict[str, str]]]
 
 
+# How long to wait (seconds) for the SDK to pick up a between-turn
+# message after a ResultMessage.  If the CLI doesn't start a new turn
+# within this window, the stream breaks and the handler falls back to
+# the pending_messages drain loop.
+_BETWEEN_TURN_TIMEOUT = 10
+
 # SDK message type → ClaudeEvent type string
 _MSG_TYPE_MAP = {
     AssistantMessage: "assistant",
@@ -398,8 +404,12 @@ class ClaudeSession:
         self._generator_started = False
         # Count of between-turn messages queued via queue_message() during
         # an active stream.  Checked at ResultMessage to decide whether to
-        # continue iterating for the next turn.
+        # continue iterating (with a timeout) for the next turn.
         self._between_turn_pending = 0
+        # How many between-turn messages were successfully delivered in the
+        # last stream() call.  The handler uses this to pop delivered entries
+        # from pending_messages so the drain loop doesn't double-process them.
+        self.between_turn_delivered = 0
         # Queue for synthetic events emitted by hooks (e.g. PreCompact).
         # The stream() loop drains this between SDK messages.
         self._synthetic_events: asyncio.Queue[ClaudeEvent] = asyncio.Queue()
@@ -600,6 +610,10 @@ class ClaudeSession:
 
         The SDK picks up queued messages at the next turn boundary — after
         the current tool execution finishes but before the next one starts.
+        The caller should also push the message onto ``pending_messages``
+        as a fallback — if the SDK doesn't pick it up before the stream's
+        ``ResultMessage`` timeout, ``stream()`` will break and the pending
+        drain loop will process it instead.
         """
         self._between_turn_pending += 1
         await self._message_queue.put(prompt)
@@ -618,6 +632,7 @@ class ClaudeSession:
         self._interrupted = False
         self._interrupt_source = None
         self._between_turn_pending = 0
+        self.between_turn_delivered = 0
 
         # Push prompt into the generator — the SDK picks it up between turns
         await self._message_queue.put(prompt)
@@ -662,15 +677,46 @@ class ClaudeSession:
                 # Stop at ResultMessage — like receive_response() does,
                 # but only when no between-turn messages are waiting.
                 # If the user pushed a follow-up via queue_message(),
-                # the SDK will deliver it as the next turn and we keep
-                # iterating.
+                # we wait (with a timeout) for the SDK to start a new
+                # turn.  If the timeout fires, the message was likely
+                # queued too late — the caller's pending_messages
+                # fallback will process it after the stream ends.
                 if isinstance(msg, ResultMessage):
                     if self._between_turn_pending <= 0:
                         break
-                    # Consume one pending count and continue
+                    # Wait for the SDK to pick up the between-turn
+                    # message and start yielding events.  If it doesn't
+                    # respond in time, break out and let the handler
+                    # drain pending_messages instead.
+                    try:
+                        msg = await asyncio.wait_for(
+                            response_iter.__anext__(),
+                            timeout=_BETWEEN_TURN_TIMEOUT,
+                        )
+                    except (asyncio.TimeoutError, StopAsyncIteration):
+                        logger.warning(
+                            "Between-turn message not picked up within %ds "
+                            "(pending=%d); breaking stream for fallback",
+                            _BETWEEN_TURN_TIMEOUT,
+                            self._between_turn_pending,
+                        )
+                        break
+                    # SDK responded — consume the pending count, track
+                    # delivery, and process this message normally before
+                    # continuing the loop.
                     self._between_turn_pending -= 1
-                    logger.info("Result received but %d between-turn messages pending; continuing",
-                                self._between_turn_pending)
+                    self.between_turn_delivered += 1
+                    logger.info(
+                        "Between-turn message picked up; %d still pending",
+                        self._between_turn_pending,
+                    )
+                    event_type = _MSG_TYPE_MAP.get(type(msg), "unknown")
+                    raw = _sdk_message_to_raw(msg)
+                    event = ClaudeEvent(type=event_type, raw=raw)
+                    event_count += 1
+                    if event.type == "system" and event.subtype == "init":
+                        self.session_id = event.session_id
+                    yield event
         finally:
             self._is_streaming = False
             if event_count == 0:

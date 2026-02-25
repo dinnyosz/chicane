@@ -141,7 +141,8 @@ class TestNewMessageQueue:
 
     @pytest.mark.asyncio
     async def test_new_message_queued_when_streaming(self, config, sessions, queue):
-        """When a second message arrives while streaming, it should be delivered via queue_message()."""
+        """When a second message arrives while streaming, it should be sent via
+        queue_message() AND added to pending_messages as fallback."""
         mock_session = MagicMock()
         mock_session.session_id = "s1"
         mock_session.is_streaming = True  # Stream is active
@@ -165,6 +166,9 @@ class TestNewMessageQueue:
 
         # Message should have been delivered via queue_message for between-turn delivery
         mock_session.queue_message.assert_awaited_once_with("second message")
+        # AND queued in pending_messages as fallback
+        assert len(info.pending_messages) == 1
+        assert info.pending_messages[0]["prompt"] == "second message"
 
     @pytest.mark.asyncio
     async def test_queued_message_gets_speech_balloon(self, config, sessions, queue):
@@ -186,14 +190,14 @@ class TestNewMessageQueue:
         with patch.object(sessions, "get_or_create", return_value=info):
             await _process_message(event, "queued msg", client, config, sessions, queue)
 
-        # eyes added first (line 396), then removed (queue path), then speech_balloon added
+        # eyes added first, then removed (queue path), then speech_balloon added
         add_calls = client.reactions_add.call_args_list
         speech_calls = [c for c in add_calls if c.kwargs.get("name") == "speech_balloon"]
         assert len(speech_calls) == 1
 
     @pytest.mark.asyncio
     async def test_multiple_messages_queue_in_order(self, config, sessions, queue):
-        """Multiple messages during streaming should be delivered via queue_message in order."""
+        """Multiple messages during streaming should be queued in both SDK queue and pending_messages."""
         mock_session = MagicMock()
         mock_session.session_id = "s1"
         mock_session.is_streaming = True
@@ -215,6 +219,8 @@ class TestNewMessageQueue:
         assert mock_session.queue_message.await_count == 3
         queued = [c.args[0] for c in mock_session.queue_message.call_args_list]
         assert queued == ["first", "second", "third"]
+        # Also in pending_messages as fallback
+        assert len(info.pending_messages) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -492,6 +498,7 @@ class TestQueueDrain:
         mock_session.session_id = "s1"
         mock_session.is_streaming = False
         mock_session.was_interrupted = False
+        mock_session.between_turn_delivered = 0
         mock_session.stream = recording_stream
 
         info = MagicMock()
@@ -531,6 +538,7 @@ class TestQueueDrain:
         mock_session.session_id = "s1"
         mock_session.is_streaming = False
         mock_session.was_interrupted = False
+        mock_session.between_turn_delivered = 0
         mock_session.stream = recording_stream
 
         info = MagicMock()
@@ -564,6 +572,7 @@ class TestQueueDrain:
         mock_session.session_id = "s1"
         mock_session.is_streaming = False
         mock_session.was_interrupted = False
+        mock_session.between_turn_delivered = 0
         mock_session.stream = fast_stream
 
         info = MagicMock()
@@ -602,6 +611,7 @@ class TestQueueDrain:
         mock_session.session_id = "s1"
         mock_session.is_streaming = False
         mock_session.was_interrupted = False
+        mock_session.between_turn_delivered = 0
         mock_session.stream = fast_stream
 
         info = MagicMock()
