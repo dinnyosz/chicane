@@ -704,21 +704,14 @@ async def _process_message(
         )
         prompt = (prompt + file_note) if prompt else file_note.lstrip()
 
-    # If another stream is active for this thread, try between-turn
-    # delivery via the SDK queue (so Claude sees the message at the
-    # next turn boundary) AND push onto pending_messages as a fallback.
-    # If the SDK picks it up in time, the between-turn response is
-    # part of the current stream and we remove the pending entry.
-    # If the SDK doesn't pick it up (timeout), the stream breaks and
-    # the drain loop processes it after the lock is released.
+    # If another stream is active for this thread, push the message
+    # into the SDK's streaming input queue for between-turn delivery.
+    # The SDK picks it up at the next turn boundary (after current tool
+    # execution, before the next one).  stream() keeps iterating after
+    # ResultMessage when it knows between-turn messages are pending.
     if session_info.session.is_streaming:
         logger.info(f"New message in {thread_ts} -- delivering between turns via SDK queue")
         await session_info.session.queue_message(prompt)
-        session_info.pending_messages.append({
-            "event": event,
-            "prompt": prompt,
-            "client": client,
-        })
         # Swap eyes → speech_balloon to show the message was received & queued
         try:
             await client.reactions_remove(channel=channel, name="eyes", timestamp=event["ts"])
@@ -1718,24 +1711,6 @@ async def _process_message(
                                   "pencil2", "package"):
                     await _remove_thread_reaction(client, channel, session_info, err_emoji)
                 await _add_thread_reaction(client, channel, session_info, "x")
-
-    # Remove pending entries that were successfully delivered between
-    # turns (the SDK picked them up and Claude responded within the
-    # same stream).  These have already been processed — draining them
-    # again would double-process the message.
-    delivered = session_info.session.between_turn_delivered
-    for _ in range(delivered):
-        if session_info.pending_messages:
-            done = session_info.pending_messages.popleft()
-            # Clear the speech_balloon since it was handled in-stream
-            try:
-                await done["client"].reactions_remove(
-                    channel=done["event"]["channel"],
-                    name="speech_balloon",
-                    timestamp=done["event"]["ts"],
-                )
-            except Exception:
-                pass
 
     # Drain any messages queued while the stream was active.
     # We're outside the lock now, so _process_message will re-acquire it
