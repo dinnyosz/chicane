@@ -2827,11 +2827,16 @@ def _format_tool_activity(event: ClaudeEvent) -> list[ToolActivity]:
             suffix = ""
             offset = tool_input.get("offset")
             limit = tool_input.get("limit")
-            # Ensure numeric types for arithmetic (SDK may pass strings)
-            if offset is not None:
-                offset = int(offset)
-            if limit is not None:
-                limit = int(limit)
+            # Ensure numeric types for arithmetic (SDK may pass strings or
+            # malformed values like "(606, 630" — silently ignore bad values)
+            try:
+                offset = int(offset) if offset is not None else None
+            except (ValueError, TypeError):
+                offset = None
+            try:
+                limit = int(limit) if limit is not None else None
+            except (ValueError, TypeError):
+                limit = None
             pages = tool_input.get("pages")
             if pages:
                 suffix = f" (pages {pages})"

@@ -40,6 +40,27 @@ class TestFormatToolActivity:
         )
         assert _format_tool_activity(event) == [":mag: Reading `big.py` (lines 50\u2013150)"]
 
+    def test_read_tool_with_malformed_offset(self):
+        """SDK may pass malformed offset like '(606, 630' — must not crash."""
+        event = make_tool_event(
+            tool_block("Read", file_path="/src/big.py", offset="(606, 630", limit=100)
+        )
+        assert _format_tool_activity(event) == [":mag: Reading `big.py` (first 100 lines)"]
+
+    def test_read_tool_with_malformed_limit(self):
+        """SDK may pass malformed limit — must not crash."""
+        event = make_tool_event(
+            tool_block("Read", file_path="/src/big.py", offset=50, limit="(bad")
+        )
+        assert _format_tool_activity(event) == [":mag: Reading `big.py` (from line 50)"]
+
+    def test_read_tool_with_both_malformed(self):
+        """Both offset and limit malformed — falls through to plain read."""
+        event = make_tool_event(
+            tool_block("Read", file_path="/src/big.py", offset="bad", limit="bad")
+        )
+        assert _format_tool_activity(event) == [":mag: Reading `big.py`"]
+
     def test_read_tool_with_offset_only(self):
         event = make_tool_event(
             tool_block("Read", file_path="/src/big.py", offset=200)
