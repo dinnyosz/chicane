@@ -776,6 +776,10 @@ async def _process_message(
                     first_activity_posted = False
             except asyncio.CancelledError:
                 pass
+            except Exception:
+                logger.warning(
+                    "Idle flush failed for thread %s", thread_ts, exc_info=True,
+                )
 
         def _schedule_idle_flush() -> None:
             """(Re)start the idle flush timer.  Called after each SDK event."""

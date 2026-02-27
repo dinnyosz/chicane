@@ -20,6 +20,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_MIN_INTERVAL = 1.0
 
 
+class MessageLimitExceeded(Exception):
+    """Raised when Slack rejects a message due to workspace message limits.
+
+    This is a non-retryable error (typically free-tier workspaces).
+    """
+
+
 @dataclass(frozen=True)
 class PostResult:
     """Result of a queued message post."""
@@ -118,6 +125,16 @@ class SlackMessageQueue:
             resp = await self._client.chat_postMessage(**kwargs)
             return PostResult(ts=resp["ts"], channel=channel, thread_ts=thread_ts)
         except SlackApiError as exc:
+            error = getattr(exc.response, "data", {}).get("error", "")
+            if error == "message_limit_exceeded":
+                logger.warning(
+                    "Slack workspace message limit exceeded on channel %s — "
+                    "free-tier workspaces have a message cap",
+                    channel,
+                )
+                raise MessageLimitExceeded(
+                    "Slack workspace message limit exceeded"
+                ) from exc
             if exc.response.status_code == 429:
                 retry_after = float(
                     exc.response.headers.get("Retry-After", 1)
