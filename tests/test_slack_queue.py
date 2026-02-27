@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from slack_sdk.errors import SlackApiError
 
-from chicane.slack_queue import SlackMessageQueue, PostResult, DEFAULT_MIN_INTERVAL
+from chicane.slack_queue import SlackMessageQueue, PostResult, MessageLimitExceeded, DEFAULT_MIN_INTERVAL
 
 
 class TestPostResult:
@@ -249,6 +249,62 @@ class TestRetryOn429:
             chicane.slack_queue.asyncio.sleep = original_sleep
 
         assert 1.0 in sleep_delays
+
+
+class TestMessageLimitExceeded:
+    """message_limit_exceeded Slack API error handling."""
+
+    @pytest.mark.asyncio
+    async def test_raises_message_limit_exceeded(self):
+        """Should raise MessageLimitExceeded for message_limit_exceeded error."""
+        q = SlackMessageQueue(min_interval=0.0)
+        client = AsyncMock()
+
+        error_resp = MagicMock()
+        error_resp.status_code = 200
+        error_resp.data = {"ok": False, "error": "message_limit_exceeded"}
+        error = SlackApiError("message_limit_exceeded", response=error_resp)
+        client.chat_postMessage.side_effect = error
+        q.ensure_client(client)
+
+        with pytest.raises(MessageLimitExceeded, match="message limit exceeded"):
+            await q.post_message("C1", "1.0", "hello")
+
+        assert client.chat_postMessage.call_count == 1  # no retry
+
+    @pytest.mark.asyncio
+    async def test_chains_original_exception(self):
+        """MessageLimitExceeded should chain the original SlackApiError."""
+        q = SlackMessageQueue(min_interval=0.0)
+        client = AsyncMock()
+
+        error_resp = MagicMock()
+        error_resp.status_code = 200
+        error_resp.data = {"ok": False, "error": "message_limit_exceeded"}
+        error = SlackApiError("message_limit_exceeded", response=error_resp)
+        client.chat_postMessage.side_effect = error
+        q.ensure_client(client)
+
+        with pytest.raises(MessageLimitExceeded) as exc_info:
+            await q.post_message("C1", "1.0", "hello")
+
+        assert isinstance(exc_info.value.__cause__, SlackApiError)
+
+    @pytest.mark.asyncio
+    async def test_other_api_errors_still_propagate(self):
+        """Non-message_limit errors with status 200 should still raise SlackApiError."""
+        q = SlackMessageQueue(min_interval=0.0)
+        client = AsyncMock()
+
+        error_resp = MagicMock()
+        error_resp.status_code = 200
+        error_resp.data = {"ok": False, "error": "channel_not_found"}
+        error = SlackApiError("channel_not_found", response=error_resp)
+        client.chat_postMessage.side_effect = error
+        q.ensure_client(client)
+
+        with pytest.raises(SlackApiError):
+            await q.post_message("C1", "1.0", "hello")
 
 
 class TestConcurrentAccess:
