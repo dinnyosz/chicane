@@ -243,7 +243,7 @@ class SessionStore:
         self._sessions.clear()
         self._message_to_thread.clear()
 
-    async def cleanup(self, max_age_hours: int = 24) -> int:
+    async def cleanup(self, max_age_hours: int = 2) -> int:
         """Remove sessions older than max_age_hours. Returns count removed."""
         now = datetime.now()
         expired = [

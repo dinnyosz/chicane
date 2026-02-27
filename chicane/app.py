@@ -158,9 +158,9 @@ async def start(config: Config | None = None) -> None:
         logger.info("Chicane is running. Press Ctrl+C to stop.")
 
         async def _periodic_cleanup() -> None:
-            """Clean up expired sessions every hour."""
+            """Clean up idle sessions every 10 minutes."""
             while True:
-                await asyncio.sleep(3600)
+                await asyncio.sleep(600)
                 try:
                     await sessions.cleanup()
                 except Exception:
