@@ -1269,3 +1269,26 @@ class TestSendSnippetRetryAndFallback:
         # All chunks fit within Slack limit
         for c in post_calls:
             assert len(c.kwargs["text"]) <= SLACK_MAX_LENGTH
+
+    @pytest.mark.asyncio
+    async def test_retries_on_slack_request_error(self):
+        """SlackRequestError (raised by files_upload_v2 on 5xx) is caught and retried."""
+        from chicane.handlers import _send_snippet
+        from slack_sdk.errors import SlackRequestError
+
+        client = AsyncMock()
+        client.files_upload_v2.side_effect = SlackRequestError(
+            "Failed to upload a file (status: 500, body: None, "
+            "filename: output.txt, title: output)"
+        )
+        client.chat_postMessage.return_value = {"ts": "9999.0"}
+
+        await _send_snippet(client, "C123", "t1", "hello world")
+
+        # Upload should have been retried (default _max_attempts=2)
+        assert client.files_upload_v2.call_count == 2
+
+        # Falls back to posting as text
+        post_calls = client.chat_postMessage.call_args_list
+        assert len(post_calls) == 1
+        assert post_calls[0].kwargs["text"] == "hello world"

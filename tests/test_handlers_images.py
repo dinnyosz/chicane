@@ -214,6 +214,28 @@ class TestUploadImage:
             ":frame_with_picture: `test.png` (upload failed)",
         )
 
+    @pytest.mark.asyncio
+    async def test_handles_slack_request_error(self, tmp_path):
+        """SlackRequestError (5xx during upload) is caught gracefully."""
+        from slack_sdk.errors import SlackRequestError
+
+        img = tmp_path / "test.png"
+        img.write_bytes(b"img")
+        client = mock_client()
+        client.files_upload_v2.side_effect = SlackRequestError(
+            "Failed to upload a file (status: 500, body: None, "
+            "filename: test.png, title: test.png)"
+        )
+        queue = MagicMock()
+        queue.post_message = AsyncMock()
+
+        await _upload_image(client, "C123", "1000.0", img, queue)
+
+        queue.post_message.assert_called_once_with(
+            "C123", "1000.0",
+            ":frame_with_picture: `test.png` (upload failed)",
+        )
+
 
 # ---------------------------------------------------------------------------
 # _upload_new_images

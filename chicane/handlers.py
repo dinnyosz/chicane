@@ -10,7 +10,7 @@ from pathlib import Path
 from time import monotonic
 
 import aiohttp
-from slack_sdk.errors import SlackApiError
+from slack_sdk.errors import SlackApiError, SlackClientError
 from platformdirs import user_cache_dir
 from slack_bolt.async_app import AsyncApp
 from slack_sdk.web.async_client import AsyncWebClient
@@ -3335,7 +3335,7 @@ async def _upload_image(
             thread_ts=thread_ts,
             initial_comment=f":frame_with_picture: `{path.name}`",
         )
-    except SlackApiError as exc:
+    except SlackClientError as exc:
         logger.warning("Image upload failed for %s: %s", path, exc)
         if queue is not None:
             await queue.post_message(
@@ -3776,7 +3776,7 @@ async def _send_snippet(
                 upload_kwargs["initial_comment"] = initial_comment
             await client.files_upload_v2(**upload_kwargs)
             return  # success
-        except SlackApiError as exc:
+        except SlackClientError as exc:
             last_exc = exc
             if attempt < _max_attempts:
                 logger.info(
