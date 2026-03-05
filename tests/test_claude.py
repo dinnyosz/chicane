@@ -1399,6 +1399,311 @@ class TestStreamingInput:
             assert session._generator_started
 
 
+class TestSubagentTracking:
+    """Tests for subagent-aware streaming — keeping stream alive while Task
+    subagents are in flight."""
+
+    @pytest.mark.asyncio
+    async def test_stream_stays_alive_with_active_subagents(self):
+        """Stream should not break at ResultMessage when Task subagents
+        are still running (no task_notification yet)."""
+        from claude_agent_sdk import (
+            AssistantMessage, ResultMessage, SystemMessage,
+            TextBlock, ToolUseBlock,
+        )
+
+        # Main agent spawns a Task subagent, then finishes its turn
+        assistant = AssistantMessage(
+            content=[
+                TextBlock(text="Let me spawn an agent"),
+                ToolUseBlock(id="tu_1", name="Task", input={"prompt": "do work"}),
+            ],
+            model="opus", parent_tool_use_id=None, error=None,
+        )
+        result1 = ResultMessage(
+            subtype="success", duration_ms=100, duration_api_ms=90,
+            is_error=False, num_turns=1, session_id="s1",
+            total_cost_usd=0.01, usage=None, result="agents launched",
+        )
+        # Subagent finishes → task_notification + final result
+        notification = SystemMessage(
+            subtype="task_notification", data={"subtype": "task_notification",
+            "message": "Agent completed"},
+        )
+        result2 = ResultMessage(
+            subtype="success", duration_ms=5000, duration_api_ms=4500,
+            is_error=False, num_turns=3, session_id="s1",
+            total_cost_usd=0.10, usage=None, result="all done",
+        )
+
+        client = AsyncMock()
+        client.query = AsyncMock()
+
+        async def _subagent_stream():
+            yield assistant
+            yield result1       # stream should NOT break here
+            yield notification   # subagent completes
+            yield result2       # now stream can break
+
+        client.receive_messages = _subagent_stream
+
+        session = ClaudeSession()
+        with patch.object(session, "_ensure_connected", return_value=client):
+            events = [e async for e in session.stream("go")]
+
+        # All 4 events should be yielded
+        assert len(events) == 4
+        assert events[0].type == "assistant"
+        assert events[1].type == "result"
+        assert events[2].type == "system"
+        assert events[2].subtype == "task_notification"
+        assert events[3].type == "result"
+
+    @pytest.mark.asyncio
+    async def test_stream_waits_for_all_subagents(self):
+        """Stream should wait until ALL subagents complete before breaking."""
+        from claude_agent_sdk import (
+            AssistantMessage, ResultMessage, SystemMessage,
+            TextBlock, ToolUseBlock,
+        )
+
+        # Main agent spawns TWO Task subagents
+        assistant = AssistantMessage(
+            content=[
+                TextBlock(text="Spawning two agents"),
+                ToolUseBlock(id="tu_1", name="Task", input={"prompt": "task 1"}),
+                ToolUseBlock(id="tu_2", name="Task", input={"prompt": "task 2"}),
+            ],
+            model="opus", parent_tool_use_id=None, error=None,
+        )
+        result1 = ResultMessage(
+            subtype="success", duration_ms=100, duration_api_ms=90,
+            is_error=False, num_turns=1, session_id="s1",
+            total_cost_usd=0.01, usage=None, result="launched",
+        )
+        notif1 = SystemMessage(
+            subtype="task_notification",
+            data={"subtype": "task_notification", "message": "Agent 1 done"},
+        )
+        # Second result after first notification — still 1 subagent active
+        result2 = ResultMessage(
+            subtype="success", duration_ms=2000, duration_api_ms=1800,
+            is_error=False, num_turns=2, session_id="s1",
+            total_cost_usd=0.05, usage=None, result="partial",
+        )
+        notif2 = SystemMessage(
+            subtype="task_notification",
+            data={"subtype": "task_notification", "message": "Agent 2 done"},
+        )
+        result3 = ResultMessage(
+            subtype="success", duration_ms=5000, duration_api_ms=4500,
+            is_error=False, num_turns=3, session_id="s1",
+            total_cost_usd=0.10, usage=None, result="all done",
+        )
+
+        client = AsyncMock()
+        client.query = AsyncMock()
+
+        async def _two_subagent_stream():
+            yield assistant
+            yield result1       # 2 active → skip
+            yield notif1        # 1 active
+            yield result2       # 1 active → skip
+            yield notif2        # 0 active
+            yield result3       # 0 active → break
+
+        client.receive_messages = _two_subagent_stream
+
+        session = ClaudeSession()
+        with patch.object(session, "_ensure_connected", return_value=client):
+            events = [e async for e in session.stream("go")]
+
+        assert len(events) == 6
+        types = [e.type for e in events]
+        assert types == ["assistant", "result", "system", "result", "system", "result"]
+
+    @pytest.mark.asyncio
+    async def test_stream_breaks_without_subagents(self):
+        """Normal case: stream breaks at ResultMessage when no subagents."""
+        from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
+
+        assistant = AssistantMessage(
+            content=[TextBlock(text="no subagents here")],
+            model="opus", parent_tool_use_id=None, error=None,
+        )
+        result = ResultMessage(
+            subtype="success", duration_ms=100, duration_api_ms=90,
+            is_error=False, num_turns=1, session_id="s1",
+            total_cost_usd=0.01, usage=None, result="done",
+        )
+        extra = AssistantMessage(
+            content=[TextBlock(text="should not appear")],
+            model="opus", parent_tool_use_id=None, error=None,
+        )
+
+        client = AsyncMock()
+        client.query = AsyncMock()
+
+        async def _normal_stream():
+            yield assistant
+            yield result
+            yield extra  # should not be reached
+
+        client.receive_messages = _normal_stream
+
+        session = ClaudeSession()
+        with patch.object(session, "_ensure_connected", return_value=client):
+            events = [e async for e in session.stream("go")]
+
+        assert len(events) == 2
+        assert events[0].type == "assistant"
+        assert events[1].type == "result"
+
+    @pytest.mark.asyncio
+    async def test_subagent_safety_timeout(self):
+        """Stream should break if subagents haven't completed within the timeout."""
+        from claude_agent_sdk import (
+            AssistantMessage, ResultMessage, TextBlock, ToolUseBlock,
+        )
+
+        assistant = AssistantMessage(
+            content=[
+                ToolUseBlock(id="tu_1", name="Task", input={"prompt": "slow work"}),
+            ],
+            model="opus", parent_tool_use_id=None, error=None,
+        )
+        result1 = ResultMessage(
+            subtype="success", duration_ms=100, duration_api_ms=90,
+            is_error=False, num_turns=1, session_id="s1",
+            total_cost_usd=0.01, usage=None, result="launched",
+        )
+        # More events that would follow if stream didn't break
+        extra = AssistantMessage(
+            content=[TextBlock(text="should not appear")],
+            model="opus", parent_tool_use_id=None, error=None,
+        )
+
+        client = AsyncMock()
+        client.query = AsyncMock()
+
+        async def _timeout_stream():
+            yield assistant
+            yield result1   # subagent active, timeout=0 → break immediately
+            yield extra     # should not be reached
+
+        client.receive_messages = _timeout_stream
+
+        session = ClaudeSession()
+
+        import chicane.claude as claude_mod
+        original_timeout = claude_mod._SUBAGENT_WAIT_TIMEOUT
+        claude_mod._SUBAGENT_WAIT_TIMEOUT = 0  # immediate timeout
+
+        try:
+            with patch.object(session, "_ensure_connected", return_value=client):
+                events = [e async for e in session.stream("go")]
+        finally:
+            claude_mod._SUBAGENT_WAIT_TIMEOUT = original_timeout
+
+        # Timeout fires at first ResultMessage → stream breaks after
+        # yielding assistant + result1.  The extra message is not reached.
+        assert len(events) == 2
+        assert events[0].type == "assistant"
+        assert events[1].type == "result"
+
+    @pytest.mark.asyncio
+    async def test_subagent_counter_resets_between_streams(self):
+        """_active_subagents should reset to 0 at the start of each stream()."""
+        from claude_agent_sdk import (
+            AssistantMessage, ResultMessage, TextBlock, ToolUseBlock,
+        )
+
+        # First stream: spawn a subagent but it completes
+        assistant = AssistantMessage(
+            content=[ToolUseBlock(id="tu_1", name="Task", input={})],
+            model="opus", parent_tool_use_id=None, error=None,
+        )
+        from claude_agent_sdk import SystemMessage
+        notif = SystemMessage(
+            subtype="task_notification",
+            data={"subtype": "task_notification"},
+        )
+        result = ResultMessage(
+            subtype="success", duration_ms=100, duration_api_ms=90,
+            is_error=False, num_turns=1, session_id="s1",
+            total_cost_usd=0.01, usage=None, result="done",
+        )
+
+        client = AsyncMock()
+        client.query = AsyncMock()
+
+        call_count = 0
+
+        async def _stream():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                yield assistant
+                yield notif
+                yield result
+            else:
+                # Second stream: no subagents
+                yield ResultMessage(
+                    subtype="success", duration_ms=50, duration_api_ms=40,
+                    is_error=False, num_turns=1, session_id="s1",
+                    total_cost_usd=0.01, usage=None, result="quick",
+                )
+
+        client.receive_messages = _stream
+
+        session = ClaudeSession()
+        with patch.object(session, "_ensure_connected", return_value=client):
+            events1 = [e async for e in session.stream("first")]
+            assert session._active_subagents == 0
+
+            events2 = [e async for e in session.stream("second")]
+            assert session._active_subagents == 0
+
+        assert len(events1) == 3
+        assert len(events2) == 1
+
+    @pytest.mark.asyncio
+    async def test_non_task_tools_dont_increment_counter(self):
+        """Only Task tool_use blocks should increment the subagent counter."""
+        from claude_agent_sdk import (
+            AssistantMessage, ResultMessage, TextBlock, ToolUseBlock,
+        )
+
+        assistant = AssistantMessage(
+            content=[
+                ToolUseBlock(id="tu_1", name="Bash", input={"command": "ls"}),
+                ToolUseBlock(id="tu_2", name="Read", input={"path": "/tmp/x"}),
+            ],
+            model="opus", parent_tool_use_id=None, error=None,
+        )
+        result = ResultMessage(
+            subtype="success", duration_ms=100, duration_api_ms=90,
+            is_error=False, num_turns=1, session_id="s1",
+            total_cost_usd=0.01, usage=None, result="done",
+        )
+
+        client = AsyncMock()
+        client.query = AsyncMock()
+
+        async def _stream():
+            yield assistant
+            yield result  # no subagents → should break normally
+
+        client.receive_messages = _stream
+
+        session = ClaudeSession()
+        with patch.object(session, "_ensure_connected", return_value=client):
+            events = [e async for e in session.stream("go")]
+
+        assert len(events) == 2
+        assert session._active_subagents == 0
+
+
 class TestEnsureConnected:
     """Tests for the _ensure_connected method."""
 

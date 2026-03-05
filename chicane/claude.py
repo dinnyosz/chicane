@@ -19,6 +19,7 @@ import asyncio
 import html
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable
@@ -115,6 +116,12 @@ AskUserCallback = Callable[[list[dict]], Awaitable[dict[str, str]]]
 # reads _between_turn_pending == 0.  If queue_message() fires the event
 # within this window, the stream continues; otherwise it breaks normally.
 _BETWEEN_TURN_GRACE = 0.5
+
+# Maximum time (seconds) to keep the stream alive waiting for subagent
+# completions after the main agent's ResultMessage.  If subagents haven't
+# all reported back within this window, we break out to avoid hanging
+# forever (e.g. if a subagent silently fails without a task_notification).
+_SUBAGENT_WAIT_TIMEOUT = 30 * 60  # 30 minutes
 
 # SDK message type → ClaudeEvent type string
 _MSG_TYPE_MAP = {
@@ -632,6 +639,8 @@ class ClaudeSession:
         self._interrupt_source = None
         self._between_turn_pending = 0
         self._between_turn_event.clear()
+        self._active_subagents = 0
+        subagent_wait_start: float | None = None  # monotonic ts of first skipped ResultMessage
 
         # Push prompt into the generator — the SDK picks it up between turns
         await self._message_queue.put(prompt)
@@ -673,8 +682,39 @@ class ClaudeSession:
 
                 yield event
 
+                # --- Subagent tracking ---
+                # When the main agent spawns a Task subagent, we see
+                # tool_use blocks with name="Task".  When those finish
+                # the SDK sends SystemMessage(subtype="task_notification").
+                # We track the count so we can keep the stream alive past
+                # the main agent's ResultMessage.
+                if isinstance(msg, AssistantMessage):
+                    for block in msg.content:
+                        if isinstance(block, ToolUseBlock) and block.name == "Task":
+                            self._active_subagents += 1
+                            logger.info(
+                                "Subagent spawned (active=%d)",
+                                self._active_subagents,
+                            )
+                elif (isinstance(msg, SystemMessage)
+                      and msg.subtype == "task_notification"):
+                    self._active_subagents = max(0, self._active_subagents - 1)
+                    logger.info(
+                        "Subagent completed (active=%d)",
+                        self._active_subagents,
+                    )
+                    if self._active_subagents == 0:
+                        subagent_wait_start = None
+
                 # Stop at ResultMessage — like receive_response() does,
-                # but only when no between-turn messages are waiting.
+                # but only when no between-turn messages are waiting AND
+                # no subagents are still running.
+                #
+                # If subagents are in-flight the SDK will keep sending
+                # events (task_notifications, more assistant/user turns)
+                # so we must stay in the loop.  A safety timeout prevents
+                # hanging forever if a subagent silently fails.
+                #
                 # If the user pushed a follow-up via queue_message(),
                 # the SDK will deliver it as the next turn and we keep
                 # iterating.
@@ -686,6 +726,25 @@ class ClaudeSession:
                 # fires within the grace window we treat it like a
                 # normal between-turn continuation.
                 if isinstance(msg, ResultMessage):
+                    if self._active_subagents > 0:
+                        if subagent_wait_start is None:
+                            subagent_wait_start = time.monotonic()
+                        elapsed = time.monotonic() - subagent_wait_start
+                        if elapsed > _SUBAGENT_WAIT_TIMEOUT:
+                            logger.warning(
+                                "Subagent wait timeout (%.0fs > %.0fs) with "
+                                "%d still active — breaking stream",
+                                elapsed, _SUBAGENT_WAIT_TIMEOUT,
+                                self._active_subagents,
+                            )
+                            break
+                        logger.info(
+                            "ResultMessage received but %d subagent(s) still "
+                            "running — keeping stream alive (%.0fs elapsed)",
+                            self._active_subagents, elapsed,
+                        )
+                        continue
+
                     if self._between_turn_pending <= 0:
                         # Short grace period to cover the queue race
                         try:

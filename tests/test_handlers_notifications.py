@@ -975,3 +975,77 @@ class TestCommitCardNoDuplicate:
         all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
         output_posts = [t for t in all_texts if "total 42" in t or "file.txt" in t]
         assert len(output_posts) > 0, "Non-commit Bash output should still appear in verbose mode"
+
+
+class TestTaskNotification:
+    """Test that task_notification system events produce visible Slack messages."""
+
+    @pytest.mark.asyncio
+    async def test_task_notification_with_message(self, config, sessions, queue):
+        """task_notification with a message field should post to Slack."""
+        async def fake_stream(prompt):
+            yield make_event(
+                "system", subtype="task_notification",
+                message="Agent completed successfully",
+            )
+            yield make_event("result", text="done", num_turns=1, duration_ms=1000)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "70001.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "run agents", client, config, sessions, queue)
+
+        all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        notif_posts = [t for t in all_texts if ":robot_face:" in t]
+        assert len(notif_posts) >= 1
+        assert "Agent completed successfully" in notif_posts[0]
+
+    @pytest.mark.asyncio
+    async def test_task_notification_with_title_and_message(self, config, sessions, queue):
+        """task_notification with title + message shows both."""
+        async def fake_stream(prompt):
+            yield make_event(
+                "system", subtype="task_notification",
+                title="Validation", message="All tests passed",
+            )
+            yield make_event("result", text="done", num_turns=1, duration_ms=500)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "70002.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "validate", client, config, sessions, queue)
+
+        all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        notif_posts = [t for t in all_texts if ":robot_face:" in t]
+        assert len(notif_posts) >= 1
+        assert "Validation" in notif_posts[0]
+        assert "All tests passed" in notif_posts[0]
+
+    @pytest.mark.asyncio
+    async def test_task_notification_without_data(self, config, sessions, queue):
+        """task_notification without message/title shows generic fallback."""
+        async def fake_stream(prompt):
+            yield make_event("system", subtype="task_notification")
+            yield make_event("result", text="done", num_turns=1, duration_ms=500)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "70003.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "check", client, config, sessions, queue)
+
+        all_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        notif_posts = [t for t in all_texts if ":robot_face:" in t]
+        assert len(notif_posts) >= 1
+        assert "Subagent completed" in notif_posts[0]

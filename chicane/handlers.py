@@ -1277,6 +1277,23 @@ async def _process_message(
                             channel, thread_ts, note,
                         )
 
+                elif event_data.type == "system" and event_data.subtype == "task_notification":
+                    # Subagent completed — post a notification so the user
+                    # sees progress without having to poke chicane.
+                    await _flush_activities()
+                    first_activity_posted = False
+                    title = event_data.raw.get("title", "")
+                    message = event_data.raw.get("message", "")
+                    if title and message:
+                        note = f":robot_face: {title}: {message}"
+                    elif message:
+                        note = f":robot_face: {message}"
+                    elif title:
+                        note = f":robot_face: {title}"
+                    else:
+                        note = ":robot_face: Subagent completed"
+                    await queue.post_message(channel, thread_ts, note)
+
                 else:
                     logger.debug(f"Event type={event_data.type} subtype={event_data.subtype}")
 
