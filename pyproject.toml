@@ -1,6 +1,6 @@
 [project]
 name = "chicane"
-version = "0.4.6"
+version = "0.4.7"
 description = "Chicane — When Claude Code can't go straight, take the chicane. A Slack bridge for Claude Code."
 readme = "README.md"
 license = "Apache-2.0"
