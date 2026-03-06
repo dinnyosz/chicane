@@ -157,12 +157,71 @@ class TestCollectImagePathsFromToolUse:
         event = make_event("user")
         assert _collect_image_paths_from_tool_use(event) == []
 
-    def test_bash_tool_not_collected(self):
-        """Bash tool doesn't have a predictable file_path — not collected here."""
+    def test_bash_tool_bare_filename_not_collected(self):
+        """Bash commands with bare filenames (no path prefix) are not matched."""
         event = make_tool_event(
             tool_block("Bash", command="convert input.pdf output.png")
         )
         assert _collect_image_paths_from_tool_use(event) == []
+
+    def test_bash_tool_absolute_path_collected(self):
+        """Bash commands with absolute image paths are collected."""
+        event = make_tool_event(
+            tool_block("Bash", command="python3 -c \"import matplotlib; plt.savefig('/tmp/chart.png')\"")
+        )
+        assert _collect_image_paths_from_tool_use(event) == ["/tmp/chart.png"]
+
+    def test_bash_tool_multiple_image_paths(self):
+        """Bash commands generating multiple images have all paths collected."""
+        event = make_tool_event(
+            tool_block(
+                "Bash",
+                command=(
+                    "python3 script.py "
+                    "--output /tmp/daily.png /tmp/hourly.jpg /tmp/monthly.png"
+                ),
+            )
+        )
+        result = _collect_image_paths_from_tool_use(event)
+        assert result == ["/tmp/daily.png", "/tmp/hourly.jpg", "/tmp/monthly.png"]
+
+    def test_bash_tool_savefig_pattern(self):
+        """Matplotlib savefig() calls in Python one-liners are detected."""
+        cmd = (
+            "python3 -c \"\n"
+            "import matplotlib.pyplot as plt\n"
+            "plt.plot([1,2,3])\n"
+            "plt.savefig('/tmp/claude_summary_card.png')\n"
+            "plt.savefig('/tmp/claude_daily_activity.png')\n"
+            "\""
+        )
+        event = make_tool_event(tool_block("Bash", command=cmd))
+        result = _collect_image_paths_from_tool_use(event)
+        assert "/tmp/claude_summary_card.png" in result
+        assert "/tmp/claude_daily_activity.png" in result
+
+    def test_bash_tool_relative_path_collected(self):
+        """Bash commands with relative image paths (./foo.png) are collected."""
+        event = make_tool_event(
+            tool_block("Bash", command="convert input.pdf ./output/chart.png")
+        )
+        assert _collect_image_paths_from_tool_use(event) == ["./output/chart.png"]
+
+    def test_bash_tool_non_image_paths_ignored(self):
+        """Bash commands with non-image paths are not collected."""
+        event = make_tool_event(
+            tool_block("Bash", command="python3 /tmp/script.py > /tmp/output.csv")
+        )
+        assert _collect_image_paths_from_tool_use(event) == []
+
+    def test_bash_tool_mixed_with_write(self):
+        """Bash and Write tool_use blocks are both collected."""
+        event = make_tool_event(
+            tool_block("Write", file_path="/tmp/icon.svg", content="<svg/>"),
+            tool_block("Bash", command="python3 -c \"plt.savefig('/tmp/chart.png')\""),
+        )
+        result = _collect_image_paths_from_tool_use(event)
+        assert result == ["/tmp/icon.svg", "/tmp/chart.png"]
 
     def test_case_insensitive_extension(self):
         event = make_tool_event(

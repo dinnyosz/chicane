@@ -1540,6 +1540,26 @@ async def _process_message(
                                                 channel, thread_ts, wrapped,
                                             )
 
+                            # Post images (same as main loop)
+                            if config.post_images:
+                                for img_path_str in pending_image_paths:
+                                    if img_path_str in uploaded_images:
+                                        continue
+                                    p = Path(img_path_str)
+                                    if p.is_file():
+                                        uploaded_images.add(img_path_str)
+                                        await _upload_image(
+                                            client, channel, thread_ts, p, queue,
+                                        )
+                                pending_image_paths.clear()
+
+                                for _tool_use_id, rt in event_data.tool_results:
+                                    await _upload_new_images(
+                                        client, channel, thread_ts,
+                                        rt, uploaded_images, queue,
+                                        cwd=session_info.cwd,
+                                    )
+
                     await _flush_activities()
 
                     # Check retry result
@@ -3332,6 +3352,12 @@ def _collect_image_paths_from_tool_use(event: ClaudeEvent) -> list[str]:
                 suffix = Path(file_path).suffix.lower()
                 if suffix in _IMAGE_EXTENSIONS:
                     paths.append(file_path)
+        elif tool_name == "Bash":
+            # Scan Bash commands for image paths (e.g. savefig('/tmp/chart.png'),
+            # output redirection to .png, --output /tmp/img.jpg, etc.)
+            cmd = tool_input.get("command", "")
+            for m in _IMAGE_PATH_RE.finditer(cmd):
+                paths.append(m.group(1))
     return paths
 
 
