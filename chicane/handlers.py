@@ -627,6 +627,10 @@ async def _process_message(
     )
     session = session_info.session
 
+    # Track channel so cleanup can post notifications.
+    if session_info.channel is None:
+        session_info.channel = channel
+
     # Wire up the AskUserQuestion callback if not already set.
     # This gives the SDK's canUseTool a way to post questions to Slack
     # and wait for the user's reply.

@@ -162,7 +162,10 @@ async def start(config: Config | None = None) -> None:
             while True:
                 await asyncio.sleep(600)
                 try:
-                    await sessions.cleanup()
+                    await sessions.cleanup(
+                        config=config,
+                        client=app.client,
+                    )
                 except Exception:
                     logger.warning("Session cleanup failed", exc_info=True)
 

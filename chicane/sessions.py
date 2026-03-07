@@ -246,8 +246,19 @@ class SessionStore:
         self._sessions.clear()
         self._message_to_thread.clear()
 
-    async def cleanup(self, max_age_hours: int = 2) -> int:
-        """Remove sessions older than max_age_hours. Returns count removed."""
+    async def cleanup(
+        self,
+        max_age_hours: int = 2,
+        config: Config | None = None,
+        client: Any | None = None,
+    ) -> int:
+        """Remove sessions older than max_age_hours. Returns count removed.
+
+        When *config* carries a non-empty ``session_cleanup_command``, the
+        command is sent to each expiring session before disconnecting.  If
+        *client* (a ``AsyncWebClient``) is provided and the session has a
+        known channel, progress notifications are posted to the Slack thread.
+        """
         now = datetime.now()
         expired = [
             ts
@@ -257,8 +268,18 @@ class SessionStore:
         ]
         for ts in expired:
             info = self._sessions.pop(ts)
+            await _run_pre_cleanup(info, ts, config, client)
             await info.session.disconnect()
             _cleanup_temp_dir(info)
+            if client and info.channel:
+                try:
+                    await client.chat_postMessage(
+                        channel=info.channel,
+                        thread_ts=ts,
+                        text=":wave: Session closed after inactivity.",
+                    )
+                except Exception:
+                    logger.debug("Failed to post cleanup notice", exc_info=True)
         if expired:
             # Remove orphaned message-to-thread entries
             active_threads = set(self._sessions.keys())
@@ -271,6 +292,62 @@ class SessionStore:
                 del self._message_to_thread[msg_ts]
             logger.info(f"Cleaned up {len(expired)} expired sessions")
         return len(expired)
+
+
+_CLEANUP_COMMAND_TIMEOUT = 300  # 5 minutes
+
+
+async def _run_pre_cleanup(
+    info: SessionInfo,
+    thread_ts: str,
+    config: Config | None,
+    client: Any | None,
+) -> None:
+    """Run the pre-cleanup command on a session before disconnecting.
+
+    Silently returns if no command is configured.  Errors and timeouts are
+    logged but never prevent the session from being closed.
+    """
+    if not config or not config.session_cleanup_command:
+        return
+
+    cmd = config.session_cleanup_command
+
+    if client and info.channel:
+        try:
+            await client.chat_postMessage(
+                channel=info.channel,
+                thread_ts=thread_ts,
+                text=f":broom: Session idle — running cleanup command before closing…",
+            )
+        except Exception:
+            logger.debug("Failed to post pre-cleanup notice", exc_info=True)
+
+    try:
+        async with asyncio.timeout(_CLEANUP_COMMAND_TIMEOUT):
+            async for _event in info.session.stream(cmd):
+                pass  # consume events, don't post to Slack
+    except TimeoutError:
+        logger.warning(
+            "Pre-cleanup command timed out after %ds for thread %s",
+            _CLEANUP_COMMAND_TIMEOUT,
+            thread_ts,
+        )
+        if client and info.channel:
+            try:
+                await client.chat_postMessage(
+                    channel=info.channel,
+                    thread_ts=thread_ts,
+                    text=":warning: Cleanup command timed out.",
+                )
+            except Exception:
+                pass
+    except Exception:
+        logger.warning(
+            "Pre-cleanup command failed for thread %s",
+            thread_ts,
+            exc_info=True,
+        )
 
 
 def _cleanup_temp_dir(info: SessionInfo) -> None:
