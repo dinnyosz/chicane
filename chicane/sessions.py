@@ -276,7 +276,7 @@ class SessionStore:
                     await client.chat_postMessage(
                         channel=info.channel,
                         thread_ts=ts,
-                        text=":wave: Session closed after inactivity.",
+                        text=":checkered_flag: Session closed after inactivity.",
                     )
                 except Exception:
                     logger.debug("Failed to post cleanup notice", exc_info=True)
@@ -294,7 +294,7 @@ class SessionStore:
         return len(expired)
 
 
-_CLEANUP_COMMAND_TIMEOUT = 300  # 5 minutes
+_CLEANUP_COMMAND_TIMEOUT = 600  # 10 minutes
 
 
 async def _run_pre_cleanup(
