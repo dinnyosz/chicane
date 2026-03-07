@@ -266,12 +266,13 @@ class SessionStore:
             if (now - info.last_used).total_seconds() > max_age_hours * 3600
             and not info.session.is_streaming
         ]
+        has_cleanup_cmd = bool(config and config.session_cleanup_command)
         for ts in expired:
             info = self._sessions.pop(ts)
             await _run_pre_cleanup(info, ts, config, client)
             await info.session.disconnect()
             _cleanup_temp_dir(info)
-            if client and info.channel:
+            if has_cleanup_cmd and client and info.channel:
                 try:
                     await client.chat_postMessage(
                         channel=info.channel,
