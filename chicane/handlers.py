@@ -17,7 +17,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 
 from .claude import ClaudeEvent
 from .config import Config, generate_session_alias, load_handoff_session, save_handoff_session
-from .emoji_map import emojis_for_alias
+from .emoji_map import all_emojis_for_alias
 from .sessions import SessionInfo, SessionStore
 from .slack_queue import SlackMessageQueue
 
@@ -1244,7 +1244,10 @@ async def _process_message(
                             )
 
                         # Add emoji reactions matching the alias
-                        adj_emoji, noun_emoji = emojis_for_alias(alias)
+                        verb_emoji, adj_emoji, noun_emoji = all_emojis_for_alias(alias)
+                        await _add_thread_reaction(
+                            client, channel, session_info, verb_emoji,
+                        )
                         await _add_thread_reaction(
                             client, channel, session_info, adj_emoji,
                         )
