@@ -484,7 +484,12 @@ class TestPreCleanupCommand:
         assert mock_client.chat_postMessage.call_count == 2
         calls = mock_client.chat_postMessage.call_args_list
         assert ":broom:" in calls[0].kwargs["text"]
+        assert "run /context-summary" in calls[0].kwargs["text"]
         assert ":checkered_flag:" in calls[1].kwargs["text"]
+        # Should also add a reaction to the thread root
+        mock_client.reactions_add.assert_called_once_with(
+            channel="C_TEST", name="checkered_flag", timestamp="old-thread",
+        )
 
     @pytest.mark.asyncio
     async def test_cleanup_no_channel_skips_notifications(self, config_with_command):
@@ -509,6 +514,7 @@ class TestPreCleanupCommand:
 
         assert removed == 1
         mock_client.chat_postMessage.assert_not_called()
+        mock_client.reactions_add.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_cleanup_no_config_skips_command(self):

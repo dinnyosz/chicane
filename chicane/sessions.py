@@ -273,6 +273,14 @@ class SessionStore:
             _cleanup_temp_dir(info)
             if client and info.channel:
                 try:
+                    await client.reactions_add(
+                        channel=info.channel,
+                        name="checkered_flag",
+                        timestamp=ts,
+                    )
+                except Exception:
+                    logger.debug("Failed to add cleanup reaction", exc_info=True)
+                try:
                     await client.chat_postMessage(
                         channel=info.channel,
                         thread_ts=ts,
@@ -318,7 +326,7 @@ async def _run_pre_cleanup(
             await client.chat_postMessage(
                 channel=info.channel,
                 thread_ts=thread_ts,
-                text=f":broom: Session idle — running cleanup command before closing…",
+                text=f":broom: Session idle — running cleanup command before closing…\n> {cmd}",
             )
         except Exception:
             logger.debug("Failed to post pre-cleanup notice", exc_info=True)
