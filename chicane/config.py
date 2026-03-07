@@ -81,6 +81,7 @@ class Config:
     verbosity: str = "verbose"
     react_to_strangers: bool = True
     post_images: bool = True
+    session_cleanup_command: str = ""
 
     def __repr__(self) -> str:
         """Mask sensitive tokens in repr to prevent accidental leakage."""
@@ -240,6 +241,8 @@ class Config:
         raw_post_images = os.environ.get("POST_IMAGES", "true").lower()
         post_images = raw_post_images in ("true", "1", "yes")
 
+        session_cleanup_command = os.environ.get("SESSION_CLEANUP_COMMAND", "")
+
         return cls(
             slack_bot_token=bot_token,
             slack_app_token=app_token,
@@ -259,6 +262,7 @@ class Config:
             verbosity=verbosity,
             react_to_strangers=react_to_strangers,
             post_images=post_images,
+            session_cleanup_command=session_cleanup_command,
         )
 
 

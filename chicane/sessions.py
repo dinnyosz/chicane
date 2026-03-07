@@ -96,6 +96,9 @@ class SessionInfo:
     # True when cwd is a temporary directory created by SessionStore.
     is_temp_dir: bool = False
 
+    # Slack channel ID so cleanup can post notifications.
+    channel: str | None = None
+
     # Funky alias for this session (e.g. "sneaky-octopus-pizza").
     session_alias: str | None = None
 
