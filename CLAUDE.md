@@ -102,4 +102,4 @@ Config is loaded from `.env` in the platform config directory (`~/Library/Applic
 
 Required: `SLACK_BOT_TOKEN` (xoxb-...), `SLACK_APP_TOKEN` (xapp-...).
 
-Optional: `BASE_DIRECTORY`, `ALLOWED_USERS`, `CHANNEL_DIRS`, `CLAUDE_MODEL`, `CLAUDE_PERMISSION_MODE` (acceptEdits|dontAsk|bypassPermissions), `CLAUDE_ALLOWED_TOOLS`, `CLAUDE_DISALLOWED_TOOLS`, `CLAUDE_SETTING_SOURCES`, `CLAUDE_MAX_TURNS`, `CLAUDE_MAX_BUDGET_USD`, `RATE_LIMIT`, `VERBOSITY` (minimal|normal|verbose), `REACT_TO_STRANGERS` (true|false, default true), `LOG_DIR`, `LOG_LEVEL` (DEBUG|INFO|WARNING|ERROR).
+Optional: `BASE_DIRECTORY`, `ALLOWED_USERS`, `CHANNEL_DIRS`, `CLAUDE_MODEL`, `CLAUDE_PERMISSION_MODE` (acceptEdits|dontAsk|bypassPermissions), `CLAUDE_ALLOWED_TOOLS`, `CLAUDE_DISALLOWED_TOOLS`, `CLAUDE_SETTING_SOURCES`, `CLAUDE_MAX_TURNS`, `CLAUDE_MAX_BUDGET_USD`, `RATE_LIMIT`, `VERBOSITY` (minimal|normal|verbose), `REACT_TO_STRANGERS` (true|false, default true), `SESSION_CLEANUP_COMMAND` (free-text prompt run before closing idle sessions, default empty), `LOG_DIR`, `LOG_LEVEL` (DEBUG|INFO|WARNING|ERROR).
