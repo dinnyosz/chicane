@@ -436,6 +436,28 @@ class TestPostImagesConfig:
             assert Config.from_env().post_images is False, f"Expected False for '{val}'"
 
 
+class TestSessionCleanupCommandConfig:
+    def test_default_empty(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.delenv("SESSION_CLEANUP_COMMAND", raising=False)
+        assert Config.from_env().session_cleanup_command == ""
+
+    def test_from_env(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("SESSION_CLEANUP_COMMAND", "run /context-summary")
+        config = Config.from_env()
+        assert config.session_cleanup_command == "run /context-summary"
+
+    def test_empty_string_from_env(self, monkeypatch):
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+        monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+        monkeypatch.setenv("SESSION_CLEANUP_COMMAND", "")
+        config = Config.from_env()
+        assert config.session_cleanup_command == ""
+
+
 class TestConfigDir:
     def test_override_via_env(self, monkeypatch):
         monkeypatch.setenv("CHICANE_CONFIG_DIR", "/custom/path")

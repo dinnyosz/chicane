@@ -1,13 +1,14 @@
 """Tests for chicane.sessions."""
 
+import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from chicane.config import Config
-from chicane.sessions import _build_system_prompt, SessionStore
+from chicane.sessions import _build_system_prompt, _run_pre_cleanup, SessionStore
 
 
 @pytest.fixture
@@ -347,3 +348,200 @@ class TestBuildSystemPrompt:
             info = store.get_or_create("thread-1", config, cwd=Path("/tmp/test"))
             expected = _build_system_prompt(level)
             assert info.session.system_prompt == expected
+
+
+class TestPreCleanupCommand:
+    """Tests for running a pre-cleanup command before closing idle sessions."""
+
+    @pytest.fixture
+    def config_with_command(self):
+        return Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            base_directory=Path("/tmp/projects"),
+            session_cleanup_command="run /context-summary",
+        )
+
+    @pytest.fixture
+    def config_no_command(self):
+        return Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            base_directory=Path("/tmp/projects"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_cleanup_runs_command_before_disconnect(self, config_with_command):
+        store = SessionStore()
+        info = store.get_or_create("old-thread", config_with_command, cwd=Path("/tmp/a"))
+        info.session.disconnect = AsyncMock()
+        info.channel = "C_TEST"
+        info.last_used = datetime.now() - timedelta(hours=25)
+
+        async def fake_stream(prompt):
+            assert prompt == "run /context-summary"
+            for item in []:
+                yield item
+
+        info.session.stream = fake_stream
+
+        mock_client = AsyncMock()
+        removed = await store.cleanup(
+            max_age_hours=24,
+            config=config_with_command,
+            client=mock_client,
+        )
+
+        assert removed == 1
+        info.session.disconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_without_command_skips_stream(self, config_no_command):
+        store = SessionStore()
+        info = store.get_or_create("old-thread", config_no_command, cwd=Path("/tmp/a"))
+        info.session.disconnect = AsyncMock()
+        info.session.stream = AsyncMock()
+        info.last_used = datetime.now() - timedelta(hours=25)
+
+        removed = await store.cleanup(max_age_hours=24, config=config_no_command)
+
+        assert removed == 1
+        info.session.stream.assert_not_awaited()
+        info.session.disconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_command_error_still_disconnects(self, config_with_command):
+        store = SessionStore()
+        info = store.get_or_create("old-thread", config_with_command, cwd=Path("/tmp/a"))
+        info.session.disconnect = AsyncMock()
+        info.channel = "C_TEST"
+        info.last_used = datetime.now() - timedelta(hours=25)
+
+        async def exploding_stream(prompt):
+            raise RuntimeError("SDK crash")
+            # Make it a generator
+            yield  # pragma: no cover
+
+        info.session.stream = exploding_stream
+
+        mock_client = AsyncMock()
+        removed = await store.cleanup(
+            max_age_hours=24,
+            config=config_with_command,
+            client=mock_client,
+        )
+
+        assert removed == 1
+        info.session.disconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_command_timeout_still_disconnects(self, config_with_command):
+        store = SessionStore()
+        info = store.get_or_create("old-thread", config_with_command, cwd=Path("/tmp/a"))
+        info.session.disconnect = AsyncMock()
+        info.channel = "C_TEST"
+        info.last_used = datetime.now() - timedelta(hours=25)
+
+        async def slow_stream(prompt):
+            await asyncio.sleep(9999)
+            yield  # pragma: no cover
+
+        info.session.stream = slow_stream
+
+        mock_client = AsyncMock()
+        with patch("chicane.sessions._CLEANUP_COMMAND_TIMEOUT", 0.01):
+            removed = await store.cleanup(
+                max_age_hours=24,
+                config=config_with_command,
+                client=mock_client,
+            )
+
+        assert removed == 1
+        info.session.disconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_posts_notifications(self, config_with_command):
+        store = SessionStore()
+        info = store.get_or_create("old-thread", config_with_command, cwd=Path("/tmp/a"))
+        info.session.disconnect = AsyncMock()
+        info.channel = "C_TEST"
+        info.last_used = datetime.now() - timedelta(hours=25)
+
+        async def fake_stream(prompt):
+            for item in []:
+                yield item
+
+        info.session.stream = fake_stream
+
+        mock_client = AsyncMock()
+        await store.cleanup(
+            max_age_hours=24,
+            config=config_with_command,
+            client=mock_client,
+        )
+
+        # Should post: pre-cleanup notice + session closed notice
+        assert mock_client.chat_postMessage.call_count == 2
+        calls = mock_client.chat_postMessage.call_args_list
+        assert ":broom:" in calls[0].kwargs["text"]
+        assert ":wave:" in calls[1].kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_cleanup_no_channel_skips_notifications(self, config_with_command):
+        store = SessionStore()
+        info = store.get_or_create("old-thread", config_with_command, cwd=Path("/tmp/a"))
+        info.session.disconnect = AsyncMock()
+        # channel is None (default)
+        info.last_used = datetime.now() - timedelta(hours=25)
+
+        async def fake_stream(prompt):
+            for item in []:
+                yield item
+
+        info.session.stream = fake_stream
+
+        mock_client = AsyncMock()
+        removed = await store.cleanup(
+            max_age_hours=24,
+            config=config_with_command,
+            client=mock_client,
+        )
+
+        assert removed == 1
+        mock_client.chat_postMessage.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_no_config_skips_command(self):
+        """Backward compatibility: cleanup() without config just disconnects."""
+        store = SessionStore()
+        config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            base_directory=Path("/tmp/projects"),
+        )
+        info = store.get_or_create("old-thread", config, cwd=Path("/tmp/a"))
+        info.session.disconnect = AsyncMock()
+        info.session.stream = AsyncMock()
+        info.last_used = datetime.now() - timedelta(hours=25)
+
+        removed = await store.cleanup(max_age_hours=24)
+
+        assert removed == 1
+        info.session.stream.assert_not_awaited()
+        info.session.disconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_run_pre_cleanup_noop_when_no_command(self, config_no_command):
+        """_run_pre_cleanup does nothing when session_cleanup_command is empty."""
+        info = MagicMock()
+        info.session.stream = AsyncMock()
+        await _run_pre_cleanup(info, "thread-1", config_no_command, None)
+        info.session.stream.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_run_pre_cleanup_noop_when_no_config(self):
+        """_run_pre_cleanup does nothing when config is None."""
+        info = MagicMock()
+        info.session.stream = AsyncMock()
+        await _run_pre_cleanup(info, "thread-1", None, None)
+        info.session.stream.assert_not_called()
