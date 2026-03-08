@@ -776,6 +776,12 @@ async def _process_message(
                     for chunk in _split_message(_markdown_to_mrkdwn(full_text)):
                         r = await queue.post_message(channel, thread_ts, chunk)
                         sessions.register_bot_message(r.ts, thread_ts)
+                    if config.post_images:
+                        await _upload_new_images(
+                            client, channel, thread_ts,
+                            full_text, uploaded_images, queue,
+                            cwd=session_info.cwd,
+                        )
                     full_text = ""
                     first_activity_posted = False
             except asyncio.CancelledError:
@@ -886,6 +892,12 @@ async def _process_message(
                         for chunk in _split_message(_markdown_to_mrkdwn(full_text)):
                             r = await queue.post_message(channel, thread_ts, chunk)
                             sessions.register_bot_message(r.ts, thread_ts)
+                        if config.post_images:
+                            await _upload_new_images(
+                                client, channel, thread_ts,
+                                full_text, uploaded_images, queue,
+                                cwd=session_info.cwd,
+                            )
                         full_text = ""
                         first_activity_posted = False
 

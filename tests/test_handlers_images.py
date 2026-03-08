@@ -1,5 +1,6 @@
 """Tests for image detection and upload in handlers."""
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,10 +10,11 @@ from chicane.config import Config
 from chicane.handlers import (
     _collect_image_paths_from_tool_use,
     _extract_image_paths,
+    _process_message,
     _upload_image,
     _upload_new_images,
 )
-from tests.conftest import make_event, make_tool_event, mock_client, tool_block
+from tests.conftest import make_event, make_tool_event, mock_client, mock_session_info, tool_block
 
 
 # ---------------------------------------------------------------------------
@@ -391,3 +393,187 @@ class TestPostImagesConfig:
             post_images=True,
         )
         assert config.post_images is True
+
+
+# ---------------------------------------------------------------------------
+# Image upload during text flushes (integration tests via _process_message)
+# ---------------------------------------------------------------------------
+
+
+class TestImageUploadDuringFlush:
+    """Verify images mentioned in text are uploaded even when text is flushed mid-stream."""
+
+    @pytest.mark.asyncio
+    async def test_image_in_tool_activity_flushed_text_is_uploaded(
+        self, config, sessions, queue, tmp_path
+    ):
+        """Image path in text flushed before tool activities should still be uploaded."""
+        img = tmp_path / "diagram.png"
+        img.write_bytes(b"\x89PNG")
+
+        async def fake_stream(prompt):
+            yield make_event("system", subtype="init", session_id="s1")
+            # Text mentioning an image, followed immediately by tool activity
+            yield make_event("assistant", text=f"I created {img}")
+            yield make_tool_event(tool_block("Read", file_path="/src/b.py"))
+            # Tool result
+            yield make_event(
+                "user",
+                message={"content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "tu_1",
+                    "content": "file contents",
+                }]},
+            )
+            yield make_event("assistant", text="All done.")
+            yield make_event("result", text="All done.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "go", client, config, sessions, queue)
+
+        # Image should have been uploaded despite text being flushed before tool activity
+        upload_calls = [
+            c for c in client.files_upload_v2.call_args_list
+            if c.kwargs.get("filename") == "diagram.png"
+        ]
+        assert len(upload_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_image_in_idle_flushed_text_is_uploaded(
+        self, config, sessions, queue, tmp_path
+    ):
+        """Image path in text that gets idle-flushed should still be uploaded."""
+        img = tmp_path / "chart.png"
+        img.write_bytes(b"\x89PNG")
+
+        barrier = asyncio.Event()
+        text_yielded = asyncio.Event()
+
+        async def fake_stream(prompt):
+            yield make_event("system", subtype="init", session_id="s1")
+            yield make_event("assistant", text=f"Here is the chart: {img}")
+            text_yielded.set()
+            # SDK blocks — idle timer will fire and flush text
+            await barrier.wait()
+            yield make_event("result", text="")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            task = asyncio.create_task(
+                _process_message(event, "go", client, config, sessions, queue)
+            )
+            await text_yielded.wait()
+            # Let idle flush fire (asyncio.sleep is mocked to instant)
+            for _ in range(10):
+                await asyncio.sleep(0)
+
+            # Image should have been uploaded during idle flush
+            upload_calls = [
+                c for c in client.files_upload_v2.call_args_list
+                if c.kwargs.get("filename") == "chart.png"
+            ]
+            assert len(upload_calls) == 1
+
+            barrier.set()
+            await task
+
+    @pytest.mark.asyncio
+    async def test_image_dedup_across_flush_and_final(
+        self, config, sessions, queue, tmp_path
+    ):
+        """Same image path in flushed text and final text should be uploaded only once."""
+        img = tmp_path / "result.png"
+        img.write_bytes(b"\x89PNG")
+
+        async def fake_stream(prompt):
+            yield make_event("system", subtype="init", session_id="s1")
+            yield make_event("assistant", text=f"Created {img}")
+            yield make_tool_event(tool_block("Read", file_path="/src/a.py"))
+            yield make_event(
+                "user",
+                message={"content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "tu_1",
+                    "content": "file contents",
+                }]},
+            )
+            # Same image mentioned again in final text
+            yield make_event("assistant", text=f"See {img} for the output.")
+            yield make_event("result", text=f"See {img} for the output.")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(event, "go", client, config, sessions, queue)
+
+        upload_calls = [
+            c for c in client.files_upload_v2.call_args_list
+            if c.kwargs.get("filename") == "result.png"
+        ]
+        assert len(upload_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_upload_when_post_images_disabled(
+        self, sessions, queue, tmp_path
+    ):
+        """When post_images=False, no image scanning at flush points."""
+        no_img_config = Config(
+            slack_bot_token="xoxb-test",
+            slack_app_token="xapp-test",
+            allowed_users=["UHUMAN1"],
+            post_images=False,
+            rate_limit=10000,
+        )
+        img = tmp_path / "chart.png"
+        img.write_bytes(b"\x89PNG")
+
+        async def fake_stream(prompt):
+            yield make_event("system", subtype="init", session_id="s1")
+            yield make_event("assistant", text=f"Created {img}")
+            yield make_tool_event(tool_block("Read", file_path="/src/a.py"))
+            yield make_event(
+                "user",
+                message={"content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "tu_1",
+                    "content": "file contents",
+                }]},
+            )
+            yield make_event("result", text="")
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
+            await _process_message(
+                event, "go", client, no_img_config, sessions, queue
+            )
+
+        # No image uploads should have happened
+        img_uploads = [
+            c for c in client.files_upload_v2.call_args_list
+            if c.kwargs.get("filename", "").endswith(".png")
+        ]
+        assert len(img_uploads) == 0
