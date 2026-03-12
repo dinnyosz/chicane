@@ -302,7 +302,7 @@ class SessionStore:
         return len(expired)
 
 
-_CLEANUP_COMMAND_TIMEOUT = 600  # 10 minutes
+_CLEANUP_COMMAND_TIMEOUT = 1200  # 20 minutes
 
 
 async def _run_pre_cleanup(
