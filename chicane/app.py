@@ -8,6 +8,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 
 import certifi
@@ -111,6 +112,60 @@ def create_app(config: Config | None = None) -> AsyncApp:
     return app
 
 
+DNS_FLUSH_THRESHOLD = 300  # seconds disconnected before flushing DNS
+DNS_FLUSH_COOLDOWN = 300  # minimum seconds between flushes
+
+
+async def _dns_watchdog(client: object) -> None:
+    """Flush OS DNS cache if Socket Mode connection is down too long.
+
+    macOS's mDNSResponder can cache negative DNS results after a
+    network outage, preventing reconnection even after connectivity
+    is restored.  Periodically flushing the cache nudges the system
+    resolver to re-query, letting slack-bolt's built-in reconnect
+    loop succeed.
+    """
+    last_flush_time = 0.0
+
+    while True:
+        await asyncio.sleep(60)  # Check every minute
+        try:
+            if await client.is_connected():
+                continue
+
+            # How long has the connection been down?
+            if client.last_ping_pong_time is None:
+                continue
+
+            down_seconds = time.time() - client.last_ping_pong_time
+            if down_seconds < DNS_FLUSH_THRESHOLD:
+                continue
+
+            # Don't flush too frequently
+            now = time.time()
+            if now - last_flush_time < DNS_FLUSH_COOLDOWN:
+                continue
+
+            if sys.platform == "darwin":
+                logger.warning(
+                    "Connection down for %ds — flushing macOS DNS cache",
+                    int(down_seconds),
+                )
+                await asyncio.create_subprocess_exec(
+                    "dscacheutil", "-flushcache",
+                )
+                last_flush_time = now
+            else:
+                logger.warning(
+                    "Connection down for %ds — "
+                    "no automatic DNS flush on this platform",
+                    int(down_seconds),
+                )
+                last_flush_time = now  # Cooldown to avoid log spam
+        except Exception:
+            logger.debug("DNS watchdog error", exc_info=True)
+
+
 async def start(config: Config | None = None) -> None:
     """Start the bot."""
     _acquire_pidfile()
@@ -170,6 +225,10 @@ async def start(config: Config | None = None) -> None:
                     logger.warning("Session cleanup failed", exc_info=True)
 
         cleanup_task = asyncio.ensure_future(_periodic_cleanup())
+
+        dns_task = asyncio.ensure_future(
+            _dns_watchdog(handler.client)
+        )
 
         loop = asyncio.get_running_loop()
         stop = asyncio.Event()
@@ -235,6 +294,7 @@ async def start(config: Config | None = None) -> None:
             except (ImportError, OSError):
                 pass
         cleanup_task.cancel()
+        dns_task.cancel()
         await sessions.shutdown()
         try:
             await asyncio.wait_for(handler.close_async(), timeout=3.0)

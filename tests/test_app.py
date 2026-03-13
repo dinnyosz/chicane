@@ -1,14 +1,23 @@
-"""Tests for chicane.app — session ID resolution and PID file guard."""
+"""Tests for chicane.app — session ID resolution, PID file guard, DNS watchdog."""
 
+import asyncio
 import json
 import os
 import sys
+import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from chicane.app import _acquire_pidfile, _release_pidfile, resolve_session_id
+from chicane.app import (
+    DNS_FLUSH_COOLDOWN,
+    DNS_FLUSH_THRESHOLD,
+    _acquire_pidfile,
+    _dns_watchdog,
+    _release_pidfile,
+    resolve_session_id,
+)
 import chicane.app as app_module
 
 
@@ -162,3 +171,111 @@ class TestIsigWatchdog:
                 pass
 
         _ensure_isig()  # Should not raise
+
+
+class TestDnsWatchdog:
+    """Tests for the DNS cache flush watchdog."""
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.is_connected = AsyncMock(return_value=False)
+        client.last_ping_pong_time = time.time() - 600  # 10 min ago
+        return client
+
+    async def _run_one_cycle(self, client):
+        """Run the watchdog for one iteration then cancel it."""
+        # Patch asyncio.sleep to skip the initial 60s wait, then cancel
+        call_count = 0
+
+        async def fake_sleep(seconds):
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise asyncio.CancelledError
+
+        with patch("chicane.app.asyncio.sleep", side_effect=fake_sleep):
+            with pytest.raises(asyncio.CancelledError):
+                await _dns_watchdog(client)
+
+    @pytest.mark.asyncio
+    async def test_skips_when_connected(self, mock_client):
+        """No flush when connection is healthy."""
+        mock_client.is_connected.return_value = True
+
+        with patch("chicane.app.asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            await self._run_one_cycle(mock_client)
+            mock_exec.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_when_no_ping_pong_time(self, mock_client):
+        """No flush when last_ping_pong_time is None (never connected)."""
+        mock_client.last_ping_pong_time = None
+
+        with patch("chicane.app.asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            await self._run_one_cycle(mock_client)
+            mock_exec.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_when_below_threshold(self, mock_client):
+        """No flush when disconnected for less than the threshold."""
+        mock_client.last_ping_pong_time = time.time() - 60  # Only 1 min
+
+        with patch("chicane.app.asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            await self._run_one_cycle(mock_client)
+            mock_exec.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_flushes_dns_on_darwin(self, mock_client):
+        """Flushes DNS cache on macOS when disconnected past threshold."""
+        with patch("chicane.app.sys") as mock_sys, \
+             patch("chicane.app.asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            mock_sys.platform = "darwin"
+            await self._run_one_cycle(mock_client)
+            mock_exec.assert_called_once_with("dscacheutil", "-flushcache")
+
+    @pytest.mark.asyncio
+    async def test_no_flush_on_linux(self, mock_client):
+        """On non-darwin platforms, logs warning but doesn't run dscacheutil."""
+        with patch("chicane.app.sys") as mock_sys, \
+             patch("chicane.app.asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            mock_sys.platform = "linux"
+            await self._run_one_cycle(mock_client)
+            mock_exec.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cooldown_prevents_repeated_flush(self, mock_client):
+        """Second flush within cooldown period is skipped."""
+        cycle_count = 0
+
+        async def fake_sleep(seconds):
+            nonlocal cycle_count
+            cycle_count += 1
+            if cycle_count > 2:
+                raise asyncio.CancelledError
+
+        with patch("chicane.app.sys") as mock_sys, \
+             patch("chicane.app.asyncio.sleep", side_effect=fake_sleep), \
+             patch("chicane.app.asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            mock_sys.platform = "darwin"
+            with pytest.raises(asyncio.CancelledError):
+                await _dns_watchdog(mock_client)
+            # Should only flush once despite two cycles (cooldown)
+            assert mock_exec.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_exception_does_not_crash_watchdog(self, mock_client):
+        """Exceptions in the check loop are caught and logged."""
+        mock_client.is_connected.side_effect = RuntimeError("boom")
+        cycle_count = 0
+
+        async def fake_sleep(seconds):
+            nonlocal cycle_count
+            cycle_count += 1
+            if cycle_count > 1:
+                raise asyncio.CancelledError
+
+        with patch("chicane.app.asyncio.sleep", side_effect=fake_sleep):
+            with pytest.raises(asyncio.CancelledError):
+                await _dns_watchdog(mock_client)
+        # Reached here without crashing — the exception was handled
