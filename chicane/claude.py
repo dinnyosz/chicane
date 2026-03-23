@@ -641,6 +641,7 @@ class ClaudeSession:
         self._between_turn_event.clear()
         self._active_subagents = 0
         subagent_wait_start: float | None = None  # monotonic ts of first skipped ResultMessage
+        seen_result_while_subagents: bool = False  # True if ResultMessage was skipped for subagents
 
         # Push prompt into the generator — the SDK picks it up between turns
         await self._message_queue.put(prompt)
@@ -705,6 +706,35 @@ class ClaudeSession:
                     )
                     if self._active_subagents == 0:
                         subagent_wait_start = None
+                        if seen_result_while_subagents:
+                            # All subagents finished and we already saw the
+                            # main agent's ResultMessage.  The SDK may or may
+                            # not send a final ResultMessage — wait briefly
+                            # for one, but don't hang forever.
+                            logger.info(
+                                "All subagents done and ResultMessage already "
+                                "received — waiting briefly for final result"
+                            )
+                            try:
+                                msg = await asyncio.wait_for(
+                                    response_iter.__anext__(),
+                                    timeout=_BETWEEN_TURN_GRACE,
+                                )
+                            except (asyncio.TimeoutError, StopAsyncIteration):
+                                logger.info(
+                                    "No final message after subagents — "
+                                    "breaking stream"
+                                )
+                                break
+                            # Got a message — yield it and let the normal
+                            # ResultMessage / loop logic handle it.
+                            event_type = _MSG_TYPE_MAP.get(type(msg), "unknown")
+                            raw = _sdk_message_to_raw(msg)
+                            event = ClaudeEvent(type=event_type, raw=raw)
+                            event_count += 1
+                            yield event
+                            if isinstance(msg, ResultMessage):
+                                break
 
                 # Stop at ResultMessage — like receive_response() does,
                 # but only when no between-turn messages are waiting AND
@@ -727,6 +757,7 @@ class ClaudeSession:
                 # normal between-turn continuation.
                 if isinstance(msg, ResultMessage):
                     if self._active_subagents > 0:
+                        seen_result_while_subagents = True
                         if subagent_wait_start is None:
                             subagent_wait_start = time.monotonic()
                         elapsed = time.monotonic() - subagent_wait_start

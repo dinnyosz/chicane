@@ -1703,6 +1703,107 @@ class TestSubagentTracking:
         assert len(events) == 2
         assert session._active_subagents == 0
 
+    @pytest.mark.asyncio
+    async def test_stream_breaks_when_no_final_result_after_subagents(self):
+        """Stream should break after all subagents complete even if no final
+        ResultMessage is sent — the common case that caused 20min timeouts."""
+        from claude_agent_sdk import (
+            AssistantMessage, ResultMessage, SystemMessage,
+            TextBlock, ToolUseBlock,
+        )
+
+        # Main agent spawns a Task subagent
+        assistant = AssistantMessage(
+            content=[
+                TextBlock(text="Spawning agent"),
+                ToolUseBlock(id="tu_1", name="Task", input={"prompt": "do work"}),
+            ],
+            model="opus", parent_tool_use_id=None, error=None,
+        )
+        # Main agent's ResultMessage arrives while subagent is active
+        result1 = ResultMessage(
+            subtype="success", duration_ms=100, duration_api_ms=90,
+            is_error=False, num_turns=1, session_id="s1",
+            total_cost_usd=0.01, usage=None, result="launched",
+        )
+        # Subagent completes
+        notification = SystemMessage(
+            subtype="task_notification",
+            data={"subtype": "task_notification", "message": "Agent done"},
+        )
+        # No final ResultMessage after this — stream used to hang here
+
+        client = AsyncMock()
+        client.query = AsyncMock()
+
+        async def _no_final_result_stream():
+            yield assistant
+            yield result1       # skipped — subagent active
+            yield notification   # subagent completes, no more messages
+            # Stream ends — no final ResultMessage
+
+        client.receive_messages = _no_final_result_stream
+
+        session = ClaudeSession()
+        with patch.object(session, "_ensure_connected", return_value=client):
+            events = [e async for e in session.stream("go")]
+
+        # Should get all 3 events and break cleanly (not hang)
+        assert len(events) == 3
+        assert events[0].type == "assistant"
+        assert events[1].type == "result"
+        assert events[2].type == "system"
+        assert events[2].subtype == "task_notification"
+
+    @pytest.mark.asyncio
+    async def test_stream_breaks_when_no_final_result_multiple_subagents(self):
+        """Same as above but with multiple subagents — all complete,
+        no final ResultMessage."""
+        from claude_agent_sdk import (
+            AssistantMessage, ResultMessage, SystemMessage,
+            TextBlock, ToolUseBlock,
+        )
+
+        assistant = AssistantMessage(
+            content=[
+                ToolUseBlock(id="tu_1", name="Task", input={"prompt": "task 1"}),
+                ToolUseBlock(id="tu_2", name="Task", input={"prompt": "task 2"}),
+            ],
+            model="opus", parent_tool_use_id=None, error=None,
+        )
+        result1 = ResultMessage(
+            subtype="success", duration_ms=100, duration_api_ms=90,
+            is_error=False, num_turns=1, session_id="s1",
+            total_cost_usd=0.01, usage=None, result="launched",
+        )
+        notif1 = SystemMessage(
+            subtype="task_notification",
+            data={"subtype": "task_notification", "message": "Agent 1 done"},
+        )
+        notif2 = SystemMessage(
+            subtype="task_notification",
+            data={"subtype": "task_notification", "message": "Agent 2 done"},
+        )
+
+        client = AsyncMock()
+        client.query = AsyncMock()
+
+        async def _stream():
+            yield assistant
+            yield result1   # 2 active → skip
+            yield notif1    # 1 active
+            yield notif2    # 0 active, no more messages
+
+        client.receive_messages = _stream
+
+        session = ClaudeSession()
+        with patch.object(session, "_ensure_connected", return_value=client):
+            events = [e async for e in session.stream("go")]
+
+        assert len(events) == 4
+        types = [e.type for e in events]
+        assert types == ["assistant", "result", "system", "system"]
+
 
 class TestEnsureConnected:
     """Tests for the _ensure_connected method."""
