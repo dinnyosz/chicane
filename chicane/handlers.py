@@ -3337,6 +3337,10 @@ def _extract_image_paths(text: str, cwd: Path | None = None) -> list[Path]:
     Matches both absolute paths (``/foo/bar.png``) and relative paths
     (``./img.png``, ``../img.png``).  Relative paths are resolved against
     *cwd* (the session's working directory).
+
+    Absolute-looking paths that don't exist on disk (e.g. ``/assets/img.png``)
+    are also tried relative to *cwd* as a fallback, since LLMs sometimes emit
+    project-relative paths with a leading ``/``.
     """
     seen: set[str] = set()
     paths: list[Path] = []
@@ -3348,8 +3352,16 @@ def _extract_image_paths(text: str, cwd: Path | None = None) -> list[Path]:
         p = Path(raw)
         if not p.is_absolute() and cwd is not None:
             p = (cwd / p).resolve()
-        if p.suffix.lower() in _IMAGE_EXTENSIONS and p.is_file():
-            paths.append(p)
+        if p.suffix.lower() in _IMAGE_EXTENSIONS:
+            if p.is_file():
+                paths.append(p)
+            elif p.is_absolute() and cwd is not None:
+                # LLMs sometimes emit project-relative paths with a leading /
+                # (e.g. /assets/img.png instead of /Users/.../project/assets/img.png).
+                # Try resolving against cwd as a fallback.
+                relative = cwd / p.relative_to("/")
+                if relative.is_file():
+                    paths.append(relative)
     return paths
 
 

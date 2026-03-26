@@ -121,6 +121,53 @@ class TestExtractImagePaths:
         text = f"Created {img}"
         assert _extract_image_paths(text) == [img]
 
+    def test_absolute_looking_path_resolved_relative_to_cwd(self, tmp_path):
+        """Paths like /assets/img.png that look absolute but don't exist
+        should be tried relative to cwd (project-relative paths from LLMs)."""
+        img = tmp_path / "assets" / "generated" / "portrait.png"
+        img.parent.mkdir(parents=True, exist_ok=True)
+        img.write_bytes(b"img")
+        text = "See /assets/generated/portrait.png"
+        result = _extract_image_paths(text, cwd=tmp_path)
+        assert len(result) == 1
+        assert result[0] == img
+
+    def test_absolute_looking_path_no_cwd_ignored(self):
+        """Absolute-looking paths that don't exist are still ignored without cwd."""
+        text = "See /assets/generated/portrait.png"
+        assert _extract_image_paths(text) == []
+
+    def test_absolute_looking_path_not_on_disk_ignored(self, tmp_path):
+        """Absolute-looking paths that don't exist even relative to cwd are ignored."""
+        text = "See /assets/nonexistent/portrait.png"
+        assert _extract_image_paths(text, cwd=tmp_path) == []
+
+    def test_real_absolute_path_not_retried_relative(self, tmp_path):
+        """A real absolute path that exists should be used as-is, not resolved
+        against cwd (which could produce a wrong match)."""
+        img = tmp_path / "real.png"
+        img.write_bytes(b"img")
+        # Also create a file at the cwd-relative location
+        also = tmp_path / "cwd" / str(tmp_path).lstrip("/") / "real.png"
+        also.parent.mkdir(parents=True, exist_ok=True)
+        also.write_bytes(b"img")
+        text = f"See {img}"
+        result = _extract_image_paths(text, cwd=tmp_path / "cwd")
+        assert result == [img]  # The real absolute path, not the cwd-relative one
+
+    def test_multiple_project_relative_paths(self, tmp_path):
+        """Multiple project-relative paths are all resolved against cwd."""
+        a = tmp_path / "assets" / "a.png"
+        b = tmp_path / "assets" / "b.jpg"
+        a.parent.mkdir(parents=True, exist_ok=True)
+        a.write_bytes(b"img")
+        b.write_bytes(b"img")
+        text = "Images: /assets/a.png and /assets/b.jpg"
+        result = _extract_image_paths(text, cwd=tmp_path)
+        assert len(result) == 2
+        assert a in result
+        assert b in result
+
 
 # ---------------------------------------------------------------------------
 # _collect_image_paths_from_tool_use
