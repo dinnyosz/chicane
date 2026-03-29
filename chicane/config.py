@@ -82,6 +82,7 @@ class Config:
     react_to_strangers: bool = True
     post_images: bool = True
     session_cleanup_command: str = ""
+    purge_older_than_days: int = 30
 
     def __repr__(self) -> str:
         """Mask sensitive tokens in repr to prevent accidental leakage."""
@@ -243,6 +244,13 @@ class Config:
 
         session_cleanup_command = os.environ.get("SESSION_CLEANUP_COMMAND", "")
 
+        raw_purge_days = os.environ.get("PURGE_OLDER_THAN_DAYS")
+        purge_older_than_days = 30
+        if raw_purge_days:
+            purge_older_than_days = int(raw_purge_days)
+            if purge_older_than_days < 1:
+                raise ValueError("PURGE_OLDER_THAN_DAYS must be a positive integer")
+
         return cls(
             slack_bot_token=bot_token,
             slack_app_token=app_token,
@@ -263,6 +271,7 @@ class Config:
             react_to_strangers=react_to_strangers,
             post_images=post_images,
             session_cleanup_command=session_cleanup_command,
+            purge_older_than_days=purge_older_than_days,
         )
 
 

@@ -431,6 +431,13 @@ def _build_parser() -> argparse.ArgumentParser:
     ho.add_argument("--cwd", default=None, help="Working directory to resolve channel from (defaults to $PWD)")
     ho.add_argument("--questions", default=None, help="Open questions to post as a thread reply")
 
+    # chicane purge
+    purge_parser = sub.add_parser("purge", help="Delete bot messages to free workspace message limits")
+    purge_parser.add_argument("--confirm", action="store_true", help="Actually delete (dry-run by default)")
+    purge_parser.add_argument("--channel", default=None, help="Limit to a specific channel name")
+    purge_parser.add_argument("--older-than", type=int, default=None, dest="older_than", help="Only delete messages older than DAYS days (default: from config or 30)")
+    purge_parser.add_argument("--keep-parent", action="store_true", dest="keep_parent", help="Preserve thread parent messages (only delete replies)")
+
     # chicane setup
     sub.add_parser("setup", help="Guided setup wizard")
 
@@ -449,6 +456,7 @@ Commands:
   setup            Guided setup wizard
   run              Start the Slack bot
   handoff          Post a handoff message to Slack
+  purge            Delete bot messages to free workspace message limits
   help             Show this help message
 
 Examples:
@@ -530,6 +538,9 @@ def main() -> None:
         setup_command(args)
     elif args.command == "handoff":
         handoff(args)
+    elif args.command == "purge":
+        from .purge import purge_command
+        purge_command(args)
     else:
         # No command or 'help' — show help
         _print_help()
