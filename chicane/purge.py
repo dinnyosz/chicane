@@ -215,7 +215,6 @@ async def _purge_channel(
         BarColumn(),
         MofNCompleteColumn(),
         console=console,
-        transient=True,
     ) as progress:
         task = progress.add_task(f"{verb}…", total=len(top_level))
 
@@ -235,10 +234,10 @@ async def _purge_channel(
                     )
                     total_deleted += deleted
                     total_failed += failed
-                    progress.update(
-                        task,
-                        description=f"{verb}… [green]{total_deleted}[/] deleted",
-                    )
+                progress.update(
+                    task,
+                    description=f"{verb}… [green]{total_deleted}[/] deleted",
+                )
                 progress.advance(task)
                 continue
 
@@ -257,6 +256,10 @@ async def _purge_channel(
                 total_deleted += deleted
                 total_failed += failed
 
+            progress.update(
+                task,
+                description=f"{verb}… [green]{total_deleted}[/] deleted",
+            )
             progress.advance(task)
 
     return len(top_level), total_deleted, total_failed
