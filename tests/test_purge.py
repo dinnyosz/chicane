@@ -9,7 +9,7 @@ import pytest
 from chicane.purge import (
     _cutoff_ts,
     _delete_messages,
-    _filter_bot_messages,
+    _filter_messages,
     _get_bot_channels,
     _get_bot_user_id,
     _purge_channel,
@@ -104,7 +104,7 @@ class TestGetBotChannels:
 # ---------------------------------------------------------------------------
 
 
-class TestFilterBotMessages:
+class TestFilterMessages:
     def test_filters_by_user_and_age(self):
         old_ts = _ts(45)
         new_ts = _ts(5)
@@ -114,15 +114,25 @@ class TestFilterBotMessages:
             _msg(BOT_ID, new_ts),
             _msg("UHUMAN", old_ts),
         ]
-        result = _filter_bot_messages(messages, BOT_ID, cutoff, False)
+        result = _filter_messages(messages, BOT_ID, cutoff, False)
         assert len(result) == 1
         assert result[0]["ts"] == old_ts
 
     def test_skips_non_bot(self):
-        result = _filter_bot_messages(
+        result = _filter_messages(
             [_msg("UHUMAN", _ts(45))], BOT_ID, _cutoff_ts(30), False,
         )
         assert len(result) == 0
+
+    def test_delete_all_includes_user_messages(self):
+        old_ts = _ts(45)
+        cutoff = _cutoff_ts(30)
+        messages = [
+            _msg(BOT_ID, old_ts),
+            _msg("UHUMAN", old_ts),
+        ]
+        result = _filter_messages(messages, BOT_ID, cutoff, False, delete_all=True)
+        assert len(result) == 2
 
     def test_keep_parent_skips_thread_parent(self):
         parent_ts = _ts(45)
@@ -131,7 +141,7 @@ class TestFilterBotMessages:
             _msg(BOT_ID, parent_ts, thread_ts=parent_ts),
             _msg(BOT_ID, reply_ts, thread_ts=parent_ts),
         ]
-        result = _filter_bot_messages(
+        result = _filter_messages(
             messages, BOT_ID, _cutoff_ts(30), True, thread_ts=parent_ts,
         )
         assert len(result) == 1
@@ -169,6 +179,28 @@ class TestDeleteMessages:
         assert deleted == 2
         assert failed == 0
         assert client.chat_delete.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_uses_user_client_for_non_bot_messages(self):
+        """User messages are deleted via user_client, bot messages via bot_client."""
+        bot_client = AsyncMock()
+        bot_client.chat_delete.return_value = {"ok": True}
+        user_client = AsyncMock()
+        user_client.chat_delete.return_value = {"ok": True}
+
+        messages = [
+            _msg(BOT_ID, "1.0"),
+            _msg("UHUMAN", "2.0"),
+        ]
+
+        with patch("chicane.purge._API_INTERVAL", 0):
+            deleted, failed = await _delete_messages(
+                bot_client, CHANNEL_ID, messages, False,
+                bot_user_id=BOT_ID, user_client=user_client,
+            )
+        assert deleted == 2
+        assert bot_client.chat_delete.call_count == 1
+        assert user_client.chat_delete.call_count == 1
 
     @pytest.mark.asyncio
     async def test_handles_message_not_found(self):

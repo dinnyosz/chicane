@@ -1,8 +1,9 @@
-"""Delete the bot's own Slack messages to reclaim workspace message quota.
+"""Delete Slack messages to reclaim workspace message quota.
 
 Scans channels the bot is a member of, fetches threads, and deletes
-bot-authored messages older than a configurable threshold.  Dry-run by
-default — pass ``--confirm`` to actually delete.
+messages older than a configurable threshold.  By default only deletes
+bot-authored messages; pass ``--user-token`` to delete all messages.
+Dry-run by default — pass ``--confirm`` to actually delete.
 """
 
 import asyncio
@@ -146,17 +147,22 @@ def _cutoff_ts(older_than_days: int) -> float:
     return time.time() - (older_than_days * 86400)
 
 
-def _filter_bot_messages(
+def _filter_messages(
     messages: list[dict],
     bot_user_id: str,
     cutoff: float,
     keep_parent: bool,
     thread_ts: str | None = None,
+    delete_all: bool = False,
 ) -> list[dict]:
-    """Return bot-owned messages older than cutoff from a message list."""
+    """Return messages older than cutoff eligible for deletion.
+
+    When *delete_all* is False (default), only bot-authored messages are
+    returned.  When True, all messages older than cutoff are returned.
+    """
     result: list[dict] = []
     for msg in messages:
-        if msg.get("user") != bot_user_id:
+        if not delete_all and msg.get("user") != bot_user_id:
             continue
         if float(msg.get("ts", "0")) >= cutoff:
             continue
@@ -167,18 +173,27 @@ def _filter_bot_messages(
 
 
 async def _delete_messages(
-    client: AsyncWebClient,
+    bot_client: AsyncWebClient,
     channel_id: str,
     messages: list[dict],
     dry_run: bool,
+    bot_user_id: str = "",
+    user_client: AsyncWebClient | None = None,
 ) -> tuple[int, int]:
-    """Delete messages, returning (deleted, failed) counts."""
+    """Delete messages, returning (deleted, failed) counts.
+
+    Uses *bot_client* for bot-authored messages.  For other users'
+    messages, uses *user_client* if provided (requires a user token).
+    """
     deleted = 0
     failed = 0
     for msg in messages:
         if dry_run:
             deleted += 1
             continue
+        # Pick the right client: bot token for bot messages, user token for others
+        is_bot_msg = msg.get("user") == bot_user_id
+        client = bot_client if is_bot_msg else (user_client or bot_client)
         try:
             await _slack_call(client.chat_delete, channel=channel_id, ts=msg["ts"])
             deleted += 1
@@ -193,16 +208,18 @@ async def _delete_messages(
 
 
 async def _purge_channel(
-    client: AsyncWebClient,
+    bot_client: AsyncWebClient,
     channel_id: str,
     channel_name: str,
     bot_user_id: str,
     cutoff: float,
     keep_parent: bool,
     dry_run: bool,
+    delete_all: bool = False,
+    user_client: AsyncWebClient | None = None,
 ) -> tuple[int, int, int]:
     """Scan and delete per-thread in a channel. Returns (scanned, deleted, failed)."""
-    top_level = await _fetch_channel_messages(client, channel_id)
+    top_level = await _fetch_channel_messages(bot_client, channel_id)
     seen_threads: set[str] = set()
     total_deleted = 0
     total_failed = 0
@@ -224,13 +241,15 @@ async def _purge_channel(
             # Threaded message — scan thread, delete immediately
             if thread_ts and thread_ts not in seen_threads:
                 seen_threads.add(thread_ts)
-                replies = await _fetch_thread_replies(client, channel_id, thread_ts)
-                to_delete = _filter_bot_messages(
+                replies = await _fetch_thread_replies(bot_client, channel_id, thread_ts)
+                to_delete = _filter_messages(
                     replies, bot_user_id, cutoff, keep_parent, thread_ts,
+                    delete_all=delete_all,
                 )
                 if to_delete:
                     deleted, failed = await _delete_messages(
-                        client, channel_id, to_delete, dry_run,
+                        bot_client, channel_id, to_delete, dry_run,
+                        bot_user_id=bot_user_id, user_client=user_client,
                     )
                     total_deleted += deleted
                     total_failed += failed
@@ -241,9 +260,10 @@ async def _purge_channel(
                 progress.advance(task)
                 continue
 
-            # Non-threaded top-level bot message
-            to_delete = _filter_bot_messages(
+            # Non-threaded top-level message
+            to_delete = _filter_messages(
                 [msg], bot_user_id, cutoff, keep_parent,
+                delete_all=delete_all,
             )
             # With keep_parent, skip top-level messages that have replies
             if keep_parent and msg.get("reply_count"):
@@ -251,7 +271,8 @@ async def _purge_channel(
 
             if to_delete:
                 deleted, failed = await _delete_messages(
-                    client, channel_id, to_delete, dry_run,
+                    bot_client, channel_id, to_delete, dry_run,
+                    bot_user_id=bot_user_id, user_client=user_client,
                 )
                 total_deleted += deleted
                 total_failed += failed
@@ -275,23 +296,31 @@ async def _purge(args: Namespace) -> None:
     dry_run = not getattr(args, "confirm", False)
     channel_filter = getattr(args, "channel", None)
     keep_parent = getattr(args, "keep_parent", False)
+    user_token = getattr(args, "user_token", None)
 
+    delete_all = user_token is not None
+    user_client: AsyncWebClient | None = None
+    if user_token:
+        user_client = AsyncWebClient(token=user_token)
+
+    scope = "[red bold]ALL messages[/]" if delete_all else "[cyan]bot messages only[/]"
     mode = "[yellow bold]DRY RUN[/]" if dry_run else "[red bold]LIVE DELETE[/]"
     console.print(Panel(
         f"Mode: {mode}\n"
+        f"Scope: {scope}\n"
         f"Delete messages older than: [cyan]{older_than_days}[/] days\n"
         f"Keep thread parents: [cyan]{keep_parent}[/]\n"
         f"Channel filter: [cyan]{channel_filter or 'all'}[/]",
         title="chicane purge",
     ))
 
-    client = AsyncWebClient(token=config.slack_bot_token)
-    bot_user_id = await _get_bot_user_id(client)
+    bot_client = AsyncWebClient(token=config.slack_bot_token)
+    bot_user_id = await _get_bot_user_id(bot_client)
     cutoff = _cutoff_ts(older_than_days)
     cutoff_dt = datetime.fromtimestamp(cutoff, tz=timezone.utc)
     console.print(f"Bot user: [cyan]{bot_user_id}[/]  Cutoff: [cyan]{cutoff_dt:%Y-%m-%d %H:%M UTC}[/]\n")
 
-    channels = await _get_bot_channels(client, channel_filter)
+    channels = await _get_bot_channels(bot_client, channel_filter)
     if not channels:
         console.print("[yellow]No channels found.[/]")
         return
@@ -309,8 +338,9 @@ async def _purge(args: Namespace) -> None:
 
     for ch in channels:
         scanned, deleted, failed = await _purge_channel(
-            client, ch["id"], ch["name"],
+            bot_client, ch["id"], ch["name"],
             bot_user_id, cutoff, keep_parent, dry_run,
+            delete_all=delete_all, user_client=user_client,
         )
         grand_deleted += deleted
         grand_failed += failed

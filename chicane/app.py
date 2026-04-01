@@ -437,6 +437,7 @@ def _build_parser() -> argparse.ArgumentParser:
     purge_parser.add_argument("--channel", default=None, help="Limit to a specific channel name")
     purge_parser.add_argument("--older-than", type=int, default=None, dest="older_than", help="Only delete messages older than DAYS days (default: from config or 30)")
     purge_parser.add_argument("--keep-parent", action="store_true", dest="keep_parent", help="Preserve thread parent messages (only delete replies)")
+    purge_parser.add_argument("--user-token", default=None, dest="user_token", help="User OAuth token (xoxp-...) to delete all users' messages, not just bot's")
 
     # chicane setup
     sub.add_parser("setup", help="Guided setup wizard")
