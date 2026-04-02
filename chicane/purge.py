@@ -83,20 +83,33 @@ async def _get_bot_channels(
 ) -> list[dict]:
     """Return channels the bot is a member of."""
     channels: list[dict] = []
-    cursor = None
-    while True:
-        kwargs: dict = {"types": "public_channel,private_channel,im,mpim", "limit": 200}
-        if cursor:
-            kwargs["cursor"] = cursor
-        resp = await _slack_call(client.users_conversations, **kwargs)
-        for ch in resp["channels"]:
-            name = ch.get("name") or f"dm-{ch.get('user', ch['id'])}"
-            if channel_filter and name != channel_filter:
-                continue
-            channels.append({"id": ch["id"], "name": name})
-        cursor = resp.get("response_metadata", {}).get("next_cursor")
-        if not cursor:
-            break
+    seen: set[str] = set()
+    # Query each type separately so missing scopes don't block everything.
+    for conv_type in ("public_channel", "private_channel", "im", "mpim"):
+        cursor = None
+        while True:
+            kwargs: dict = {"types": conv_type, "limit": 200}
+            if cursor:
+                kwargs["cursor"] = cursor
+            try:
+                resp = await _slack_call(client.users_conversations, **kwargs)
+            except SlackApiError as exc:
+                error = getattr(exc.response, "data", {}).get("error", "")
+                if error == "missing_scope":
+                    logger.debug("Skipping %s (missing scope)", conv_type)
+                    break
+                raise
+            for ch in resp["channels"]:
+                if ch["id"] in seen:
+                    continue
+                seen.add(ch["id"])
+                name = ch.get("name") or f"dm-{ch.get('user', ch['id'])}"
+                if channel_filter and name != channel_filter:
+                    continue
+                channels.append({"id": ch["id"], "name": name})
+            cursor = resp.get("response_metadata", {}).get("next_cursor")
+            if not cursor:
+                break
     return channels
 
 

@@ -50,16 +50,22 @@ class TestGetBotUserId:
 
 
 class TestGetBotChannels:
+    _empty = {"channels": [], "response_metadata": {"next_cursor": ""}}
+
     @pytest.mark.asyncio
     async def test_returns_channels(self):
         client = AsyncMock()
-        client.users_conversations.return_value = {
-            "channels": [
-                {"id": "C001", "name": "general"},
-                {"id": "C002", "name": "dev"},
-            ],
-            "response_metadata": {"next_cursor": ""},
-        }
+        # First type (public_channel) returns results, rest empty
+        client.users_conversations.side_effect = [
+            {
+                "channels": [
+                    {"id": "C001", "name": "general"},
+                    {"id": "C002", "name": "dev"},
+                ],
+                "response_metadata": {"next_cursor": ""},
+            },
+            self._empty, self._empty, self._empty,
+        ]
         with patch("chicane.purge._API_INTERVAL", 0):
             result = await _get_bot_channels(client)
         assert len(result) == 2
@@ -68,13 +74,16 @@ class TestGetBotChannels:
     @pytest.mark.asyncio
     async def test_filters_by_channel_name(self):
         client = AsyncMock()
-        client.users_conversations.return_value = {
-            "channels": [
-                {"id": "C001", "name": "general"},
-                {"id": "C002", "name": "dev"},
-            ],
-            "response_metadata": {"next_cursor": ""},
-        }
+        client.users_conversations.side_effect = [
+            {
+                "channels": [
+                    {"id": "C001", "name": "general"},
+                    {"id": "C002", "name": "dev"},
+                ],
+                "response_metadata": {"next_cursor": ""},
+            },
+            self._empty, self._empty, self._empty,
+        ]
         with patch("chicane.purge._API_INTERVAL", 0):
             result = await _get_bot_channels(client, channel_filter="dev")
         assert len(result) == 1
@@ -84,6 +93,7 @@ class TestGetBotChannels:
     async def test_paginates(self):
         client = AsyncMock()
         client.users_conversations.side_effect = [
+            # public_channel: 2 pages
             {
                 "channels": [{"id": "C001", "name": "page1"}],
                 "response_metadata": {"next_cursor": "cursor1"},
@@ -92,11 +102,39 @@ class TestGetBotChannels:
                 "channels": [{"id": "C002", "name": "page2"}],
                 "response_metadata": {"next_cursor": ""},
             },
+            # private_channel, im, mpim: empty
+            self._empty, self._empty, self._empty,
         ]
         with patch("chicane.purge._API_INTERVAL", 0):
             result = await _get_bot_channels(client)
         assert len(result) == 2
-        assert client.users_conversations.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_skips_missing_scope(self):
+        """Missing scope for a type doesn't block other types."""
+        from slack_sdk.errors import SlackApiError
+
+        scope_err = MagicMock()
+        scope_err.response.status_code = 200
+        scope_err.response.data = {"error": "missing_scope"}
+
+        client = AsyncMock()
+        client.users_conversations.side_effect = [
+            # public_channel: works
+            {
+                "channels": [{"id": "C001", "name": "general"}],
+                "response_metadata": {"next_cursor": ""},
+            },
+            # private_channel: works
+            self._empty,
+            # im: works
+            self._empty,
+            # mpim: missing scope
+            SlackApiError("err", scope_err.response),
+        ]
+        with patch("chicane.purge._API_INTERVAL", 0):
+            result = await _get_bot_channels(client)
+        assert len(result) == 1
 
 
 # ---------------------------------------------------------------------------
