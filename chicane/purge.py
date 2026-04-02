@@ -85,14 +85,15 @@ async def _get_bot_channels(
     channels: list[dict] = []
     cursor = None
     while True:
-        kwargs: dict = {"types": "public_channel,private_channel", "limit": 200}
+        kwargs: dict = {"types": "public_channel,private_channel,im,mpim", "limit": 200}
         if cursor:
             kwargs["cursor"] = cursor
         resp = await _slack_call(client.users_conversations, **kwargs)
         for ch in resp["channels"]:
-            if channel_filter and ch["name"] != channel_filter:
+            name = ch.get("name") or f"dm-{ch.get('user', ch['id'])}"
+            if channel_filter and name != channel_filter:
                 continue
-            channels.append({"id": ch["id"], "name": ch["name"]})
+            channels.append({"id": ch["id"], "name": name})
         cursor = resp.get("response_metadata", {}).get("next_cursor")
         if not cursor:
             break
