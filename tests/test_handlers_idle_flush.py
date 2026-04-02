@@ -273,13 +273,15 @@ class TestIdleFlush:
                 await asyncio.sleep(0)
 
             # The second tool activity (b.py) should have been flushed by the timer
-            activity_posts = [
-                c for c in client.chat_postMessage.call_args_list
-                if "b.py" in c.kwargs.get("text", "")
-            ]
-            assert len(activity_posts) >= 1, (
-                f"Expected idle flush to post batched activity for b.py. "
-                f"All calls: {[c.kwargs.get('text', '')[:80] for c in client.chat_postMessage.call_args_list]}"
+            # (may appear as a chat_update on the existing activity message)
+            post_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+            update_texts = [c.kwargs.get("text", "") for c in client.chat_update.call_args_list]
+            all_texts = post_texts + update_texts
+            has_b = any("b.py" in t for t in all_texts)
+            assert has_b, (
+                f"Expected idle flush to post/update activity for b.py. "
+                f"Posts: {[t[:80] for t in post_texts]} "
+                f"Updates: {[t[:80] for t in update_texts]}"
             )
 
             barrier.set()

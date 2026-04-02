@@ -776,13 +776,14 @@ class TestToolActivityStreaming:
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "fix tests", client, config, sessions, queue)
 
-        post_calls = client.chat_postMessage.call_args_list
-        all_text = "\n".join(c.kwargs["text"] for c in post_calls)
-        # First activity posted immediately; subsequent ones batched together
+        post_texts = [c.kwargs["text"] for c in client.chat_postMessage.call_args_list]
+        update_texts = [c.kwargs["text"] for c in client.chat_update.call_args_list]
+        all_text = "\n".join(post_texts + update_texts)
+        # First activity posted immediately; subsequent ones update the same message
         assert ":mag: Reading `a.py`" in all_text
         assert ":pencil2: Editing `a.py`" in all_text
         assert ":computer: Running `pytest`" in all_text
-        assert "Done." in all_text
+        assert "Done." in "\n".join(post_texts)
 
     @pytest.mark.asyncio
     async def test_final_text_as_thread_replies_when_activities_exist(

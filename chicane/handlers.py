@@ -754,8 +754,20 @@ async def _process_message(
 
         # Tool activity batching — accumulate consecutive activities and
         # post as a single message to reduce Slack API calls.
+        # Uses create-then-update: first flush creates a new message,
+        # subsequent flushes update it in-place (chat.update doesn't
+        # count toward the workspace message limit).
         pending_activities: list[ToolActivity] = []
         first_activity_posted = False  # reset per tool sequence
+        activity_message_ts: str | None = None  # ts of the live activity message
+        activity_message_text: str = ""  # accumulated text in that message
+
+        def _reset_activity_state() -> None:
+            """Reset activity tracking for a new tool sequence."""
+            nonlocal first_activity_posted, activity_message_ts, activity_message_text
+            first_activity_posted = False
+            activity_message_ts = None
+            activity_message_text = ""
 
         # Idle flush — when the SDK blocks between events (e.g. Claude
         # is generating a huge file), any accumulated text or batched tool
@@ -766,7 +778,7 @@ async def _process_message(
 
         async def _idle_flush() -> None:
             """Background coroutine: waits, then flushes all pending output."""
-            nonlocal full_text, first_activity_posted
+            nonlocal full_text
             try:
                 await asyncio.sleep(_IDLE_FLUSH_DELAY)
                 # Flush pending tool activities first (they came before text)
@@ -783,7 +795,7 @@ async def _process_message(
                             cwd=session_info.cwd,
                         )
                     full_text = ""
-                    first_activity_posted = False
+                    _reset_activity_state()
             except asyncio.CancelledError:
                 pass
             except Exception:
@@ -806,12 +818,17 @@ async def _process_message(
                 _idle_flush_task = None
 
         async def _flush_activities() -> None:
-            """Post accumulated tool activities as a single combined message.
+            """Post accumulated tool activities via create-then-update.
+
+            First call creates a new message; subsequent calls update it
+            in-place using ``chat.update`` (which doesn't count toward
+            the workspace message limit).
 
             Activities with snippets (e.g. edit diffs) are uploaded separately
-            via ``_send_snippet`` so Slack renders them with syntax highlighting.
+            via ``_send_snippet`` — a snippet forces the current activity
+            message to be finalized and a new one started after.
             """
-            nonlocal pending_activities
+            nonlocal pending_activities, activity_message_ts, activity_message_text
             if not pending_activities:
                 return
             batch = pending_activities
@@ -821,14 +838,14 @@ async def _process_message(
             text_parts: list[str] = []
             for act in batch:
                 if act.snippet:
-                    # Flush any accumulated text first
+                    # Flush any accumulated text before the snippet
                     if text_parts:
-                        combined = "\n".join(text_parts)
-                        for act_chunk in _split_message(combined):
-                            act_result = await queue.post_message(channel, thread_ts, act_chunk)
-                            sessions.register_bot_message(act_result.ts, thread_ts)
+                        await _post_or_update_activity("\n".join(text_parts))
                         text_parts = []
-                    # Upload the snippet
+                    # Finalize the current activity message before snippet
+                    activity_message_ts = None
+                    activity_message_text = ""
+                    # Upload the snippet as its own message
                     await _send_snippet(
                         client, channel, thread_ts,
                         act.snippet,
@@ -842,10 +859,44 @@ async def _process_message(
 
             # Flush remaining text
             if text_parts:
-                combined = "\n".join(text_parts)
-                for act_chunk in _split_message(combined):
-                    act_result = await queue.post_message(channel, thread_ts, act_chunk)
-                    sessions.register_bot_message(act_result.ts, thread_ts)
+                await _post_or_update_activity("\n".join(text_parts))
+
+        async def _post_or_update_activity(new_text: str) -> None:
+            """Create or update the live activity message.
+
+            If appending *new_text* would exceed the Slack message limit,
+            finalize the current message and start a new one.
+            """
+            nonlocal activity_message_ts, activity_message_text
+
+            if activity_message_ts:
+                # Check if update would overflow
+                candidate = activity_message_text + "\n" + new_text
+                if len(candidate) <= 3900:
+                    activity_message_text = candidate
+                    try:
+                        await queue.update_message(
+                            channel, activity_message_ts, activity_message_text,
+                        )
+                    except Exception:
+                        # Update failed (message deleted, etc.) — post new
+                        logger.debug("Activity update failed, posting new", exc_info=True)
+                        activity_message_ts = None
+                        activity_message_text = ""
+                        await _post_or_update_activity(new_text)
+                    return
+                else:
+                    # Overflow — finalize current, start new
+                    activity_message_ts = None
+                    activity_message_text = ""
+
+            # Create new activity message
+            for chunk in _split_message(new_text):
+                r = await queue.post_message(channel, thread_ts, chunk)
+                sessions.register_bot_message(r.ts, thread_ts)
+                # Track the last posted chunk as the live activity message
+                activity_message_ts = r.ts
+                activity_message_text = chunk
 
         try:
             async for event_data in session.stream(prompt):
@@ -899,7 +950,7 @@ async def _process_message(
                                 cwd=session_info.cwd,
                             )
                         full_text = ""
-                        first_activity_posted = False
+                        _reset_activity_state()
 
                     # Post tool activity (first one immediately, rest batched)
                     if show_activities and activities:
@@ -915,6 +966,8 @@ async def _process_message(
                                     channel, thread_ts, first.text,
                                 )
                                 sessions.register_bot_message(r.ts, thread_ts)
+                                activity_message_ts = r.ts
+                                activity_message_text = first.text
                             first_activity_posted = True
                             pending_activities.extend(activities[1:])
                         else:
@@ -990,7 +1043,7 @@ async def _process_message(
                 elif event_data.type == "result":
                     _cancel_idle_flush()
                     await _flush_activities()
-                    first_activity_posted = False
+                    _reset_activity_state()
                     result_event = event_data
                     # Prefer whichever is longer — streamed text preserves
                     # formatting but could miss chunks; result blob is
@@ -1001,7 +1054,7 @@ async def _process_message(
 
                 elif event_data.type == "user":
                     await _flush_activities()
-                    first_activity_posted = False
+                    _reset_activity_state()
                     # Git commit cards
                     if pending_commit_tool_ids:
                         for tool_use_id, result_text_out in event_data.tool_results:
@@ -1141,7 +1194,7 @@ async def _process_message(
 
                 elif event_data.type == "system" and event_data.subtype == "init":
                     await _flush_activities()
-                    first_activity_posted = False
+                    _reset_activity_state()
                     # Session init — either resuming an existing session or
                     # starting a brand new one.  Post an informative message
                     # so users know which case it is.
@@ -1271,7 +1324,7 @@ async def _process_message(
                     # Fires *before* compaction starts — let the user know
                     # what's happening so there's no mysterious silence.
                     await _flush_activities()
-                    first_activity_posted = False
+                    _reset_activity_state()
                     if _should_show("pre_compact", config.verbosity):
                         await queue.post_message(
                             channel, thread_ts,
@@ -1280,7 +1333,7 @@ async def _process_message(
 
                 elif event_data.type == "system" and event_data.subtype == "compact_boundary":
                     await _flush_activities()
-                    first_activity_posted = False
+                    _reset_activity_state()
                     if _should_show("compact_boundary", config.verbosity):
                         meta = event_data.compact_metadata or {}
                         trigger = meta.get("trigger", "auto")
@@ -1300,7 +1353,7 @@ async def _process_message(
                     # Subagent completed — post a notification so the user
                     # sees progress without having to poke chicane.
                     await _flush_activities()
-                    first_activity_posted = False
+                    _reset_activity_state()
                     title = event_data.raw.get("title", "")
                     message = event_data.raw.get("message", "")
                     if title and message:
@@ -1404,7 +1457,7 @@ async def _process_message(
                     uploaded_images = set()
                     pending_image_paths = []
                     pending_activities = []
-                    first_activity_posted = False
+                    _reset_activity_state()
 
                     async for event_data in session.stream("continue"):
                         event_count += 1
@@ -1470,7 +1523,7 @@ async def _process_message(
                                 full_text = result_text
                         elif event_data.type == "user":
                             await _flush_activities()
-                            first_activity_posted = False
+                            _reset_activity_state()
                             # Git commit cards
                             if pending_commit_tool_ids:
                                 for tool_use_id, result_text_out in event_data.tool_results:

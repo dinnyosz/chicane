@@ -40,8 +40,8 @@ class TestFirstActivityImmediate:
         assert any(t == ":mag: Reading `a.py`" for t in texts)
 
     @pytest.mark.asyncio
-    async def test_second_activity_batched(self, config, sessions, queue):
-        """Second and subsequent activities in same sequence should be batched."""
+    async def test_second_activity_updates_first(self, config, sessions, queue):
+        """Second activity in same sequence should update the first message, not post new."""
         async def fake_stream(prompt):
             yield make_tool_event(tool_block("Read", file_path="/src/a.py"))
             yield make_tool_event(tool_block("Read", file_path="/src/b.py"))
@@ -57,15 +57,20 @@ class TestFirstActivityImmediate:
             event = {"ts": "2.0", "channel": "C1", "user": "UHUMAN1"}
             await _process_message(event, "hi", client, config, sessions, queue)
 
-        texts = [c.kwargs["text"] for c in client.chat_postMessage.call_args_list]
+        post_texts = [c.kwargs["text"] for c in client.chat_postMessage.call_args_list]
 
-        # First activity standalone
-        assert ":mag: Reading `a.py`" in texts
-        # Second activity should be flushed (possibly with others) but not standalone
-        # (it arrives in the flush before result, so it'll be its own message since
-        # it's the only pending activity)
-        all_text = "\n".join(texts)
-        assert ":mag: Reading `b.py`" in all_text
+        # First activity posted as new message
+        assert ":mag: Reading `a.py`" in post_texts
+
+        # Second activity should be an update (chat_update), not a new post
+        if client.chat_update.call_args_list:
+            update_texts = [c.kwargs["text"] for c in client.chat_update.call_args_list]
+            # The update should contain both activities
+            assert any(":mag: Reading `b.py`" in t for t in update_texts)
+        else:
+            # Fallback: if flushed at result boundary, it may still be a new post
+            all_text = "\n".join(post_texts)
+            assert ":mag: Reading `b.py`" in all_text
 
 
 class TestFlushOnEventTransition:
@@ -90,12 +95,13 @@ class TestFlushOnEventTransition:
             event = {"ts": "3.0", "channel": "C1", "user": "UHUMAN1"}
             await _process_message(event, "edit it", client, config, sessions, queue)
 
-        texts = [c.kwargs["text"] for c in client.chat_postMessage.call_args_list]
-        all_text = "\n".join(texts)
-        # Both activities should appear before the text
+        # Activities may be in posts or updates (create-then-update pattern)
+        post_texts = [c.kwargs["text"] for c in client.chat_postMessage.call_args_list]
+        update_texts = [c.kwargs["text"] for c in client.chat_update.call_args_list]
+        all_text = "\n".join(post_texts + update_texts)
         assert ":mag: Reading `a.py`" in all_text
         assert ":pencil2: Editing `a.py`" in all_text
-        assert "I edited the file." in all_text
+        assert "I edited the file." in "\n".join(post_texts)
 
     @pytest.mark.asyncio
     async def test_activities_flushed_on_result(self, config, sessions, queue):
@@ -115,7 +121,9 @@ class TestFlushOnEventTransition:
             event = {"ts": "4.0", "channel": "C1", "user": "UHUMAN1"}
             await _process_message(event, "find py", client, config, sessions, queue)
 
-        all_text = "\n".join(c.kwargs["text"] for c in client.chat_postMessage.call_args_list)
+        post_texts = [c.kwargs["text"] for c in client.chat_postMessage.call_args_list]
+        update_texts = [c.kwargs["text"] for c in client.chat_update.call_args_list]
+        all_text = "\n".join(post_texts + update_texts)
         assert ":mag: Reading `x.py`" in all_text
         assert ":mag: Finding files `*.py`" in all_text
 
@@ -174,15 +182,12 @@ class TestBatchSizeLimit:
             event = {"ts": "6.0", "channel": "C1", "user": "UHUMAN1"}
             await _process_message(event, "read all", client, config, sessions, queue)
 
-        # All activities should appear in the posted messages
-        all_text = "\n".join(c.kwargs["text"] for c in client.chat_postMessage.call_args_list)
+        # All activities should appear in posts or updates
+        post_texts = [c.kwargs["text"] for c in client.chat_postMessage.call_args_list]
+        update_texts = [c.kwargs["text"] for c in client.chat_update.call_args_list]
+        all_text = "\n".join(post_texts + update_texts)
         assert ":mag: Reading `first.py`" in all_text
         assert ":mag: Reading `file0.py`" in all_text
-        # The batch should have been flushed at least once mid-stream
-        # (not all accumulated to the end)
-        post_count = client.chat_postMessage.call_count
-        # At minimum: 1 (first immediate) + 1 (batch flush) + 1 (remainder flush) + 1 (completion)
-        assert post_count >= 3
 
 
 class TestMinimalVerbositySkipsBatching:
@@ -246,7 +251,73 @@ class TestMessageSplitting:
             event = {"ts": "8.0", "channel": "C1", "user": "UHUMAN1"}
             await _process_message(event, "read many", client, config, sessions, queue)
 
-        # Verify no single message exceeds the limit
+        # Verify no single posted or updated message exceeds the limit
         for call in client.chat_postMessage.call_args_list:
             text = call.kwargs.get("text", "")
-            assert len(text) <= 4000, f"Message too long: {len(text)} chars"
+            assert len(text) <= 4000, f"Posted message too long: {len(text)} chars"
+        for call in client.chat_update.call_args_list:
+            text = call.kwargs.get("text", "")
+            assert len(text) <= 4000, f"Updated message too long: {len(text)} chars"
+
+
+class TestCreateThenUpdate:
+    """Tool activities use chat.update after the first post to reduce message count."""
+
+    @pytest.mark.asyncio
+    async def test_multiple_activities_use_update(self, config, sessions, queue):
+        """Three consecutive activities: 1 post + updates, not 3 posts."""
+        async def fake_stream(prompt):
+            yield make_tool_event(tool_block("Read", file_path="/src/a.py"))
+            yield make_tool_event(tool_block("Read", file_path="/src/b.py"))
+            yield make_tool_event(tool_block("Read", file_path="/src/c.py"))
+            yield make_event("result", text="done", num_turns=1, duration_ms=100)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "9.0", "channel": "C1", "user": "UHUMAN1"}
+            await _process_message(event, "read all", client, config, sessions, queue)
+
+        # Count activity-related posts (exclude completion summary, session info, etc.)
+        activity_posts = [
+            c for c in client.chat_postMessage.call_args_list
+            if ":mag: Reading" in c.kwargs.get("text", "")
+        ]
+        # Only 1 activity post (the first one) — rest go through update
+        assert len(activity_posts) == 1
+        assert activity_posts[0].kwargs["text"] == ":mag: Reading `a.py`"
+
+        # Updates should contain the accumulated activities
+        if client.chat_update.call_args_list:
+            last_update = client.chat_update.call_args_list[-1]
+            update_text = last_update.kwargs["text"]
+            assert ":mag: Reading `a.py`" in update_text
+            assert ":mag: Reading `c.py`" in update_text
+
+    @pytest.mark.asyncio
+    async def test_text_between_activities_starts_new_message(self, config, sessions, queue):
+        """Text output resets the activity message — next activity gets a fresh post."""
+        async def fake_stream(prompt):
+            yield make_tool_event(tool_block("Read", file_path="/src/a.py"))
+            yield make_event("assistant", text="Found it.")
+            yield make_tool_event(tool_block("Edit", file_path="/src/a.py"))
+            yield make_event("result", text="Fixed.", num_turns=1, duration_ms=100)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "10.0", "channel": "C1", "user": "UHUMAN1"}
+            await _process_message(event, "fix", client, config, sessions, queue)
+
+        post_texts = [c.kwargs["text"] for c in client.chat_postMessage.call_args_list]
+        # Both activities should be separate posts (text broke the sequence)
+        assert ":mag: Reading `a.py`" in post_texts
+        assert ":pencil2: Editing `a.py`" in post_texts

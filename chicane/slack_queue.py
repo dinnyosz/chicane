@@ -97,6 +97,39 @@ class SlackMessageQueue:
             self._last_post_time[channel] = monotonic()
             return result
 
+    async def update_message(
+        self,
+        channel: str,
+        ts: str,
+        text: str,
+    ) -> None:
+        """Update an existing message, throttling to respect Slack's rate limit.
+
+        Uses ``chat.update`` which does **not** count as a new message
+        in the workspace message counter.
+        """
+        if self._client is None:
+            raise RuntimeError("SlackMessageQueue: client not bound — call ensure_client() first")
+
+        async with self._lock:
+            await self._throttle(channel)
+            try:
+                await self._client.chat_update(channel=channel, ts=ts, text=text)
+            except SlackApiError as exc:
+                if exc.response.status_code == 429:
+                    retry_after = float(
+                        exc.response.headers.get("Retry-After", 1)
+                    )
+                    logger.warning(
+                        "Slack rate limited (429) on update in channel %s, retrying after %.1fs",
+                        channel, retry_after,
+                    )
+                    await asyncio.sleep(retry_after)
+                    await self._client.chat_update(channel=channel, ts=ts, text=text)
+                else:
+                    raise
+            self._last_post_time[channel] = monotonic()
+
     async def _throttle(self, channel: str) -> None:
         """Sleep if needed to maintain minimum interval for this channel."""
         last = self._last_post_time.get(channel, 0.0)
