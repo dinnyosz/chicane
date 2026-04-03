@@ -3402,6 +3402,9 @@ def _extract_image_paths(text: str, cwd: Path | None = None) -> list[Path]:
         if raw in seen:
             continue
         seen.add(raw)
+        # Skip protocol-relative URLs (//host/path) and other non-filesystem paths
+        if raw.startswith("//"):
+            continue
         p = Path(raw)
         if not p.is_absolute() and cwd is not None:
             p = (cwd / p).resolve()
@@ -3412,7 +3415,10 @@ def _extract_image_paths(text: str, cwd: Path | None = None) -> list[Path]:
                 # LLMs sometimes emit project-relative paths with a leading /
                 # (e.g. /assets/img.png instead of /Users/.../project/assets/img.png).
                 # Try resolving against cwd as a fallback.
-                relative = cwd / p.relative_to("/")
+                try:
+                    relative = cwd / p.relative_to("/")
+                except ValueError:
+                    continue
                 if relative.is_file():
                     paths.append(relative)
     return paths

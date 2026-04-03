@@ -155,6 +155,15 @@ class TestExtractImagePaths:
         result = _extract_image_paths(text, cwd=tmp_path / "cwd")
         assert result == [img]  # The real absolute path, not the cwd-relative one
 
+    def test_protocol_relative_url_ignored(self, tmp_path):
+        """Protocol-relative URLs (//host/path.png) should be skipped, not treated
+        as filesystem paths.  Slack avatar URLs can trigger this."""
+        text = (
+            "See //avatars.slack-edge.com/2026-02-11/"
+            "10486331823717_f36ebebb70d9a1824e76_36.png for avatar"
+        )
+        assert _extract_image_paths(text, cwd=tmp_path) == []
+
     def test_multiple_project_relative_paths(self, tmp_path):
         """Multiple project-relative paths are all resolved against cwd."""
         a = tmp_path / "assets" / "a.png"
