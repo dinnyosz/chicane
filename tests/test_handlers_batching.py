@@ -129,11 +129,11 @@ class TestFlushOnEventTransition:
 
 
 class TestTextBreaksSequence:
-    """Text between tool activities resets the first_activity_posted flag."""
+    """Text between tool activities starts a new activity message."""
 
     @pytest.mark.asyncio
-    async def test_text_resets_first_activity_flag(self, config, sessions, queue):
-        """After text, the next tool activity should be posted immediately again."""
+    async def test_text_starts_new_activity_message(self, config, sessions, queue):
+        """After text, the next tool should start a new activity message."""
         async def fake_stream(prompt):
             yield make_tool_event(tool_block("Read", file_path="/src/a.py"))
             yield make_event("assistant", text="Let me edit.")
@@ -151,10 +151,43 @@ class TestTextBreaksSequence:
             event = {"ts": "5.0", "channel": "C1", "user": "UHUMAN1"}
             await _process_message(event, "fix", client, config, sessions, queue)
 
-        texts = [c.kwargs["text"] for c in client.chat_postMessage.call_args_list]
-        # Both activities should be in separate messages (each is first in its sequence)
-        assert ":mag: Reading `a.py`" in texts
-        assert ":pencil2: Editing `a.py`" in texts
+        post_texts = [c.kwargs["text"] for c in client.chat_postMessage.call_args_list]
+        update_texts = [c.kwargs["text"] for c in client.chat_update.call_args_list]
+        all_text = "\n".join(post_texts + update_texts)
+        # Both activities should appear (as posts or updates)
+        assert ":mag: Reading `a.py`" in all_text
+        assert ":pencil2: Editing `a.py`" in all_text
+
+    @pytest.mark.asyncio
+    async def test_tools_after_text_still_batch(self, config, sessions, queue):
+        """Multiple tools after text should batch into one message, not post separately."""
+        async def fake_stream(prompt):
+            yield make_tool_event(tool_block("Read", file_path="/src/a.py"))
+            yield make_event("assistant", text="Let me check more files.")
+            yield make_tool_event(tool_block("Read", file_path="/src/b.py"))
+            yield make_tool_event(tool_block("Read", file_path="/src/c.py"))
+            yield make_tool_event(tool_block("Read", file_path="/src/d.py"))
+            yield make_event("result", text="done", num_turns=1, duration_ms=100)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        with patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "5.1", "channel": "C1", "user": "UHUMAN1"}
+            await _process_message(event, "check files", client, config, sessions, queue)
+
+        # Count activity-related posts after the text break
+        post_texts = [c.kwargs["text"] for c in client.chat_postMessage.call_args_list]
+        activity_posts = [t for t in post_texts if ":mag: Reading" in t]
+        # First activity is posted immediately; the 3 tools after text should
+        # batch into at most 1 new post (not 3 separate posts)
+        assert len(activity_posts) <= 2, (
+            f"Expected at most 2 activity posts (1 before text, 1 after), "
+            f"got {len(activity_posts)}: {activity_posts}"
+        )
 
 
 class TestBatchSizeLimit:
@@ -300,7 +333,7 @@ class TestCreateThenUpdate:
 
     @pytest.mark.asyncio
     async def test_text_between_activities_starts_new_message(self, config, sessions, queue):
-        """Text output resets the activity message — next activity gets a fresh post."""
+        """Text output resets the activity message — next activity gets a fresh message."""
         async def fake_stream(prompt):
             yield make_tool_event(tool_block("Read", file_path="/src/a.py"))
             yield make_event("assistant", text="Found it.")
@@ -318,9 +351,16 @@ class TestCreateThenUpdate:
             await _process_message(event, "fix", client, config, sessions, queue)
 
         post_texts = [c.kwargs["text"] for c in client.chat_postMessage.call_args_list]
-        # Both activities should be separate posts (text broke the sequence)
-        assert ":mag: Reading `a.py`" in post_texts
-        assert ":pencil2: Editing `a.py`" in post_texts
+        update_texts = [c.kwargs["text"] for c in client.chat_update.call_args_list]
+        all_text = "\n".join(post_texts + update_texts)
+        # Both activities should appear (as posts or updates)
+        assert ":mag: Reading `a.py`" in all_text
+        assert ":pencil2: Editing `a.py`" in all_text
+        # The edit activity should NOT be an update of the read activity's message
+        # (text broke the sequence, so it should be a separate message)
+        for ut in update_texts:
+            assert not (":mag: Reading `a.py`" in ut and ":pencil2: Editing `a.py`" in ut), \
+                "Edit should not be in the same message as Read after text break"
 
 
 class TestActivityMessageRotation:
