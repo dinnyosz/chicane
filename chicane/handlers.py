@@ -38,7 +38,7 @@ _MAX_ACTIVITY_BATCH = 10
 # and/or batched tool activities).  When the SDK blocks between events
 # (e.g. writing a huge file), accumulated output sits invisible to the
 # user.  This timer ensures it gets posted even if no new event arrives.
-_IDLE_FLUSH_DELAY = 5.0
+_IDLE_FLUSH_DELAY = 10.0
 
 # Maximum age (seconds) of a live activity message before starting a new one.
 # Slack doesn't notify on edits, so long-running tool sequences become
@@ -804,7 +804,8 @@ async def _process_message(
                             cwd=session_info.cwd,
                         )
                     full_text = ""
-                    _reset_activity_state()
+                    # Don't reset activity state — keep batching into the
+                    # same activity message if more tools arrive.
             except asyncio.CancelledError:
                 pass
             except Exception:
