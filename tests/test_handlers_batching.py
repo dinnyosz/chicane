@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from chicane.handlers import _process_message, _MAX_ACTIVITY_BATCH
+from chicane.handlers import _process_message, _MAX_ACTIVITY_BATCH, _ACTIVITY_MSG_MAX_AGE
 from chicane.slack_queue import SlackMessageQueue
 from tests.conftest import (
     make_event,
@@ -321,3 +321,44 @@ class TestCreateThenUpdate:
         # Both activities should be separate posts (text broke the sequence)
         assert ":mag: Reading `a.py`" in post_texts
         assert ":pencil2: Editing `a.py`" in post_texts
+
+
+class TestActivityMessageRotation:
+    """Activity messages rotate after _ACTIVITY_MSG_MAX_AGE seconds."""
+
+    @pytest.mark.asyncio
+    async def test_activity_message_rotates_after_max_age(self, config, sessions, queue):
+        """After 60s, a new activity should create a new message, not update the old one."""
+        async def fake_stream(prompt):
+            yield make_tool_event(tool_block("Read", file_path="/src/a.py"))
+            yield make_tool_event(tool_block("Read", file_path="/src/b.py"))
+            yield make_event("result", text="done", num_turns=1, duration_ms=100)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+
+        # monotonic() is called when creating an activity message and when
+        # checking its age.  Return 0.0 for creation, then jump past max age.
+        fake_times = iter([0.0, _ACTIVITY_MSG_MAX_AGE + 1])
+
+        with patch("chicane.handlers.monotonic", side_effect=lambda: next(fake_times, _ACTIVITY_MSG_MAX_AGE + 1)), \
+             patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
+            event = {"ts": "20.0", "channel": "C1", "user": "UHUMAN1"}
+            await _process_message(event, "read files", client, config, sessions, queue)
+
+        # Second activity should be a new post (not an update) because the
+        # message age exceeded _ACTIVITY_MSG_MAX_AGE.
+        post_texts = [c.kwargs["text"] for c in client.chat_postMessage.call_args_list]
+        activity_posts = [t for t in post_texts if ":mag: Reading" in t]
+        assert len(activity_posts) >= 2, (
+            f"Expected 2 activity posts (rotated), got {len(activity_posts)}: {activity_posts}"
+        )
+        # No updates should have been made (rotation created a new post instead)
+        update_texts = [c.kwargs.get("text", "") for c in client.chat_update.call_args_list]
+        activity_updates = [t for t in update_texts if ":mag: Reading" in t]
+        assert len(activity_updates) == 0, (
+            f"Expected no activity updates (rotated to new post), got: {activity_updates}"
+        )

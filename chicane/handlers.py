@@ -40,6 +40,12 @@ _MAX_ACTIVITY_BATCH = 10
 # user.  This timer ensures it gets posted even if no new event arrives.
 _IDLE_FLUSH_DELAY = 5.0
 
+# Maximum age (seconds) of a live activity message before starting a new one.
+# Slack doesn't notify on edits, so long-running tool sequences become
+# invisible if we keep updating the same message.  After this interval the
+# current message is finalized and a fresh one is posted.
+_ACTIVITY_MSG_MAX_AGE = 60.0
+
 
 # ---------------------------------------------------------------------------
 # Thread-root reaction helpers — track state in SessionInfo to skip no-ops
@@ -761,13 +767,16 @@ async def _process_message(
         first_activity_posted = False  # reset per tool sequence
         activity_message_ts: str | None = None  # ts of the live activity message
         activity_message_text: str = ""  # accumulated text in that message
+        activity_message_created: float = 0.0  # monotonic time when live msg was created
 
         def _reset_activity_state() -> None:
             """Reset activity tracking for a new tool sequence."""
             nonlocal first_activity_posted, activity_message_ts, activity_message_text
+            nonlocal activity_message_created
             first_activity_posted = False
             activity_message_ts = None
             activity_message_text = ""
+            activity_message_created = 0.0
 
         # Idle flush — when the SDK blocks between events (e.g. Claude
         # is generating a huge file), any accumulated text or batched tool
@@ -868,27 +877,28 @@ async def _process_message(
             finalize the current message and start a new one.
             """
             nonlocal activity_message_ts, activity_message_text
+            nonlocal activity_message_created
 
             if activity_message_ts:
-                # Check if update would overflow
+                age = monotonic() - activity_message_created
                 candidate = activity_message_text + "\n" + new_text
-                if len(candidate) <= 3900:
-                    activity_message_text = candidate
-                    try:
-                        await queue.update_message(
-                            channel, activity_message_ts, activity_message_text,
-                        )
-                    except Exception:
-                        # Update failed (message deleted, etc.) — post new
-                        logger.debug("Activity update failed, posting new", exc_info=True)
-                        activity_message_ts = None
-                        activity_message_text = ""
-                        await _post_or_update_activity(new_text)
-                    return
-                else:
-                    # Overflow — finalize current, start new
+                if age >= _ACTIVITY_MSG_MAX_AGE or len(candidate) > 3900:
+                    # Message too old or too long — start a new one
                     activity_message_ts = None
                     activity_message_text = ""
+                    return await _post_or_update_activity(new_text)
+                activity_message_text = candidate
+                try:
+                    await queue.update_message(
+                        channel, activity_message_ts, activity_message_text,
+                    )
+                except Exception:
+                    # Update failed (message deleted, etc.) — post new
+                    logger.debug("Activity update failed, posting new", exc_info=True)
+                    activity_message_ts = None
+                    activity_message_text = ""
+                    await _post_or_update_activity(new_text)
+                return
 
             # Create new activity message
             for chunk in _split_message(new_text):
@@ -897,6 +907,7 @@ async def _process_message(
                 # Track the last posted chunk as the live activity message
                 activity_message_ts = r.ts
                 activity_message_text = chunk
+                activity_message_created = monotonic()
 
         try:
             async for event_data in session.stream(prompt):
@@ -968,6 +979,7 @@ async def _process_message(
                                 sessions.register_bot_message(r.ts, thread_ts)
                                 activity_message_ts = r.ts
                                 activity_message_text = first.text
+                                activity_message_created = monotonic()
                             first_activity_posted = True
                             pending_activities.extend(activities[1:])
                         else:
