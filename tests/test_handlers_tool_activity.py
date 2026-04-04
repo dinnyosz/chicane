@@ -864,9 +864,12 @@ class TestToolActivityStreaming:
         # Text should be flushed before the next tool activity
         read_idx = texts.index(":mag: Reading `a.py`")
         text_idx = texts.index("Looks good, let me edit it.")
-        edit_idx = texts.index(":pencil2: Editing `a.py`")
-        done_idx = texts.index("Done editing.")
-        assert read_idx < text_idx < edit_idx < done_idx
+        assert read_idx < text_idx
+        # Edit activity is batched into the existing activity message via
+        # chat.update (not a separate post), so check updates
+        update_texts = [c.kwargs["text"] for c in client.chat_update.call_args_list]
+        assert any(":pencil2: Editing `a.py`" in ut for ut in update_texts), \
+            "Edit activity should be in an updated message"
 
     @pytest.mark.asyncio
     async def test_long_text_with_activities_uses_markdown_block(

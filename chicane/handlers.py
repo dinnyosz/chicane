@@ -961,13 +961,9 @@ async def _process_message(
                                 cwd=session_info.cwd,
                             )
                         full_text = ""
-                        # Reset activity message state so the next tool starts
-                        # a new message below the text we just posted, but keep
-                        # first_activity_posted=True so it goes through the
-                        # batching path instead of posting immediately.
-                        activity_message_ts = None
-                        activity_message_text = ""
-                        activity_message_created = 0.0
+                        # Keep activity_message_ts so subsequent tools continue
+                        # updating the same activity message (until max age or
+                        # size limit triggers rotation).
 
                     # Post tool activity (first one immediately, rest batched)
                     if show_activities and activities:
