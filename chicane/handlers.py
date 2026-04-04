@@ -1068,7 +1068,9 @@ async def _process_message(
 
                 elif event_data.type == "user":
                     await _flush_activities()
-                    _reset_activity_state()
+                    # Don't reset activity state here — tool results arrive
+                    # between consecutive tools and resetting would make each
+                    # tool post a new message instead of updating in-place.
                     # Git commit cards
                     if pending_commit_tool_ids:
                         for tool_use_id, result_text_out in event_data.tool_results:
@@ -1537,7 +1539,7 @@ async def _process_message(
                                 full_text = result_text
                         elif event_data.type == "user":
                             await _flush_activities()
-                            _reset_activity_state()
+                            # Don't reset activity state — keep batching
                             # Git commit cards
                             if pending_commit_tool_ids:
                                 for tool_use_id, result_text_out in event_data.tool_results:
