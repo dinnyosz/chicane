@@ -798,11 +798,16 @@ async def _process_message(
                         r = await queue.post_message(channel, thread_ts, chunk)
                         sessions.register_bot_message(r.ts, thread_ts)
                     if config.post_images:
+                        pre = len(uploaded_images)
                         await _upload_new_images(
                             client, channel, thread_ts,
                             full_text, uploaded_images, queue,
                             cwd=session_info.cwd,
                         )
+                        if len(uploaded_images) > pre:
+                            activity_message_ts = None
+                            activity_message_text = ""
+                            activity_message_created = 0.0
                     full_text = ""
                     # Don't reset activity state — keep batching into the
                     # same activity message if more tools arrive.
@@ -855,6 +860,7 @@ async def _process_message(
                     # Finalize the current activity message before snippet
                     activity_message_ts = None
                     activity_message_text = ""
+                    activity_message_created = 0.0
                     # Upload the snippet as its own message
                     await _send_snippet(
                         client, channel, thread_ts,
@@ -956,11 +962,18 @@ async def _process_message(
                             r = await queue.post_message(channel, thread_ts, chunk)
                             sessions.register_bot_message(r.ts, thread_ts)
                         if config.post_images:
+                            pre = len(uploaded_images)
                             await _upload_new_images(
                                 client, channel, thread_ts,
                                 full_text, uploaded_images, queue,
                                 cwd=session_info.cwd,
                             )
+                            if len(uploaded_images) > pre:
+                                # Images were posted — start a fresh activity
+                                # message so tools don't update above the images.
+                                activity_message_ts = None
+                                activity_message_text = ""
+                                activity_message_created = 0.0
                         full_text = ""
                         # Keep activity_message_ts so subsequent tools continue
                         # updating the same activity message (until max age or
