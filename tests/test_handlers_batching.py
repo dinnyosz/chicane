@@ -1,6 +1,6 @@
 """Tests for tool activity batching in _process_message."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -394,4 +394,36 @@ class TestActivityMessageRotation:
         activity_updates = [t for t in update_texts if ":mag: Reading" in t]
         assert len(activity_updates) == 0, (
             f"Expected no activity updates (rotated to new post), got: {activity_updates}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_activity_message_rotates_after_user_reply(self, config, sessions, queue):
+        """When the user replies mid-stream, the next activity starts a new message."""
+        info = None
+
+        async def fake_stream(prompt):
+            yield make_tool_event(tool_block("Read", file_path="/src/a.py"))
+            # Simulate user replying between activities by setting the flag
+            # after the first activity has been posted (monotonic time 0.0)
+            info.last_user_reply_mono = 1.0
+            yield make_tool_event(tool_block("Read", file_path="/src/b.py"))
+            yield make_event("result", text="done", num_turns=1, duration_ms=100)
+
+        mock_session = MagicMock()
+        mock_session.stream = fake_stream
+        mock_session.session_id = "s1"
+
+        client = mock_client()
+        info = mock_session_info(mock_session)
+
+        with patch("chicane.handlers.monotonic", return_value=0.0), \
+             patch.object(sessions, "get_or_create", return_value=info):
+            event = {"ts": "21.0", "channel": "C1", "user": "UHUMAN1"}
+            await _process_message(event, "read files", client, config, sessions, queue)
+
+        # Second activity should be a new post (not update) because user replied
+        post_texts = [c.kwargs["text"] for c in client.chat_postMessage.call_args_list]
+        activity_posts = [t for t in post_texts if ":mag: Reading" in t]
+        assert len(activity_posts) >= 2, (
+            f"Expected 2 activity posts (user reply triggered rotation), got {len(activity_posts)}: {activity_posts}"
         )

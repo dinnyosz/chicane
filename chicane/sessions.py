@@ -124,6 +124,10 @@ class SessionInfo:
     # full checklist on every update.
     todo_snapshot: list[dict] | None = None
 
+    # Monotonic timestamp of the last user reply received while streaming.
+    # Used by activity message logic to start a new reply after user input.
+    last_user_reply_mono: float = 0.0
+
     # AskUserQuestion support — when Claude asks a clarifying question via
     # the SDK's AskUserQuestion tool, the canUseTool callback posts the
     # question to Slack and sets this future.  The next user message in

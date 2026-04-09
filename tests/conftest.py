@@ -147,6 +147,7 @@ def mock_session_info(mock_session, thread_ts="1000.0"):
     info.todo_snapshot = None
     info.pending_messages = deque()
     info.pending_question = None
+    info.last_user_reply_mono = 0.0
     return info
 
 

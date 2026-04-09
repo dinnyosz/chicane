@@ -722,6 +722,7 @@ async def _process_message(
     if session_info.session.is_streaming:
         logger.info(f"New message in {thread_ts} -- delivering between turns via SDK queue")
         await session_info.session.queue_message(prompt)
+        session_info.last_user_reply_mono = monotonic()
         # Swap eyes → speech_balloon to show the message was received & queued
         try:
             await client.reactions_remove(channel=channel, name="eyes", timestamp=event["ts"])
@@ -880,17 +881,21 @@ async def _process_message(
         async def _post_or_update_activity(new_text: str) -> None:
             """Create or update the live activity message.
 
-            If appending *new_text* would exceed the Slack message limit,
-            finalize the current message and start a new one.
+            Starts a new message when the current one is older than
+            ``_ACTIVITY_MSG_MAX_AGE``, the user replied since it was
+            created, or appending would exceed the Slack message limit.
             """
             nonlocal activity_message_ts, activity_message_text
             nonlocal activity_message_created
 
             if activity_message_ts:
                 age = monotonic() - activity_message_created
+                user_replied = (
+                    session_info.last_user_reply_mono > activity_message_created
+                )
                 candidate = activity_message_text + "\n" + new_text
-                if age >= _ACTIVITY_MSG_MAX_AGE or len(candidate) > 3900:
-                    # Message too old or too long — start a new one
+                if age >= _ACTIVITY_MSG_MAX_AGE or user_replied or len(candidate) > 3900:
+                    # Message too old, user replied, or too long — start a new one
                     activity_message_ts = None
                     activity_message_text = ""
                     return await _post_or_update_activity(new_text)
@@ -977,7 +982,7 @@ async def _process_message(
                         full_text = ""
                         # Keep activity_message_ts so subsequent tools continue
                         # updating the same activity message (until max age or
-                        # size limit triggers rotation).
+                        # user reply triggers rotation).
 
                     # Post tool activity (first one immediately, rest batched)
                     if show_activities and activities:
