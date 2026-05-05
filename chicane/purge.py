@@ -7,10 +7,12 @@ Dry-run by default — pass ``--confirm`` to actually delete.
 """
 
 import asyncio
+import json
 import logging
 import time
 from argparse import Namespace
 from datetime import datetime, timezone
+from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
@@ -19,7 +21,7 @@ from rich.table import Table
 from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
-from .config import Config
+from .config import Config, config_dir
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +223,21 @@ async def _delete_messages(
     return deleted, failed
 
 
+def _update_ts_range(
+    messages: list[dict],
+    oldest: float | None,
+    newest: float | None,
+) -> tuple[float | None, float | None]:
+    """Update oldest/newest timestamp range from a batch of messages."""
+    for msg in messages:
+        ts = float(msg.get("ts", "0"))
+        if oldest is None or ts < oldest:
+            oldest = ts
+        if newest is None or ts > newest:
+            newest = ts
+    return oldest, newest
+
+
 async def _purge_channel(
     bot_client: AsyncWebClient,
     channel_id: str,
@@ -231,12 +248,17 @@ async def _purge_channel(
     dry_run: bool,
     delete_all: bool = False,
     user_client: AsyncWebClient | None = None,
-) -> tuple[int, int, int]:
-    """Scan and delete per-thread in a channel. Returns (scanned, deleted, failed)."""
+) -> tuple[int, int, int, float | None, float | None]:
+    """Scan and delete per-thread in a channel.
+
+    Returns (scanned, deleted, failed, oldest_ts, newest_ts).
+    """
     top_level = await _fetch_channel_messages(bot_client, channel_id)
     seen_threads: set[str] = set()
     total_deleted = 0
     total_failed = 0
+    oldest_ts: float | None = None
+    newest_ts: float | None = None
 
     verb = "Scanning" if dry_run else "Purging"
 
@@ -261,6 +283,9 @@ async def _purge_channel(
                     delete_all=delete_all,
                 )
                 if to_delete:
+                    oldest_ts, newest_ts = _update_ts_range(
+                        to_delete, oldest_ts, newest_ts,
+                    )
                     deleted, failed = await _delete_messages(
                         bot_client, channel_id, to_delete, dry_run,
                         bot_user_id=bot_user_id, user_client=user_client,
@@ -284,6 +309,9 @@ async def _purge_channel(
                 to_delete = []
 
             if to_delete:
+                oldest_ts, newest_ts = _update_ts_range(
+                    to_delete, oldest_ts, newest_ts,
+                )
                 deleted, failed = await _delete_messages(
                     bot_client, channel_id, to_delete, dry_run,
                     bot_user_id=bot_user_id, user_client=user_client,
@@ -297,7 +325,7 @@ async def _purge_channel(
             )
             progress.advance(task)
 
-    return len(top_level), total_deleted, total_failed
+    return len(top_level), total_deleted, total_failed, oldest_ts, newest_ts
 
 
 # ---------------------------------------------------------------------------
@@ -349,9 +377,12 @@ async def _purge(args: Namespace) -> None:
 
     grand_deleted = 0
     grand_failed = 0
+    global_oldest: float | None = None
+    global_newest: float | None = None
+    channel_stats: list[dict] = []
 
     for ch in channels:
-        scanned, deleted, failed = await _purge_channel(
+        scanned, deleted, failed, ch_oldest, ch_newest = await _purge_channel(
             bot_client, ch["id"], ch["name"],
             bot_user_id, cutoff, keep_parent, dry_run,
             delete_all=delete_all, user_client=user_client,
@@ -359,6 +390,18 @@ async def _purge(args: Namespace) -> None:
         grand_deleted += deleted
         grand_failed += failed
         summary.add_row(ch["name"], str(scanned), str(deleted), str(failed))
+        channel_stats.append({
+            "name": ch["name"],
+            "scanned": scanned,
+            "deleted": deleted,
+            "failed": failed,
+        })
+        if ch_oldest is not None:
+            if global_oldest is None or ch_oldest < global_oldest:
+                global_oldest = ch_oldest
+        if ch_newest is not None:
+            if global_newest is None or ch_newest > global_newest:
+                global_newest = ch_newest
 
     console.print()
     console.print(summary)
@@ -371,6 +414,76 @@ async def _purge(args: Namespace) -> None:
     )
     if dry_run:
         console.print("\n[yellow]Run with --confirm to actually delete messages.[/]")
+
+    # Write structured purge log
+    _write_purge_log(
+        dry_run=dry_run,
+        delete_all=delete_all,
+        older_than_days=older_than_days,
+        channel_filter=channel_filter,
+        keep_parent=keep_parent,
+        cutoff_dt=cutoff_dt,
+        total_deleted=grand_deleted,
+        total_failed=grand_failed,
+        oldest_ts=global_oldest,
+        newest_ts=global_newest,
+        channels=channel_stats,
+    )
+
+
+PURGE_LOG_FILE = config_dir() / "purge.jsonl"
+
+
+def _write_purge_log(
+    *,
+    dry_run: bool,
+    delete_all: bool,
+    older_than_days: int,
+    channel_filter: str | None,
+    keep_parent: bool,
+    cutoff_dt: datetime,
+    total_deleted: int,
+    total_failed: int,
+    oldest_ts: float | None,
+    newest_ts: float | None,
+    channels: list[dict],
+) -> None:
+    """Append a structured log entry to ``purge.jsonl``."""
+    oldest_dt = (
+        datetime.fromtimestamp(oldest_ts, tz=timezone.utc) if oldest_ts else None
+    )
+    newest_dt = (
+        datetime.fromtimestamp(newest_ts, tz=timezone.utc) if newest_ts else None
+    )
+
+    if oldest_dt and newest_dt:
+        date_range_days = round((newest_dt - oldest_dt).total_seconds() / 86400, 1)
+    else:
+        date_range_days = 0
+
+    entry: dict = {
+        "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+        "dry_run": dry_run,
+        "delete_all": delete_all,
+        "older_than_days": older_than_days,
+        "channel_filter": channel_filter,
+        "keep_parent": keep_parent,
+        "cutoff": cutoff_dt.isoformat(),
+        "total_deleted": total_deleted,
+        "total_failed": total_failed,
+        "date_range_days": date_range_days,
+        "oldest_message": oldest_dt.isoformat() if oldest_dt else None,
+        "newest_message": newest_dt.isoformat() if newest_dt else None,
+        "channels": channels,
+    }
+
+    try:
+        PURGE_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with PURGE_LOG_FILE.open("a") as fh:
+            fh.write(json.dumps(entry) + "\n")
+        console.print(f"\n[dim]Logged to {PURGE_LOG_FILE}[/]")
+    except OSError as exc:
+        logger.warning("Failed to write purge log: %s", exc)
 
 
 def purge_command(args: Namespace) -> None:

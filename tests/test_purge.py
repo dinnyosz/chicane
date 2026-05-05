@@ -1,7 +1,9 @@
 """Tests for chicane.purge — bot message deletion."""
 
+import json
 import time
 from argparse import Namespace
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,6 +16,8 @@ from chicane.purge import (
     _get_bot_user_id,
     _purge_channel,
     _slack_call,
+    _update_ts_range,
+    _write_purge_log,
 )
 
 
@@ -359,7 +363,7 @@ class TestPurgeChannel:
         client.chat_delete.return_value = {"ok": True}
 
         with patch("chicane.purge._API_INTERVAL", 0):
-            scanned, deleted, failed = await _purge_channel(
+            scanned, deleted, failed, *_ = await _purge_channel(
                 client, CHANNEL_ID, "test", BOT_ID,
                 _cutoff_ts(30), False, False,
             )
@@ -379,7 +383,7 @@ class TestPurgeChannel:
         }
 
         with patch("chicane.purge._API_INTERVAL", 0):
-            scanned, deleted, failed = await _purge_channel(
+            scanned, deleted, failed, *_ = await _purge_channel(
                 client, CHANNEL_ID, "test", BOT_ID,
                 _cutoff_ts(30), False, True,
             )
@@ -399,7 +403,7 @@ class TestPurgeChannel:
         }
 
         with patch("chicane.purge._API_INTERVAL", 0):
-            scanned, deleted, failed = await _purge_channel(
+            scanned, deleted, failed, *_ = await _purge_channel(
                 client, CHANNEL_ID, "test", BOT_ID,
                 _cutoff_ts(30), True, True,
             )
@@ -417,7 +421,7 @@ class TestPurgeCommand:
         """End-to-end dry-run produces zero actual API delete calls."""
         from chicane.purge import _purge
 
-        args = Namespace(confirm=False, channel=None, older_than=30, keep_parent=False)
+        args = Namespace(confirm=False, channel=None, older_than=30, keep_parent=False, user_token=None)
 
         mock_client = AsyncMock()
         mock_client.auth_test.return_value = {"user_id": BOT_ID}
@@ -435,6 +439,7 @@ class TestPurgeCommand:
             patch("chicane.purge.AsyncWebClient", return_value=mock_client),
             patch("chicane.purge.console"),
             patch("chicane.purge._API_INTERVAL", 0),
+            patch("chicane.purge._write_purge_log"),
         ):
             mock_config.return_value = MagicMock(
                 slack_bot_token="xoxb-test",
@@ -443,3 +448,199 @@ class TestPurgeCommand:
             await _purge(args)
 
         mock_client.chat_delete.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Timestamp range tracking
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateTsRange:
+    def test_initializes_from_none(self):
+        msgs = [_msg(BOT_ID, "100.0"), _msg(BOT_ID, "200.0")]
+        oldest, newest = _update_ts_range(msgs, None, None)
+        assert oldest == 100.0
+        assert newest == 200.0
+
+    def test_extends_existing_range(self):
+        msgs = [_msg(BOT_ID, "50.0"), _msg(BOT_ID, "150.0")]
+        oldest, newest = _update_ts_range(msgs, 100.0, 200.0)
+        assert oldest == 50.0
+        assert newest == 200.0
+
+    def test_empty_messages_preserves_range(self):
+        oldest, newest = _update_ts_range([], 100.0, 200.0)
+        assert oldest == 100.0
+        assert newest == 200.0
+
+    def test_single_message(self):
+        msgs = [_msg(BOT_ID, "500.0")]
+        oldest, newest = _update_ts_range(msgs, None, None)
+        assert oldest == 500.0
+        assert newest == 500.0
+
+
+# ---------------------------------------------------------------------------
+# Purge channel timestamp tracking
+# ---------------------------------------------------------------------------
+
+
+class TestPurgeChannelTimestamps:
+    @pytest.mark.asyncio
+    async def test_returns_oldest_newest_timestamps(self):
+        """_purge_channel returns min/max timestamps of deleted messages."""
+        old_ts = _ts(45)
+        older_ts = _ts(50)
+
+        client = AsyncMock()
+        client.conversations_history.return_value = {
+            "messages": [
+                _msg(BOT_ID, old_ts),
+                _msg(BOT_ID, older_ts),
+            ],
+            "response_metadata": {"next_cursor": ""},
+        }
+
+        with patch("chicane.purge._API_INTERVAL", 0):
+            scanned, deleted, failed, oldest, newest = await _purge_channel(
+                client, CHANNEL_ID, "test", BOT_ID,
+                _cutoff_ts(30), False, True,
+            )
+        assert deleted == 2
+        assert oldest == pytest.approx(float(older_ts), abs=0.01)
+        assert newest == pytest.approx(float(old_ts), abs=0.01)
+
+    @pytest.mark.asyncio
+    async def test_no_deletions_returns_none_timestamps(self):
+        """No eligible messages → oldest/newest are None."""
+        client = AsyncMock()
+        client.conversations_history.return_value = {
+            "messages": [_msg(BOT_ID, _ts(5))],  # too recent
+            "response_metadata": {"next_cursor": ""},
+        }
+
+        with patch("chicane.purge._API_INTERVAL", 0):
+            _, deleted, _, oldest, newest = await _purge_channel(
+                client, CHANNEL_ID, "test", BOT_ID,
+                _cutoff_ts(30), False, True,
+            )
+        assert deleted == 0
+        assert oldest is None
+        assert newest is None
+
+
+# ---------------------------------------------------------------------------
+# Purge log writing
+# ---------------------------------------------------------------------------
+
+
+class TestWritePurgeLog:
+    def test_writes_valid_jsonl(self, tmp_path: Path):
+        log_file = tmp_path / "purge.jsonl"
+        from datetime import datetime, timezone
+
+        with patch("chicane.purge.PURGE_LOG_FILE", log_file), \
+             patch("chicane.purge.console"):
+            _write_purge_log(
+                dry_run=False,
+                delete_all=False,
+                older_than_days=30,
+                channel_filter=None,
+                keep_parent=False,
+                cutoff_dt=datetime(2026, 4, 5, tzinfo=timezone.utc),
+                total_deleted=42,
+                total_failed=1,
+                oldest_ts=1711000000.0,  # ~2024-03-21
+                newest_ts=1711500000.0,  # ~2024-03-27
+                channels=[
+                    {"name": "general", "scanned": 100, "deleted": 42, "failed": 1},
+                ],
+            )
+
+        lines = log_file.read_text().strip().split("\n")
+        assert len(lines) == 1
+
+        entry = json.loads(lines[0])
+        assert entry["total_deleted"] == 42
+        assert entry["total_failed"] == 1
+        assert entry["dry_run"] is False
+        assert entry["older_than_days"] == 30
+        assert entry["date_range_days"] > 0
+        assert entry["oldest_message"] is not None
+        assert entry["newest_message"] is not None
+        assert len(entry["channels"]) == 1
+        assert entry["channels"][0]["name"] == "general"
+
+    def test_dry_run_logged(self, tmp_path: Path):
+        log_file = tmp_path / "purge.jsonl"
+        from datetime import datetime, timezone
+
+        with patch("chicane.purge.PURGE_LOG_FILE", log_file), \
+             patch("chicane.purge.console"):
+            _write_purge_log(
+                dry_run=True,
+                delete_all=False,
+                older_than_days=30,
+                channel_filter=None,
+                keep_parent=False,
+                cutoff_dt=datetime(2026, 4, 5, tzinfo=timezone.utc),
+                total_deleted=10,
+                total_failed=0,
+                oldest_ts=1711000000.0,
+                newest_ts=1711500000.0,
+                channels=[],
+            )
+
+        entry = json.loads(log_file.read_text().strip())
+        assert entry["dry_run"] is True
+
+    def test_no_deletions_zero_range(self, tmp_path: Path):
+        """No messages deleted → date_range_days=0, timestamps null."""
+        log_file = tmp_path / "purge.jsonl"
+        from datetime import datetime, timezone
+
+        with patch("chicane.purge.PURGE_LOG_FILE", log_file), \
+             patch("chicane.purge.console"):
+            _write_purge_log(
+                dry_run=False,
+                delete_all=False,
+                older_than_days=30,
+                channel_filter=None,
+                keep_parent=False,
+                cutoff_dt=datetime(2026, 4, 5, tzinfo=timezone.utc),
+                total_deleted=0,
+                total_failed=0,
+                oldest_ts=None,
+                newest_ts=None,
+                channels=[],
+            )
+
+        entry = json.loads(log_file.read_text().strip())
+        assert entry["date_range_days"] == 0
+        assert entry["oldest_message"] is None
+        assert entry["newest_message"] is None
+
+    def test_appends_multiple_entries(self, tmp_path: Path):
+        """Multiple purge runs append to the same file."""
+        log_file = tmp_path / "purge.jsonl"
+        from datetime import datetime, timezone
+
+        kwargs = dict(
+            dry_run=False, delete_all=False, older_than_days=30,
+            channel_filter=None, keep_parent=False,
+            cutoff_dt=datetime(2026, 4, 5, tzinfo=timezone.utc),
+            total_deleted=5, total_failed=0,
+            oldest_ts=1711000000.0, newest_ts=1711500000.0,
+            channels=[],
+        )
+
+        with patch("chicane.purge.PURGE_LOG_FILE", log_file), \
+             patch("chicane.purge.console"):
+            _write_purge_log(**kwargs)
+            _write_purge_log(**kwargs)
+
+        lines = log_file.read_text().strip().split("\n")
+        assert len(lines) == 2
+        # Both are valid JSON
+        for line in lines:
+            json.loads(line)
