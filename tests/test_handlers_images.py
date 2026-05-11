@@ -94,6 +94,29 @@ class TestExtractImagePaths:
         text = " ".join(parts)
         assert _extract_image_paths(text) == expected
 
+    def test_video_extensions(self, tmp_path):
+        """Video files (.mp4, .webm) are detected alongside images."""
+        extensions = [".mp4", ".webm"]
+        expected = []
+        parts = []
+        for ext in extensions:
+            f = tmp_path / f"video{ext}"
+            f.write_bytes(b"data")
+            expected.append(f)
+            parts.append(str(f))
+        text = " ".join(parts)
+        assert _extract_image_paths(text) == expected
+
+    def test_mixed_image_and_video(self, tmp_path):
+        """Images and videos are both extracted from the same text."""
+        img = tmp_path / "chart.png"
+        vid = tmp_path / "demo.mp4"
+        img.write_bytes(b"img")
+        vid.write_bytes(b"vid")
+        text = f"See {img} and {vid}"
+        result = _extract_image_paths(text)
+        assert result == [img, vid]
+
     def test_case_insensitive_extension(self, tmp_path):
         img = tmp_path / "photo.PNG"
         img.write_bytes(b"img")
@@ -287,6 +310,34 @@ class TestCollectImagePathsFromToolUse:
         )
         assert _collect_image_paths_from_tool_use(event) == ["/tmp/PHOTO.JPG"]
 
+    def test_write_tool_with_video_path(self):
+        event = make_tool_event(
+            tool_block("Write", file_path="/tmp/demo.mp4", content="data")
+        )
+        assert _collect_image_paths_from_tool_use(event) == ["/tmp/demo.mp4"]
+
+    def test_write_tool_with_webm_path(self):
+        event = make_tool_event(
+            tool_block("Write", file_path="/tmp/recording.webm", content="data")
+        )
+        assert _collect_image_paths_from_tool_use(event) == ["/tmp/recording.webm"]
+
+    def test_bash_tool_video_path_collected(self):
+        """Bash commands with video file paths are collected."""
+        event = make_tool_event(
+            tool_block("Bash", command="ffmpeg -i input.avi /tmp/output.mp4")
+        )
+        assert _collect_image_paths_from_tool_use(event) == ["/tmp/output.mp4"]
+
+    def test_mixed_image_and_video_paths(self):
+        """Both image and video paths are collected from mixed tool_use blocks."""
+        event = make_tool_event(
+            tool_block("Write", file_path="/tmp/chart.png", content="img"),
+            tool_block("Write", file_path="/tmp/demo.webm", content="vid"),
+        )
+        result = _collect_image_paths_from_tool_use(event)
+        assert result == ["/tmp/chart.png", "/tmp/demo.webm"]
+
 
 # ---------------------------------------------------------------------------
 # _upload_image
@@ -351,6 +402,63 @@ class TestUploadImage:
         queue.post_message.assert_called_once_with(
             "C123", "1000.0",
             ":frame_with_picture: `test.png` (upload failed)",
+        )
+
+    @pytest.mark.asyncio
+    async def test_video_uses_movie_camera_emoji(self, tmp_path):
+        """Video files use :movie_camera: instead of :frame_with_picture:."""
+        vid = tmp_path / "demo.mp4"
+        vid.write_bytes(b"video")
+        client = mock_client()
+
+        await _upload_image(client, "C123", "1000.0", vid)
+
+        client.files_upload_v2.assert_called_once_with(
+            file=str(vid),
+            filename="demo.mp4",
+            title="demo.mp4",
+            channel="C123",
+            thread_ts="1000.0",
+            initial_comment=":movie_camera: `demo.mp4`",
+        )
+
+    @pytest.mark.asyncio
+    async def test_webm_uses_movie_camera_emoji(self, tmp_path):
+        """WebM files use :movie_camera: emoji."""
+        vid = tmp_path / "recording.webm"
+        vid.write_bytes(b"video")
+        client = mock_client()
+
+        await _upload_image(client, "C123", "1000.0", vid)
+
+        client.files_upload_v2.assert_called_once_with(
+            file=str(vid),
+            filename="recording.webm",
+            title="recording.webm",
+            channel="C123",
+            thread_ts="1000.0",
+            initial_comment=":movie_camera: `recording.webm`",
+        )
+
+    @pytest.mark.asyncio
+    async def test_video_upload_failure_uses_movie_camera_emoji(self, tmp_path):
+        """Failed video upload uses :movie_camera: in fallback message."""
+        from slack_sdk.errors import SlackApiError
+
+        vid = tmp_path / "demo.mp4"
+        vid.write_bytes(b"video")
+        client = mock_client()
+        client.files_upload_v2.side_effect = SlackApiError(
+            message="upload_error", response=MagicMock(status_code=500)
+        )
+        queue = MagicMock()
+        queue.post_message = AsyncMock()
+
+        await _upload_image(client, "C123", "1000.0", vid, queue)
+
+        queue.post_message.assert_called_once_with(
+            "C123", "1000.0",
+            ":movie_camera: `demo.mp4` (upload failed)",
         )
 
 

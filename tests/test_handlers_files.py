@@ -384,6 +384,42 @@ class TestProcessMessageWithFiles:
         assert "Read tool" in captured_prompt
 
     @pytest.mark.asyncio
+    async def test_video_files_labeled_as_video(self, config, sessions, queue, tmp_path):
+        captured_prompt = None
+
+        async def capturing_stream(prompt):
+            nonlocal captured_prompt
+            captured_prompt = prompt
+            yield make_event("result", text="done")
+
+        mock_session = MagicMock()
+        mock_session.stream = capturing_stream
+        mock_session.session_id = "s1"
+        mock_session.cwd = tmp_path
+
+        client = mock_client()
+
+        downloaded = [
+            ("demo.mp4", tmp_path / "demo.mp4", "video/mp4"),
+        ]
+
+        with (
+            patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)),
+            patch("chicane.handlers._download_files", new_callable=AsyncMock, return_value=downloaded),
+        ):
+            event = {
+                "ts": "8004.0",
+                "channel": "C_CHAN",
+                "user": "UHUMAN1",
+                "files": [{"name": "demo.mp4"}],
+            }
+            await _process_message(event, "check this video", client, config, sessions, queue)
+
+        assert "Video:" in captured_prompt
+        assert "Image:" not in captured_prompt
+        assert "demo.mp4" in captured_prompt
+
+    @pytest.mark.asyncio
     async def test_no_files_prompt_unchanged(self, config, sessions, queue):
         captured_prompt = None
 

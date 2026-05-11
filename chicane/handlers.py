@@ -40,12 +40,6 @@ _MAX_ACTIVITY_BATCH = 10
 # user.  This timer ensures it gets posted even if no new event arrives.
 _IDLE_FLUSH_DELAY = 10.0
 
-# Maximum age (seconds) of a live activity message before starting a new one.
-# Slack doesn't notify on edits, so long-running tool sequences become
-# invisible if we keep updating the same message.  After this interval the
-# current message is finalized and a fresh one is posted.
-_ACTIVITY_MSG_MAX_AGE = 60.0
-
 
 # ---------------------------------------------------------------------------
 # Thread-root reaction helpers — track state in SessionInfo to skip no-ops
@@ -706,6 +700,8 @@ async def _process_message(
         for name, path, mime in downloaded_files:
             if mime.startswith("image/"):
                 refs.append(f"- Image: {path} (original name: {name})")
+            elif mime.startswith("video/"):
+                refs.append(f"- Video: {path} (original name: {name})")
             else:
                 refs.append(f"- File: {path} (original name: {name})")
         file_note = (
@@ -770,14 +766,19 @@ async def _process_message(
         activity_message_text: str = ""  # accumulated text in that message
         activity_message_created: float = 0.0  # monotonic time when live msg was created
 
-        def _reset_activity_state() -> None:
-            """Reset activity tracking for a new tool sequence."""
-            nonlocal first_activity_posted, activity_message_ts, activity_message_text
+        def _break_streak() -> None:
+            """Reset live message state so the next output starts a new message."""
+            nonlocal activity_message_ts, activity_message_text
             nonlocal activity_message_created
-            first_activity_posted = False
             activity_message_ts = None
             activity_message_text = ""
             activity_message_created = 0.0
+
+        def _reset_activity_state() -> None:
+            """Reset activity tracking for a new tool sequence."""
+            nonlocal first_activity_posted
+            first_activity_posted = False
+            _break_streak()
 
         # Idle flush — when the SDK blocks between events (e.g. Claude
         # is generating a huge file), any accumulated text or batched tool
@@ -793,11 +794,9 @@ async def _process_message(
                 await asyncio.sleep(_IDLE_FLUSH_DELAY)
                 # Flush pending tool activities first (they came before text)
                 await _flush_activities()
-                # Then flush accumulated text
+                # Then flush accumulated text into the live message
                 if full_text:
-                    for chunk in _split_message(_markdown_to_mrkdwn(full_text)):
-                        r = await queue.post_message(channel, thread_ts, chunk)
-                        sessions.register_bot_message(r.ts, thread_ts)
+                    await _post_or_update(full_text)
                     if config.post_images:
                         pre = len(uploaded_images)
                         await _upload_new_images(
@@ -806,12 +805,8 @@ async def _process_message(
                             cwd=session_info.cwd,
                         )
                         if len(uploaded_images) > pre:
-                            activity_message_ts = None
-                            activity_message_text = ""
-                            activity_message_created = 0.0
+                            _break_streak()
                     full_text = ""
-                    # Don't reset activity state — keep batching into the
-                    # same activity message if more tools arrive.
             except asyncio.CancelledError:
                 pass
             except Exception:
@@ -856,12 +851,10 @@ async def _process_message(
                 if act.snippet:
                     # Flush any accumulated text before the snippet
                     if text_parts:
-                        await _post_or_update_activity("\n".join(text_parts))
+                        await _post_or_update("\n".join(text_parts))
                         text_parts = []
                     # Finalize the current activity message before snippet
-                    activity_message_ts = None
-                    activity_message_text = ""
-                    activity_message_created = 0.0
+                    _break_streak()
                     # Upload the snippet as its own message
                     await _send_snippet(
                         client, channel, thread_ts,
@@ -876,47 +869,55 @@ async def _process_message(
 
             # Flush remaining text
             if text_parts:
-                await _post_or_update_activity("\n".join(text_parts))
+                await _post_or_update("\n".join(text_parts))
 
-        async def _post_or_update_activity(new_text: str) -> None:
-            """Create or update the live activity message.
+        async def _post_or_update(new_text: str) -> None:
+            """Create or update the live message.
 
-            Starts a new message when the current one is older than
-            ``_ACTIVITY_MSG_MAX_AGE``, the user replied since it was
-            created, or appending would exceed the Slack message limit.
+            All bot output (tool activities AND text responses) flows
+            through here.  A new message is started only when:
+
+            - appending would exceed the Slack message limit (3900 chars)
+            - the user replied since the current message was created
+            - a streak breaker (snippet, image, card) reset
+              ``activity_message_ts`` externally
             """
             nonlocal activity_message_ts, activity_message_text
             nonlocal activity_message_created
 
             if activity_message_ts:
-                age = monotonic() - activity_message_created
                 user_replied = (
                     session_info.last_user_reply_mono > activity_message_created
                 )
                 candidate = activity_message_text + "\n" + new_text
-                if age >= _ACTIVITY_MSG_MAX_AGE or user_replied or len(candidate) > 3900:
-                    # Message too old, user replied, or too long — start a new one
+                if user_replied or len(candidate) > 3900:
+                    # User replied or too long — start a new one
                     activity_message_ts = None
                     activity_message_text = ""
-                    return await _post_or_update_activity(new_text)
+                    return await _post_or_update(new_text)
                 activity_message_text = candidate
+                blocks = [{"type": "markdown", "text": activity_message_text}]
                 try:
                     await queue.update_message(
                         channel, activity_message_ts, activity_message_text,
+                        blocks=blocks,
                     )
                 except Exception:
                     # Update failed (message deleted, etc.) — post new
-                    logger.debug("Activity update failed, posting new", exc_info=True)
+                    logger.debug("Live message update failed, posting new", exc_info=True)
                     activity_message_ts = None
                     activity_message_text = ""
-                    await _post_or_update_activity(new_text)
+                    await _post_or_update(new_text)
                 return
 
-            # Create new activity message
+            # Create new live message
             for chunk in _split_message(new_text):
-                r = await queue.post_message(channel, thread_ts, chunk)
+                blocks = [{"type": "markdown", "text": chunk}]
+                r = await queue.post_message(
+                    channel, thread_ts, chunk, blocks=blocks,
+                )
                 sessions.register_bot_message(r.ts, thread_ts)
-                # Track the last posted chunk as the live activity message
+                # Track the last posted chunk as the live message
                 activity_message_ts = r.ts
                 activity_message_text = chunk
                 activity_message_created = monotonic()
@@ -963,9 +964,7 @@ async def _process_message(
                     if show_activities and activities and full_text:
                         _cancel_idle_flush()
                         await _flush_activities()
-                        for chunk in _split_message(_markdown_to_mrkdwn(full_text)):
-                            r = await queue.post_message(channel, thread_ts, chunk)
-                            sessions.register_bot_message(r.ts, thread_ts)
+                        await _post_or_update(full_text)
                         if config.post_images:
                             pre = len(uploaded_images)
                             await _upload_new_images(
@@ -974,15 +973,8 @@ async def _process_message(
                                 cwd=session_info.cwd,
                             )
                             if len(uploaded_images) > pre:
-                                # Images were posted — start a fresh activity
-                                # message so tools don't update above the images.
-                                activity_message_ts = None
-                                activity_message_text = ""
-                                activity_message_created = 0.0
+                                _break_streak()
                         full_text = ""
-                        # Keep activity_message_ts so subsequent tools continue
-                        # updating the same activity message (until max age or
-                        # user reply triggers rotation).
 
                     # Post tool activity (first one immediately, rest batched)
                     if show_activities and activities:
@@ -1050,9 +1042,11 @@ async def _process_message(
                             continue
                         tool_name = block.get("name", "")
                         if tool_name == "EnterPlanMode":
+                            await _flush_activities()
                             await queue.post_message(
                                 channel, thread_ts, ":clipboard: _Entering plan mode_",
                             )
+                            _break_streak()
                         elif tool_name == "ExitPlanMode":
                             pass  # shown after tool result with plan path
 
@@ -1066,7 +1060,9 @@ async def _process_message(
                                     {k: t[k] for k in ("content", "status") if k in t}
                                     for t in todos
                                 ]
+                                await _flush_activities()
                                 await queue.post_message(channel, thread_ts, msg)
+                                _break_streak()
 
                     # Accumulate text
                     chunk = event_data.text
@@ -1076,7 +1072,8 @@ async def _process_message(
                 elif event_data.type == "result":
                     _cancel_idle_flush()
                     await _flush_activities()
-                    _reset_activity_state()
+                    # Don't reset activity state here — final text will be
+                    # merged into the live message after the stream loop.
                     result_event = event_data
                     # Prefer whichever is longer — streamed text preserves
                     # formatting but could miss chunks; result blob is
@@ -1103,6 +1100,7 @@ async def _process_message(
                                         channel, thread_ts, card,
                                         attachments=[{"color": _GIT_PURPLE}],
                                     )
+                                    _break_streak()
                     # Test result cards — shown at normal+ verbosity
                     shown_test_tool_ids: set[str] = set()
                     if _should_show("tool_activity", config.verbosity):
@@ -1120,6 +1118,7 @@ async def _process_message(
                                             channel, thread_ts, summary,
                                             attachments=[{"color": color}],
                                         )
+                                        _break_streak()
                     # Check for tool errors in user events (tool results)
                     if _should_show("tool_error", config.verbosity):
                         for tool_use_id, error_msg in event_data.tool_errors:
@@ -1139,6 +1138,7 @@ async def _process_message(
                                 }],
                                 attachments=[{"color": "danger"}],
                             )
+                            _break_streak()
 
                     # Brief notifications for interactive tool results
                     for tool_use_id, result_text in event_data.tool_results:
@@ -1162,6 +1162,7 @@ async def _process_message(
                                     channel, thread_ts,
                                     ":white_check_mark: _Exited plan mode_",
                                 )
+                            _break_streak()
 
                     # Show tool outputs in verbose mode (skip noisy tools
                     # and tools already shown as commit/test cards)
@@ -1181,6 +1182,7 @@ async def _process_message(
                                 await _post_markdown_response(
                                     queue, client, channel, thread_ts, fmt.text,
                                 )
+                                _break_streak()
                             else:
                                 meta = _snippet_metadata_from_tool(tool_name, tool_input, result_text)
                                 # Always upload diffs as snippets (even short
@@ -1198,11 +1200,13 @@ async def _process_message(
                                         filename=meta.filename,
                                         queue=queue,
                                     )
+                                    _break_streak()
                                 else:
                                     wrapped = f"{meta.label}\n```\n{fmt.text}\n```"
                                     await queue.post_message(
                                         channel, thread_ts, wrapped,
                                     )
+                                    _break_streak()
 
                     # Post images: upload pending Write-tool images that now
                     # exist on disk, plus any image paths found in tool results.
@@ -1419,13 +1423,8 @@ async def _process_message(
             if session.was_interrupted:
                 # Reaction interrupt — show partial text + stop indicator
                 if full_text:
-                    await _post_markdown_response(
-                        queue, client, channel, thread_ts, full_text,
-                    )
-                await queue.post_message(
-                    channel, thread_ts,
-                    ":stop_sign: _Interrupted_",
-                )
+                    await _post_or_update(full_text)
+                await _post_or_update(":stop_sign: _Interrupted_")
                 # Swap eyes → stop sign reaction on user's message
                 try:
                     await client.reactions_remove(
@@ -1445,11 +1444,9 @@ async def _process_message(
                     await _add_thread_reaction(client, channel, session_info, "octagonal_sign")
                 return
 
-            # Final: send remaining text
+            # Final: send remaining text into the live message
             if full_text:
-                await _post_markdown_response(
-                    queue, client, channel, thread_ts, full_text,
-                )
+                await _post_or_update(full_text)
 
             # Reset empty-continue counter on any proper response
             if full_text or had_tool_use:
@@ -1472,6 +1469,7 @@ async def _process_message(
                         f":repeat: Empty response from Claude — sending `continue` "
                         f"to work around SDK bug (attempt {attempt}/2)",
                     )
+                    _break_streak()
 
                     # Reconnect the SDK client — when zero events are
                     # returned, the underlying subprocess is often stuck
@@ -1519,6 +1517,7 @@ async def _process_message(
                                             for t in todos
                                         ]
                                         await queue.post_message(channel, thread_ts, msg)
+                                        _break_streak()
 
                             # Detect git commits during retry
                             retry_commit_ids = _get_git_commit_tool_ids(event_data)
@@ -1572,6 +1571,7 @@ async def _process_message(
                                                 channel, thread_ts, card,
                                                 attachments=[{"color": _GIT_PURPLE}],
                                             )
+                                            _break_streak()
                             # Tool errors
                             if _should_show("tool_error", config.verbosity):
                                 for tool_use_id, error_msg in event_data.tool_errors:
@@ -1591,6 +1591,7 @@ async def _process_message(
                                         }],
                                         attachments=[{"color": "danger"}],
                                     )
+                                    _break_streak()
                             # Test result cards — shown at normal+ verbosity
                             retry_shown_test_ids: set[str] = set()
                             if _should_show("tool_activity", config.verbosity):
@@ -1608,6 +1609,7 @@ async def _process_message(
                                                     channel, thread_ts, summary,
                                                     attachments=[{"color": color}],
                                                 )
+                                                _break_streak()
 
                             # Tool outputs in verbose mode (skip tools
                             # already shown as commit/test cards)
@@ -1626,6 +1628,7 @@ async def _process_message(
                                         await _post_markdown_response(
                                             queue, client, channel, thread_ts, fmt.text,
                                         )
+                                        _break_streak()
                                     else:
                                         meta = _snippet_metadata_from_tool(tool_name, tool_input, result_text_out)
                                         use_snippet = (
@@ -1641,11 +1644,13 @@ async def _process_message(
                                                 filename=meta.filename,
                                                 queue=queue,
                                             )
+                                            _break_streak()
                                         else:
                                             wrapped = f"{meta.label}\n```\n{fmt.text}\n```"
                                             await queue.post_message(
                                                 channel, thread_ts, wrapped,
                                             )
+                                            _break_streak()
 
                             # Post images (same as main loop)
                             if config.post_images:
@@ -1674,9 +1679,7 @@ async def _process_message(
                         # Success — reset counter
                         session_info.empty_continue_count = 0
                         if full_text:
-                            await _post_markdown_response(
-                                queue, client, channel, thread_ts, full_text,
-                            )
+                            await _post_or_update(full_text)
                     # If still empty after max retries, fall through
                     # to the warning below on next empty response.
 
@@ -1697,6 +1700,7 @@ async def _process_message(
                     await queue.post_message(
                         channel, thread_ts, msg,
                     )
+                    _break_streak()
 
             # Post images: scan the final response text for image paths
             if config.post_images and full_text:
@@ -1716,12 +1720,12 @@ async def _process_message(
 
                 summary = _format_completion_summary(result_event, session_info)
                 if summary:
+                    _break_streak()
                     color = "danger" if result_event.is_error else "good"
                     await queue.post_message(
                         channel, thread_ts, summary,
                         attachments=[{"color": color}],
                     )
-
 
                 # Surface permission denials so users know why tools were blocked
                 denials = result_event.permission_denials
@@ -1797,10 +1801,9 @@ async def _process_message(
 
                 # Post any partial text collected before the crash
                 if full_text:
-                    mrkdwn = _markdown_to_mrkdwn(full_text)
-                    for chunk in _split_message(mrkdwn):
-                        await queue.post_message(channel, thread_ts, chunk)
+                    await _post_or_update(full_text)
 
+                _break_streak()
                 await queue.post_message(
                     channel, thread_ts,
                     ":warning: Claude's response exceeded the SDK buffer "
@@ -3413,8 +3416,14 @@ _IMAGE_EXTENSIONS = frozenset({
     ".svg", ".bmp", ".ico", ".tiff",
 })
 
+_VIDEO_EXTENSIONS = frozenset({
+    ".mp4", ".webm",
+})
+
+_MEDIA_EXTENSIONS = _IMAGE_EXTENSIONS | _VIDEO_EXTENSIONS
+
 _IMAGE_PATH_RE = re.compile(
-    r"((?:/|\.{1,2}/)[\w./-]+\.(?:png|jpe?g|gif|webp|svg|bmp|ico|tiff))\b",
+    r"((?:/|\.{1,2}/)[\w./-]+\.(?:png|jpe?g|gif|webp|svg|bmp|ico|tiff|mp4|webm))\b",
     re.IGNORECASE,
 )
 
@@ -3443,7 +3452,7 @@ def _extract_image_paths(text: str, cwd: Path | None = None) -> list[Path]:
         p = Path(raw)
         if not p.is_absolute() and cwd is not None:
             p = (cwd / p).resolve()
-        if p.suffix.lower() in _IMAGE_EXTENSIONS:
+        if p.suffix.lower() in _MEDIA_EXTENSIONS:
             if p.is_file():
                 paths.append(p)
             elif p.is_absolute() and cwd is not None:
@@ -3475,7 +3484,7 @@ def _collect_image_paths_from_tool_use(event: ClaudeEvent) -> list[str]:
             file_path = tool_input.get("file_path") or tool_input.get("notebook_path", "")
             if file_path:
                 suffix = Path(file_path).suffix.lower()
-                if suffix in _IMAGE_EXTENSIONS:
+                if suffix in _MEDIA_EXTENSIONS:
                     paths.append(file_path)
         elif tool_name == "Bash":
             # Scan Bash commands for image paths (e.g. savefig('/tmp/chart.png'),
@@ -3493,7 +3502,8 @@ async def _upload_image(
     path: Path,
     queue: SlackMessageQueue | None = None,
 ) -> None:
-    """Upload an image file to Slack in the thread."""
+    """Upload an image or video file to Slack in the thread."""
+    emoji = ":movie_camera:" if path.suffix.lower() in _VIDEO_EXTENSIONS else ":frame_with_picture:"
     try:
         await client.files_upload_v2(
             file=str(path),
@@ -3501,14 +3511,14 @@ async def _upload_image(
             title=path.name,
             channel=channel,
             thread_ts=thread_ts,
-            initial_comment=f":frame_with_picture: `{path.name}`",
+            initial_comment=f"{emoji} `{path.name}`",
         )
     except SlackClientError as exc:
-        logger.warning("Image upload failed for %s: %s", path, exc)
+        logger.warning("Media upload failed for %s: %s", path, exc)
         if queue is not None:
             await queue.post_message(
                 channel, thread_ts,
-                f":frame_with_picture: `{path.name}` (upload failed)",
+                f"{emoji} `{path.name}` (upload failed)",
             )
 
 
