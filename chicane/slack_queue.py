@@ -102,6 +102,8 @@ class SlackMessageQueue:
         channel: str,
         ts: str,
         text: str,
+        *,
+        blocks: list[dict] | None = None,
     ) -> None:
         """Update an existing message, throttling to respect Slack's rate limit.
 
@@ -111,10 +113,14 @@ class SlackMessageQueue:
         if self._client is None:
             raise RuntimeError("SlackMessageQueue: client not bound — call ensure_client() first")
 
+        kwargs: dict = {"channel": channel, "ts": ts, "text": text}
+        if blocks is not None:
+            kwargs["blocks"] = blocks
+
         async with self._lock:
             await self._throttle(channel)
             try:
-                await self._client.chat_update(channel=channel, ts=ts, text=text)
+                await self._client.chat_update(**kwargs)
             except SlackApiError as exc:
                 if exc.response.status_code == 429:
                     retry_after = float(
@@ -125,7 +131,7 @@ class SlackMessageQueue:
                         channel, retry_after,
                     )
                     await asyncio.sleep(retry_after)
-                    await self._client.chat_update(channel=channel, ts=ts, text=text)
+                    await self._client.chat_update(**kwargs)
                 else:
                     raise
             self._last_post_time[channel] = monotonic()

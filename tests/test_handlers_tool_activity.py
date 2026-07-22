@@ -783,7 +783,7 @@ class TestToolActivityStreaming:
         assert ":mag: Reading `a.py`" in all_text
         assert ":pencil2: Editing `a.py`" in all_text
         assert ":computer: Running `pytest`" in all_text
-        assert "Done." in "\n".join(post_texts)
+        assert "Done." in all_text
 
     @pytest.mark.asyncio
     async def test_final_text_as_thread_replies_when_activities_exist(
@@ -806,10 +806,11 @@ class TestToolActivityStreaming:
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "hello", client, config, sessions, queue)
 
-        post_calls = client.chat_postMessage.call_args_list
-        final_post = post_calls[-1]
-        assert final_post.kwargs["text"] == "The answer."
-        assert final_post.kwargs["thread_ts"] == "1000.0"
+        # Text is merged into the live message (activity + text in same message)
+        post_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        update_texts = [c.kwargs.get("text", "") for c in client.chat_update.call_args_list]
+        all_text = "\n".join(post_texts + update_texts)
+        assert "The answer." in all_text
 
     @pytest.mark.asyncio
     async def test_no_activities_posts_text_as_reply(self, config, sessions, queue):
@@ -859,17 +860,14 @@ class TestToolActivityStreaming:
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN1"}
             await _process_message(event, "fix it", client, config, sessions, queue)
 
-        post_calls = client.chat_postMessage.call_args_list
-        texts = [c.kwargs["text"] for c in post_calls]
-        # Text should be flushed before the next tool activity
-        read_idx = texts.index(":mag: Reading `a.py`")
-        text_idx = texts.index("Looks good, let me edit it.")
-        assert read_idx < text_idx
-        # Edit activity is batched into the existing activity message via
-        # chat.update (not a separate post), so check updates
-        update_texts = [c.kwargs["text"] for c in client.chat_update.call_args_list]
-        assert any(":pencil2: Editing `a.py`" in ut for ut in update_texts), \
-            "Edit activity should be in an updated message"
+        # All content (activities + text) is merged into the live message
+        post_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        update_texts = [c.kwargs.get("text", "") for c in client.chat_update.call_args_list]
+        all_text = "\n".join(post_texts + update_texts)
+        assert ":mag: Reading `a.py`" in all_text
+        assert "Looks good, let me edit it." in all_text
+        assert ":pencil2: Editing `a.py`" in all_text
+        assert "Done editing." in all_text
 
     @pytest.mark.asyncio
     async def test_long_text_with_activities_uses_markdown_block(

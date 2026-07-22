@@ -40,16 +40,13 @@ class TestProcessMessageFormatting:
             }
             await _process_message(event, "hello", client, config, sessions, queue)
 
-        # Find the posted text (not the session init or completion summary)
-        text_posts = [
-            c for c in client.chat_postMessage.call_args_list
-            if c.kwargs.get("text", "").startswith("First")
-        ]
-        assert len(text_posts) == 1
-        assert "\n\n" in text_posts[0].kwargs["text"]
-        # Bullets get converted from - to • by _markdown_to_mrkdwn
-        expected = streamed.replace("- bullet", "• bullet")
-        assert text_posts[0].kwargs["text"] == expected
+        # Text is posted via the live message (post or update)
+        post_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        update_texts = [c.kwargs.get("text", "") for c in client.chat_update.call_args_list]
+        all_text = "\n".join(post_texts + update_texts)
+        # Streamed text (with newlines) should win over flat result
+        assert "First paragraph.\n\nSecond paragraph." in all_text
+        assert "- bullet 1\n- bullet 2" in all_text
 
     @pytest.mark.asyncio
     async def test_result_text_used_when_no_streamed_content(
@@ -520,7 +517,7 @@ class TestProcessMessageEdgeCases:
     async def test_moderate_response_uses_single_markdown_block(self, config, sessions, queue):
         """Responses within markdown block limit fit in a single message."""
         # 3950 chars: fits in a single markdown block (limit 11k)
-        text = "a" * 3950
+        text = "a" * 3000  # Under 3900 limit → single live message
 
         async def fake_stream(prompt):
             yield make_event("result", text=text)
@@ -1491,12 +1488,11 @@ class TestGitCommitUserMessageReaction:
             # Should not raise
             await _process_message(event, "commit", client, config, sessions, queue)
 
-        # Text response should still be posted
-        text_posts = [
-            c for c in client.chat_postMessage.call_args_list
-            if "Done." in c.kwargs.get("text", "")
-        ]
-        assert len(text_posts) == 1
+        # Text response should still appear (in posts or updates)
+        post_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        update_texts = [c.kwargs.get("text", "") for c in client.chat_update.call_args_list]
+        all_text = "\n".join(post_texts + update_texts)
+        assert "Done." in all_text
 
 
 class TestUnknownEventType:

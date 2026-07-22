@@ -38,6 +38,7 @@ class TestSessionLock:
         info = MagicMock()
         info.session = mock_session
         info.lock = lock
+        info.last_user_reply_mono = 0.0
         info.pending_messages = deque()
 
         client = mock_client()
@@ -83,6 +84,7 @@ class TestSessionLock:
         info = MagicMock()
         info.session = mock_session
         info.lock = lock
+        info.last_user_reply_mono = 0.0
         info.pending_messages = deque()
 
         client = mock_client()
@@ -117,6 +119,7 @@ class TestSessionLock:
         info = MagicMock()
         info.session = mock_session
         info.lock = lock
+        info.last_user_reply_mono = 0.0
         info.pending_messages = deque()
 
         client = mock_client()
@@ -159,6 +162,7 @@ class TestSessionLock:
         info = MagicMock()
         info.session = mock_session
         info.lock = lock
+        info.last_user_reply_mono = 0.0
         info.pending_messages = deque()
 
         client = mock_client()

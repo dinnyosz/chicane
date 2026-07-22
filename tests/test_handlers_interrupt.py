@@ -153,6 +153,7 @@ class TestNewMessageQueue:
         info = MagicMock()
         info.session = mock_session
         info.lock = asyncio.Lock()
+        info.last_user_reply_mono = 0.0
         info.pending_messages = deque()
 
         client = mock_client()
@@ -181,6 +182,7 @@ class TestNewMessageQueue:
         info = MagicMock()
         info.session = mock_session
         info.lock = asyncio.Lock()
+        info.last_user_reply_mono = 0.0
         info.pending_messages = deque()
 
         client = mock_client()
@@ -206,6 +208,7 @@ class TestNewMessageQueue:
         info = MagicMock()
         info.session = mock_session
         info.lock = asyncio.Lock()
+        info.last_user_reply_mono = 0.0
         info.pending_messages = deque()
 
         client = mock_client()
@@ -248,6 +251,7 @@ class TestInterruptedStreamDisplay:
         info = MagicMock()
         info.session = mock_session
         info.lock = asyncio.Lock()
+        info.last_user_reply_mono = 0.0
 
         client = mock_client()
 
@@ -255,18 +259,12 @@ class TestInterruptedStreamDisplay:
             event = {"ts": "1000.0", "channel": "C_CHAN", "user": "UHUMAN"}
             await _process_message(event, "do something", client, config, sessions, queue)
 
-        # Partial text and stop indicator should be posted as thread replies
-        post_calls = client.chat_postMessage.call_args_list
-        text_posts = [
-            c for c in post_calls
-            if "Partial response" in c.kwargs.get("text", "")
-        ]
-        assert len(text_posts) == 1
-        stop_posts = [
-            c for c in post_calls
-            if c.kwargs.get("text") == ":stop_sign: _Interrupted_"
-        ]
-        assert len(stop_posts) == 1
+        # Partial text and stop indicator merged into live message
+        post_texts = [c.kwargs.get("text", "") for c in client.chat_postMessage.call_args_list]
+        update_texts = [c.kwargs.get("text", "") for c in client.chat_update.call_args_list]
+        all_text = "\n".join(post_texts + update_texts)
+        assert "Partial response" in all_text
+        assert ":stop_sign: _Interrupted_" in all_text
 
     @pytest.mark.asyncio
     async def test_interrupted_stream_no_text_shows_indicator(self, config, sessions, queue):
@@ -286,6 +284,7 @@ class TestInterruptedStreamDisplay:
         info = MagicMock()
         info.session = mock_session
         info.lock = asyncio.Lock()
+        info.last_user_reply_mono = 0.0
 
         client = mock_client()
 
@@ -318,6 +317,7 @@ class TestInterruptedStreamDisplay:
         info = MagicMock()
         info.session = mock_session
         info.lock = asyncio.Lock()
+        info.last_user_reply_mono = 0.0
 
         client = mock_client()
 
@@ -351,6 +351,7 @@ class TestInterruptedStreamDisplay:
         info = MagicMock()
         info.session = mock_session
         info.lock = asyncio.Lock()
+        info.last_user_reply_mono = 0.0
 
         client = mock_client()
 
@@ -385,6 +386,7 @@ class TestInterruptedStreamDisplay:
         info = MagicMock()
         info.session = mock_session
         info.lock = asyncio.Lock()
+        info.last_user_reply_mono = 0.0
         info.pending_messages = deque()
 
         client = mock_client()
@@ -422,6 +424,7 @@ class TestInterruptExceptionHandling:
         info = MagicMock()
         info.session = mock_session
         info.lock = asyncio.Lock()
+        info.last_user_reply_mono = 0.0
         info.pending_messages = deque()
 
         client = mock_client()
@@ -458,6 +461,7 @@ class TestInterruptExceptionHandling:
         info = MagicMock()
         info.session = mock_session
         info.lock = asyncio.Lock()
+        info.last_user_reply_mono = 0.0
 
         client = mock_client()
         client.reactions_remove.side_effect = Exception("not_found")
@@ -502,6 +506,7 @@ class TestQueueDrain:
         info = MagicMock()
         info.session = mock_session
         info.lock = asyncio.Lock()
+        info.last_user_reply_mono = 0.0
         info.pending_messages = deque()
 
         client = mock_client()
@@ -541,6 +546,7 @@ class TestQueueDrain:
         info = MagicMock()
         info.session = mock_session
         info.lock = asyncio.Lock()
+        info.last_user_reply_mono = 0.0
         info.pending_messages = deque()
 
         client = mock_client()
@@ -574,6 +580,7 @@ class TestQueueDrain:
         info = MagicMock()
         info.session = mock_session
         info.lock = asyncio.Lock()
+        info.last_user_reply_mono = 0.0
         info.pending_messages = deque()
 
         client = mock_client()
@@ -612,6 +619,7 @@ class TestQueueDrain:
         info = MagicMock()
         info.session = mock_session
         info.lock = asyncio.Lock()
+        info.last_user_reply_mono = 0.0
         info.pending_messages = deque()
 
         client = mock_client()

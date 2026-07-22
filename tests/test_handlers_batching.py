@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from chicane.handlers import _process_message, _MAX_ACTIVITY_BATCH, _ACTIVITY_MSG_MAX_AGE
+from chicane.handlers import _process_message, _MAX_ACTIVITY_BATCH
 from chicane.slack_queue import SlackMessageQueue
 from tests.conftest import (
     make_event,
@@ -95,13 +95,13 @@ class TestFlushOnEventTransition:
             event = {"ts": "3.0", "channel": "C1", "user": "UHUMAN1"}
             await _process_message(event, "edit it", client, config, sessions, queue)
 
-        # Activities may be in posts or updates (create-then-update pattern)
+        # Activities and text are merged into the same live message
         post_texts = [c.kwargs["text"] for c in client.chat_postMessage.call_args_list]
         update_texts = [c.kwargs["text"] for c in client.chat_update.call_args_list]
         all_text = "\n".join(post_texts + update_texts)
         assert ":mag: Reading `a.py`" in all_text
         assert ":pencil2: Editing `a.py`" in all_text
-        assert "I edited the file." in "\n".join(post_texts)
+        assert "I edited the file." in all_text
 
     @pytest.mark.asyncio
     async def test_activities_flushed_on_result(self, config, sessions, queue):
@@ -357,11 +357,11 @@ class TestCreateThenUpdate:
 
 
 class TestActivityMessageRotation:
-    """Activity messages rotate after _ACTIVITY_MSG_MAX_AGE seconds."""
+    """Activity messages rotate only on user reply or length limit (no time limit)."""
 
     @pytest.mark.asyncio
-    async def test_activity_message_rotates_after_max_age(self, config, sessions, queue):
-        """After 60s, a new activity should create a new message, not update the old one."""
+    async def test_no_time_based_rotation(self, config, sessions, queue):
+        """Even after a long time, activities keep updating the same message."""
         async def fake_stream(prompt):
             yield make_tool_event(tool_block("Read", file_path="/src/a.py"))
             yield make_tool_event(tool_block("Read", file_path="/src/b.py"))
@@ -373,27 +373,19 @@ class TestActivityMessageRotation:
 
         client = mock_client()
 
-        # monotonic() is called when creating an activity message and when
-        # checking its age.  Return 0.0 for creation, then jump past max age.
-        fake_times = iter([0.0, _ACTIVITY_MSG_MAX_AGE + 1])
+        # Simulate large time jump — should NOT trigger rotation
+        fake_times = iter([0.0, 9999.0])
 
-        with patch("chicane.handlers.monotonic", side_effect=lambda: next(fake_times, _ACTIVITY_MSG_MAX_AGE + 1)), \
+        with patch("chicane.handlers.monotonic", side_effect=lambda: next(fake_times, 9999.0)), \
              patch.object(sessions, "get_or_create", return_value=mock_session_info(mock_session)):
             event = {"ts": "20.0", "channel": "C1", "user": "UHUMAN1"}
             await _process_message(event, "read files", client, config, sessions, queue)
 
-        # Second activity should be a new post (not an update) because the
-        # message age exceeded _ACTIVITY_MSG_MAX_AGE.
+        # Only 1 activity post (the first one) — second goes through update
         post_texts = [c.kwargs["text"] for c in client.chat_postMessage.call_args_list]
         activity_posts = [t for t in post_texts if ":mag: Reading" in t]
-        assert len(activity_posts) >= 2, (
-            f"Expected 2 activity posts (rotated), got {len(activity_posts)}: {activity_posts}"
-        )
-        # No updates should have been made (rotation created a new post instead)
-        update_texts = [c.kwargs.get("text", "") for c in client.chat_update.call_args_list]
-        activity_updates = [t for t in update_texts if ":mag: Reading" in t]
-        assert len(activity_updates) == 0, (
-            f"Expected no activity updates (rotated to new post), got: {activity_updates}"
+        assert len(activity_posts) == 1, (
+            f"Expected 1 activity post (no rotation), got {len(activity_posts)}: {activity_posts}"
         )
 
     @pytest.mark.asyncio
