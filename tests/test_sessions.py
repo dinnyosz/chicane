@@ -86,7 +86,8 @@ class TestSessionStore:
 
     @pytest.mark.asyncio
     async def test_cleanup_skips_streaming_sessions(self, store, config):
-        """cleanup() must skip sessions where is_streaming is True."""
+        """cleanup() must skip sessions where is_streaming is True
+        (unless they exceed the force-expire threshold of 2× max_age)."""
         from unittest.mock import AsyncMock
 
         # Create two sessions and age them both past the threshold
@@ -96,10 +97,10 @@ class TestSessionStore:
         info_streaming.session.disconnect = AsyncMock()
         info_idle.session.disconnect = AsyncMock()
 
-        # Age both sessions to 48 hours ago
-        aged = datetime.now() - timedelta(hours=48)
-        info_streaming.last_used = aged
-        info_idle.last_used = aged
+        # Age idle session well past threshold, streaming session past
+        # threshold but within the force-expire window (2× max_age).
+        info_idle.last_used = datetime.now() - timedelta(hours=48)
+        info_streaming.last_used = datetime.now() - timedelta(hours=25)
 
         # Set the internal _is_streaming flag (backing the is_streaming property)
         info_streaming.session._is_streaming = True
@@ -112,6 +113,25 @@ class TestSessionStore:
         assert "idle-thread" not in store._sessions
         info_idle.session.disconnect.assert_awaited_once()
         info_streaming.session.disconnect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_force_expires_stuck_streaming_sessions(self, store, config):
+        """Sessions stuck in streaming state past 2× max_age get force-killed."""
+        from unittest.mock import AsyncMock
+
+        info = store.get_or_create("stuck-thread", config, cwd=Path("/tmp/s"))
+        info.session.kill = AsyncMock()
+
+        # Age past the force-expire threshold (2× max_age)
+        info.last_used = datetime.now() - timedelta(hours=50)
+        info.session._is_streaming = True
+
+        removed = await store.cleanup(max_age_hours=24)
+
+        # Normal cleanup returns 0 (it only counts non-streaming), but
+        # the stuck session should be gone from the store.
+        assert "stuck-thread" not in store._sessions
+        info.session.kill.assert_awaited_once()
 
     def test_falls_back_to_temp_dir_when_no_cwd(self):
         config = Config(
@@ -375,6 +395,7 @@ class TestPreCleanupCommand:
         store = SessionStore()
         info = store.get_or_create("old-thread", config_with_command, cwd=Path("/tmp/a"))
         info.session.disconnect = AsyncMock()
+        info.session.force_reconnect = AsyncMock()
         info.channel = "C_TEST"
         info.last_used = datetime.now() - timedelta(hours=25)
 
@@ -393,6 +414,7 @@ class TestPreCleanupCommand:
         )
 
         assert removed == 1
+        info.session.force_reconnect.assert_awaited_once()
         info.session.disconnect.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -414,6 +436,7 @@ class TestPreCleanupCommand:
         store = SessionStore()
         info = store.get_or_create("old-thread", config_with_command, cwd=Path("/tmp/a"))
         info.session.disconnect = AsyncMock()
+        info.session.force_reconnect = AsyncMock()
         info.channel = "C_TEST"
         info.last_used = datetime.now() - timedelta(hours=25)
 
@@ -439,6 +462,7 @@ class TestPreCleanupCommand:
         store = SessionStore()
         info = store.get_or_create("old-thread", config_with_command, cwd=Path("/tmp/a"))
         info.session.disconnect = AsyncMock()
+        info.session.force_reconnect = AsyncMock()
         info.channel = "C_TEST"
         info.last_used = datetime.now() - timedelta(hours=25)
 
@@ -464,6 +488,7 @@ class TestPreCleanupCommand:
         store = SessionStore()
         info = store.get_or_create("old-thread", config_with_command, cwd=Path("/tmp/a"))
         info.session.disconnect = AsyncMock()
+        info.session.force_reconnect = AsyncMock()
         info.channel = "C_TEST"
         info.last_used = datetime.now() - timedelta(hours=25)
 
@@ -496,6 +521,7 @@ class TestPreCleanupCommand:
         store = SessionStore()
         info = store.get_or_create("old-thread", config_with_command, cwd=Path("/tmp/a"))
         info.session.disconnect = AsyncMock()
+        info.session.force_reconnect = AsyncMock()
         # channel is None (default)
         info.last_used = datetime.now() - timedelta(hours=25)
 

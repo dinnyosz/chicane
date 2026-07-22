@@ -264,12 +264,48 @@ class SessionStore:
         known channel, progress notifications are posted to the Slack thread.
         """
         now = datetime.now()
+        # Force-expire threshold: sessions stuck in streaming state for
+        # longer than this are forcefully killed.  This catches SDK hangs
+        # where is_streaming stays True indefinitely.
+        force_expire_seconds = max_age_hours * 3600 * 2  # 2× normal age
         expired = [
             ts
             for ts, info in self._sessions.items()
             if (now - info.last_used).total_seconds() > max_age_hours * 3600
             and not info.session.is_streaming
         ]
+        # Also collect sessions stuck in streaming state past the force
+        # threshold — these have a hung SDK subprocess.
+        stuck_streaming = [
+            ts
+            for ts, info in self._sessions.items()
+            if ts not in expired
+            and info.session.is_streaming
+            and (now - info.last_used).total_seconds() > force_expire_seconds
+        ]
+        if stuck_streaming:
+            logger.warning(
+                "Force-expiring %d sessions stuck in streaming state: %s",
+                len(stuck_streaming),
+                stuck_streaming,
+            )
+        for ts in stuck_streaming:
+            info = self._sessions.pop(ts)
+            # Kill the stuck session — interrupt + disconnect
+            try:
+                await info.session.kill()
+            except Exception:
+                logger.debug("Error killing stuck session", exc_info=True)
+            _cleanup_temp_dir(info)
+            if client and info.channel:
+                try:
+                    await client.chat_postMessage(
+                        channel=info.channel,
+                        thread_ts=ts,
+                        text=":warning: Session force-closed (stuck in streaming state).",
+                    )
+                except Exception:
+                    pass
         for ts in expired:
             info = self._sessions.pop(ts)
             await _run_pre_cleanup(info, ts, config, client)
@@ -334,6 +370,18 @@ async def _run_pre_cleanup(
             )
         except Exception:
             logger.debug("Failed to post pre-cleanup notice", exc_info=True)
+
+    # Force-reconnect before running the cleanup command.  After hours of
+    # inactivity the SDK subprocess is likely dead or unresponsive — reusing
+    # the stale client causes stream() to hang until the timeout.
+    try:
+        await info.session.force_reconnect()
+    except Exception:
+        logger.warning(
+            "Failed to force-reconnect before cleanup for thread %s",
+            thread_ts,
+            exc_info=True,
+        )
 
     try:
         async with asyncio.timeout(_CLEANUP_COMMAND_TIMEOUT):

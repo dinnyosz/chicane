@@ -846,6 +846,15 @@ class ClaudeSession:
             self._connected = False
             self._is_streaming = False
 
+    async def force_reconnect(self) -> None:
+        """Disconnect and clear state so the next ``stream()`` creates a fresh client.
+
+        Used before running cleanup commands on idle sessions where the
+        SDK subprocess may have died or become unresponsive.
+        """
+        await self.disconnect()
+        logger.info("Force-reconnected session (session_id=%s)", self.session_id)
+
     async def kill(self) -> None:
         """Kill the active session and clean up.
 
