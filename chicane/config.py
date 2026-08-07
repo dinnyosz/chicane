@@ -31,7 +31,7 @@ def env_file() -> Path:
     return config_dir() / ".env"
 
 
-load_dotenv(env_file())
+load_dotenv(env_file(), override=True)
 
 
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
