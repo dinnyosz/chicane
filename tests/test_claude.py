@@ -1078,23 +1078,33 @@ class TestClaudeSessionDisconnect:
 
     @pytest.mark.asyncio
     async def test_disconnect_suppresses_anyio_cancel_scope_error(self):
-        """Cross-task disconnect (e.g. during shutdown) should not log."""
+        """Cross-task disconnect kills subprocess when cancel scope error fires."""
         session = ClaudeSession()
         mock_client = AsyncMock()
         mock_client.disconnect.side_effect = RuntimeError(
             "Attempted to exit cancel scope in a different task"
         )
+        # Attach a mock transport with a mock process
+        mock_process = MagicMock()
+        mock_process.returncode = None
+        mock_process.pid = 12345
+        mock_transport = MagicMock()
+        mock_transport._process = mock_process
+        mock_client._transport = mock_transport
         session._client = mock_client
         session._connected = True
 
-        await session.disconnect()  # Should not raise or log
+        with patch("chicane.claude.getpgid", return_value=12345), \
+             patch("chicane.claude.killpg") as mock_killpg:
+            await session.disconnect()
 
+        mock_killpg.assert_called_once()
         assert session._client is None
         assert not session._connected
 
     @pytest.mark.asyncio
     async def test_disconnect_logs_non_cancel_scope_runtime_error(self):
-        """Other RuntimeErrors should still be logged."""
+        """Other RuntimeErrors should still be logged and subprocess killed."""
         session = ClaudeSession()
         mock_client = AsyncMock()
         mock_client.disconnect.side_effect = RuntimeError("something else")
@@ -1105,6 +1115,48 @@ class TestClaudeSessionDisconnect:
 
         assert session._client is None
         assert not session._connected
+
+    @pytest.mark.asyncio
+    async def test_force_kill_transport_no_transport(self):
+        """_force_kill_transport is a no-op when client has no transport."""
+        session = ClaudeSession()
+        session._client = MagicMock(spec=[])  # no _transport attr
+        await session._force_kill_transport()  # should not raise
+
+    @pytest.mark.asyncio
+    async def test_force_kill_transport_process_already_exited(self):
+        """_force_kill_transport skips kill when process already exited."""
+        session = ClaudeSession()
+        mock_process = MagicMock()
+        mock_process.returncode = 0  # already exited
+        mock_transport = MagicMock()
+        mock_transport._process = mock_process
+        mock_client = MagicMock()
+        mock_client._transport = mock_transport
+        session._client = mock_client
+
+        with patch("chicane.claude.killpg") as mock_killpg:
+            await session._force_kill_transport()
+
+        mock_killpg.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_force_kill_transport_falls_back_to_terminate(self):
+        """Falls back to process.terminate() when killpg fails."""
+        session = ClaudeSession()
+        mock_process = MagicMock()
+        mock_process.returncode = None
+        mock_process.pid = 99999
+        mock_transport = MagicMock()
+        mock_transport._process = mock_process
+        mock_client = MagicMock()
+        mock_client._transport = mock_transport
+        session._client = mock_client
+
+        with patch("chicane.claude.getpgid", side_effect=ProcessLookupError):
+            await session._force_kill_transport()
+
+        mock_process.terminate.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_kill_calls_interrupt_then_disconnects(self):

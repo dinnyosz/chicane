@@ -20,8 +20,11 @@ import html
 import logging
 import re
 import time
+from contextlib import suppress
 from dataclasses import dataclass, field
+from os import getpgid, killpg
 from pathlib import Path
+from signal import SIGTERM
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 from claude_agent_sdk import (
@@ -823,8 +826,10 @@ class ClaudeSession:
         is called from a *different* asyncio task than the one that created
         the connection (e.g. during shutdown), anyio raises
         ``RuntimeError("Attempted to exit cancel scope in a different task
-        …")``.  This is harmless — the subprocess is cleaned up when the
-        event loop exits — so we suppress it silently.
+        …")``.  When this happens, the graceful ``client.disconnect()``
+        chain never reaches ``transport.close()``, leaving the subprocess
+        alive indefinitely.  We catch this and kill the subprocess
+        directly via the transport.
         """
         if self._generator_started:
             await self._message_queue.put(None)  # stop the generator
@@ -834,17 +839,50 @@ class ClaudeSession:
                 await self._client.disconnect()
             except RuntimeError as exc:
                 if "cancel scope" in str(exc):
-                    # Expected during cross-task shutdown; nothing to do.
-                    pass
+                    # Graceful disconnect failed due to cross-task anyio
+                    # restriction.  Kill the subprocess directly.
+                    await self._force_kill_transport()
                 else:
                     logger.debug(
                         "Error disconnecting SDK client", exc_info=True
                     )
+                    await self._force_kill_transport()
             except Exception:
                 logger.debug("Error disconnecting SDK client", exc_info=True)
+                await self._force_kill_transport()
             self._client = None
             self._connected = False
             self._is_streaming = False
+
+    async def _force_kill_transport(self) -> None:
+        """Kill the SDK subprocess directly when graceful disconnect fails.
+
+        Reaches into the SDK client's transport to terminate the
+        underlying process.  This prevents orphaned ``claude`` processes
+        from accumulating when ``disconnect()`` is called from a
+        different asyncio task (the common case during periodic cleanup).
+        """
+        try:
+            transport = getattr(self._client, "_transport", None)
+            if transport is None:
+                return
+            process = getattr(transport, "_process", None)
+            if process is None:
+                return
+            if process.returncode is None:
+                # Try to kill the process group first (catches child
+                # processes), then fall back to terminating just the
+                # main process.
+                pid = process.pid
+                try:
+                    pgid = getpgid(pid)
+                    killpg(pgid, SIGTERM)
+                except (ProcessLookupError, PermissionError, OSError):
+                    with suppress(ProcessLookupError):
+                        process.terminate()
+                logger.debug("Force-killed SDK subprocess pid=%s", pid)
+        except Exception:
+            logger.debug("Error force-killing SDK transport", exc_info=True)
 
     async def force_reconnect(self) -> None:
         """Disconnect and clear state so the next ``stream()`` creates a fresh client.
