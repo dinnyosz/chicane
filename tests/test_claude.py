@@ -1084,7 +1084,8 @@ class TestClaudeSessionDisconnect:
         mock_client.disconnect.side_effect = RuntimeError(
             "Attempted to exit cancel scope in a different task"
         )
-        # Attach a mock transport with a mock process
+        # Attach a mock transport with a mock process whose pgid == pid
+        # (own process group leader — safe to killpg)
         mock_process = MagicMock()
         mock_process.returncode = None
         mock_process.pid = 12345
@@ -1101,6 +1102,27 @@ class TestClaudeSessionDisconnect:
         mock_killpg.assert_called_once()
         assert session._client is None
         assert not session._connected
+
+    @pytest.mark.asyncio
+    async def test_force_kill_uses_terminate_when_shared_pgid(self):
+        """Uses terminate() instead of killpg() when subprocess shares our pgid."""
+        session = ClaudeSession()
+        mock_process = MagicMock()
+        mock_process.returncode = None
+        mock_process.pid = 12345
+        mock_transport = MagicMock()
+        mock_transport._process = mock_process
+        mock_client = MagicMock()
+        mock_client._transport = mock_transport
+        session._client = mock_client
+
+        # pgid != pid means shared process group — must NOT killpg
+        with patch("chicane.claude.getpgid", return_value=99999), \
+             patch("chicane.claude.killpg") as mock_killpg:
+            await session._force_kill_transport()
+
+        mock_killpg.assert_not_called()
+        mock_process.terminate.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_disconnect_logs_non_cancel_scope_runtime_error(self):

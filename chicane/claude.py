@@ -870,13 +870,17 @@ class ClaudeSession:
             if process is None:
                 return
             if process.returncode is None:
-                # Try to kill the process group first (catches child
-                # processes), then fall back to terminating just the
-                # main process.
                 pid = process.pid
                 try:
                     pgid = getpgid(pid)
-                    killpg(pgid, SIGTERM)
+                    if pgid == pid:
+                        # Subprocess is its own process group leader —
+                        # safe to kill the whole group (catches children).
+                        killpg(pgid, SIGTERM)
+                    else:
+                        # Subprocess shares our process group — killing
+                        # the group would take chicane down with it.
+                        process.terminate()
                 except (ProcessLookupError, PermissionError, OSError):
                     with suppress(ProcessLookupError):
                         process.terminate()
